@@ -35,7 +35,7 @@
 ### 1.2 타겟 사용자
 
 - 사내 임직원(모든 부서)
-- **시스템 관리자(Admin)**: 인스턴스 운영자. 사용자 계정 관리(활성/비활성, 할당량), 전체 공유 링크 통제, 스토리지 모니터링 (→ [3.6 시스템 관리자](#36-시스템-관리자-admin))
+- **시스템 관리자(Admin)**: 인스턴스 운영자. 가입 신청 승인/거절, 사용자 계정 관리(활성/비활성, 할당량), 전체 공유 링크 통제, 스토리지 모니터링 (→ [3.6 시스템 관리자](#36-시스템-관리자-admin))
 - **그룹 관리자**: 소속 그룹의 멤버·파일/폴더 권한 관리 (그룹 역할 `owner`/`admin`, 시스템 관리자와 별개 축)
 
 ### 1.3 그룹 기반 접근 제어 (Group-based Access Control)
@@ -125,8 +125,8 @@ nginx (Reverse Proxy / Gateway)
 
 | 기능 | 설명 | 우선순위 |
 |---|---|---|
-| **회원가입** | 사내 이메일 기반 가입 (SSO 연동은 Phase 4). 비활성화된 계정은 즉시 로그인 차단 — access 토큰 유효 기간 내 요청도 인가 시 `is_active` 확인으로 차단 | P0 |
-| **로그인/로그아웃** | JWT 인증, 리프레시 토큰 갱신. 로그아웃 시 Redis에 저장된 refresh 토큰 폐기 | P0 |
+| **회원가입 (승인제)** | 사내 이메일로 가입 신청 → 관리자 승인 후 사용 가능 (`pending` → `active`). 승인 전에는 로그인 불가 | P0 |
+| **로그인/로그아웃** | JWT 인증, 리프레시 토큰 갱신. 로그아웃 시 Redis에 저장된 refresh 토큰 폐기. 비활성/거절 계정은 즉시 차단 — access 토큰 유효 기간 내 요청도 인가 시 `status = 'active'` 확인으로 차단 | P0 |
 | **프로필 관리** | 아바타, 표시 이름, 비밀번호 변경 | P1 |
 | **관리자 대시보드** | → [3.6 시스템 관리자](#36-시스템-관리자-admin) 참조 | P1 |
 
@@ -265,14 +265,15 @@ interface ThemeContextType {
 
 | 방식 | 설명 |
 |---|---|
-| **환경변수 시드** | 기동 시 `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`를 읽어 admin 계정이 없으면 생성 (기본 부트스트랩 경로) |
+| **환경변수 시드** | 기동 시 `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`를 읽어 admin 계정이 없으면 생성 (기본 부트스트랩 경로). 승인 절차 없이 `status = 'active'`로 생성 |
 | **CLI 커맨드** | `python -m app.cli create-admin` — 운영 중 기존 사용자 승격에도 재사용 |
 
 #### 3.6.3 관리자 기능
 
 | 기능 | 설명 | 우선순위 |
 |---|---|---|
-| **사용자 관리** | 사용자 목록·사용량 조회, 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 | P1 |
+| **가입 승인** | 가입 신청(`pending`) 목록 조회, 승인(`active`)/거절(`rejected`) 처리 | P0 |
+| **사용자 관리** | 사용자 목록·사용량 조회, 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 | P0 |
 | **전체 그룹 조회** | 그룹 owner가 아니어도 전체 그룹/멤버 현황 조회 | P1 |
 | **공유 링크 통제** | 전체 공유 링크 조회, 강제 비활성화 | P1 |
 | **스토리지 통계** | 인스턴스 총 사용량, 사용자별 사용량, 파일 수 | P1 |
@@ -329,7 +330,7 @@ CREATE TABLE users (
     display_name    VARCHAR(100) NOT NULL DEFAULT '',
     avatar_url      VARCHAR(500),
     role            VARCHAR(20) NOT NULL DEFAULT 'user',  -- user / admin (시스템 전역 역할)
-    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending / active / inactive / rejected (가입 승인제)
     storage_used    BIGINT NOT NULL DEFAULT 0,
     max_storage     BIGINT NOT NULL DEFAULT 10737418240,  -- 10GB
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -471,7 +472,7 @@ CREATE TABLE file_group_permissions (
 CREATE TABLE audit_logs (
     id              BIGSERIAL PRIMARY KEY,
     actor_id        BIGINT NOT NULL REFERENCES users(id),
-    action          VARCHAR(50) NOT NULL,   -- 예: user.deactivate, user.quota_update, share.force_disable, permission.grant
+    action          VARCHAR(50) NOT NULL,   -- 예: user.approve, user.reject, user.deactivate, user.quota_update, share.force_disable, permission.grant
     target_type     VARCHAR(30) NOT NULL,   -- user / group / file / share
     target_id       BIGINT,
     detail          JSONB,                  -- 변경 전/후 값 등
@@ -570,7 +571,9 @@ RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `GET`  | `/api/admin/users` | 사용자 목록 (사용량·활성 상태 포함, 페이지네이션) |
+| `GET`  | `/api/admin/users` | 사용자 목록 (query: `status` — 가입 신청 대기 목록은 `?status=pending`) |
+| `POST` | `/api/admin/users/{id}/approve` | 가입 신청 승인 (`pending` → `active`) |
+| `POST` | `/api/admin/users/{id}/reject` | 가입 신청 거절 (`pending` → `rejected`) |
 | `PATCH`| `/api/admin/users/{id}` | 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 |
 | `GET`  | `/api/admin/groups` | 전체 그룹 목록 (멤버 수, 소유 파일 수 포함) |
 | `GET`  | `/api/admin/shares` | 전체 공유 링크 목록 (query: `active`, `userId`) |
@@ -777,10 +780,10 @@ server {
 | 항목 | 내용 |
 |---|---|
 | **목표** | 인증 + 파일 업로드/다운로드 + 목록 조회 + 공유 링크 생성/비활성화 |
-| **범위** | 프로젝트 스캐폴딩(backend/frontend/compose/nginx), Alembic 전체 스키마 마이그레이션, 인증(JWT + Redis refresh 회전, argon2), 파일 CRUD(스트리밍 업로드, 게이트웨이 다운로드, 폴더, 소프트 삭제), 공유 링크(생성/비활성화/목록), 프론트 기본 UI(로그인, 파일 브라우저, 업로드, 공유) |
-| **포함(스캐폴딩)** | `users.role` 컬럼 + `require_admin` dependency + admin 부트스트랩(환경변수 시드) — 나중에 넣으면 마이그레이션·인가 코드 소급 비용이 크므로 Phase 1에 포함 |
-| **완료 조건** | 회원가입→로그인→파일 업로드→다운로드→공유 링크 생성/비활성화 E2E 통과 |
-| **제외** | 버전 관리, 그룹, 델타 동기화, 썸네일, 미리보기, admin 대시보드 UI |
+| **범위** | 프로젝트 스캐폴딩(backend/frontend/compose/nginx), Alembic 전체 스키마 마이그레이션, 인증(JWT + Redis refresh 회전, argon2, **가입 승인제**), 파일 CRUD(스트리밍 업로드, 게이트웨이 다운로드, 폴더, 소프트 삭제), 공유 링크(생성/비활성화/목록), 프론트 기본 UI(로그인, 파일 브라우저, 업로드, 공유) |
+| **포함(admin)** | `users.role`/`status` 컬럼 + `require_admin` dependency + admin 부트스트랩(환경변수 시드) + **가입 승인/거절·사용자 활성/비활성 API와 최소 관리 화면** — 승인제이므로 admin 사용자 관리 없이는 서비스가 동작하지 않음 |
+| **완료 조건** | 가입 신청→admin 승인→로그인→파일 업로드→다운로드→공유 링크 생성/비활성화 E2E 통과 |
+| **제외** | 버전 관리, 그룹, 델타 동기화, 썸네일, 미리보기, admin 통계·감사 로그 대시보드(Phase 4) |
 
 ### Phase 2: 버전 관리 (1-2주)
 
@@ -802,13 +805,13 @@ server {
 | 항목 | 내용 |
 |---|---|
 | **목표** | 프로덕션 준비 + 운영 관리 도구 |
-| **완료 조건** | Nginx 게이트웨이 정제, 건강 체크, 구조화 로깅, 메트릭(Prometheus), rate limiting, 백업 스크립트, Docker Compose 프로덕션 프로파일, **admin 대시보드 UI + admin API + 감사 로그** |
+| **완료 조건** | Nginx 게이트웨이 정제, 건강 체크, 구조화 로깅, 메트릭(Prometheus), rate limiting, 백업 스크립트, Docker Compose 프로덕션 프로파일, **나머지 admin 기능(스토리지 통계, 그룹/공유 링크 통제, 감사 로그) + 대시보드 UI 완성** |
 
 ### Phase 5: 고도화 (선택, 2-3주)
 
 | 항목 | 내용 |
 |---|---|
-| **목표** | 재개 가능 업로드, 썸네일, 미리보기, 접근 통계, UI 테마(4종), 델타 동기화, SSO 연동 |
+| **목표** | 재개 가능 업로드, 썸네일, 미리보기, 접근 통계, UI 테마(4종), 델타 동기화 |
 | **완료 조건** | 청크 재개 업로드, 이미지/PDF/텍스트 미리보기, 공유 링크 통계, 테마 선택(3.1.4), 블록 단위 저장/동기화 |
 
 ---
@@ -818,7 +821,8 @@ server {
 | 항목 | 방안 |
 |---|---|
 | **인증** | JWT (access 15분 + refresh 7일), argon2 비밀번호 해싱 |
-| **토큰 폐기** | refresh 토큰은 Redis에 저장·회전(rotation), 로그아웃/비활성화 시 즉시 폐기. 인가 시 매 요청 `is_active` 확인으로 access 토큰 유효 기간 내 우회 차단 |
+| **토큰 폐기** | refresh 토큰은 Redis에 저장·회전(rotation), 로그아웃/비활성화 시 즉시 폐기. 인가 시 매 요청 `status = 'active'` 확인으로 access 토큰 유효 기간 내 우회 차단 |
+| **가입 승인제** | 신규 가입은 `pending` 상태로 생성, 관리자 승인 전 로그인 불가. 사내 시스템 무단 가입 차단 |
 | **인가** | FastAPI Dependency Injection 기반 소유자/공유자/관리자/그룹 멤버 검증. admin API는 `require_admin` 일괄 적용 |
 | **admin 접근 정책** | admin은 메타데이터만 조회 가능, 파일 내용 접근 불가. 모든 admin 행위는 `audit_logs` 기록 (3.6.4) |
 | **그룹 권한** | 파일/폴더 단위 그룹 읽기·쓰기·관리 권한, 하위 폴더 상속, 권한 재정의 지원 |
@@ -891,7 +895,8 @@ server {
 
 - 본 PRD는 **사내 자가 호스팅** 전제이므로, AWS S3/object storage는 추후 마이그레이션 타겟으로 간주
 - 모든 secret(JWT, MinIO 암호, DB 패스워드)은 `.env` 파일 또는 Docker Secrets로 관리, 버전 관리에 포함 금지
-- Phase 1~3까지 완료 시 사내 시범 운영, Phase 4는 사용 피드백 수집 후 추진
+- Phase 1~4까지 완료 시 사내 시범 운영, Phase 5는 사용 피드백 수집 후 추진
+- 사내 폐쇄망 시스템 전제로 SSO 연동은 범위에서 제외 (가입 승인제로 접근 통제)
 - 문서화: OpenAPI(Swagger) 자동 생성, README에 Docker Compose 기동 가이드 포함
 
 ---
