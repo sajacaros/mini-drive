@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+/*
+ * 테마 토큰 (PRD 3.1.4). 이후 스테이지에서 다크/라이트 x 모던/게임보이 4종을
+ * body 클래스(theme-modern-dark 등) + CSS 변수로 확장한다. 지금은 기본값만 둔다.
+ */
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: Inter, system-ui, sans-serif;
+}

@@ -1,0 +1,15 @@
+# Mini Drive backend 런타임 의존성 (pip 호환)
+# pyproject.toml 과 동기화 유지. 상세 스펙은 pyproject.toml 참조.
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+alembic>=1.14.0
+python-multipart>=0.0.12
+minio>=7.2.10
+pyjwt>=2.10.0
+argon2-cffi>=23.1.0
+redis>=5.2.0
