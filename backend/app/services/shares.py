@@ -202,17 +202,16 @@ async def _try_increment(session: AsyncSession, share_id: int) -> bool:
     return row is not None
 
 
-async def prepare_share_download(
+async def authorize_share_download(
     session: AsyncSession,
-    storage: StorageService,
     share_url: str,
     password: str | None,
-) -> tuple[str, str, str, str]:
-    """공개 다운로드 준비 (PRD 6.3, 10장).
+) -> tuple[File, str]:
+    """공개 다운로드 인가 + 횟수 소모 (PRD 6.3, 10장). presign 은 하지 않는다.
 
     검증 순서: 활성 → 만료 → 파일 존재 → 비밀번호(불일치 401) → max_downloads(초과 410).
-    통과 시 download_count 를 원자적으로 증가하고 내부 presign(60s)을 nginx `/_minio/` 경로로
-    변환해 반환한다. 반환: (internal_redirect, filename, mime, permission).
+    통과 시 download_count 를 원자적으로 증가하고 (file, permission) 을 반환한다.
+    직접 다운로드와 티켓 발급이 공유하는 공통 관문이다.
     """
     share = await _get_by_url(session, share_url)
     _ensure_accessible(share)
@@ -230,8 +229,40 @@ async def prepare_share_download(
     if not await _try_increment(session, share.id):
         raise ShareServiceError(410, "다운로드 횟수를 모두 사용한 공유 링크입니다.")
 
+    return file, share.permission
+
+
+async def prepare_share_download(
+    session: AsyncSession,
+    storage: StorageService,
+    share_url: str,
+    password: str | None,
+) -> tuple[str, str, str, str]:
+    """공개 다운로드 준비 (PRD 6.3, 10장).
+
+    인가+횟수 소모 후 내부 presign(60s)을 nginx `/_minio/` 경로로 변환해 반환한다.
+    반환: (internal_redirect, filename, mime, permission).
+    """
+    file, permission = await authorize_share_download(session, share_url, password)
     presigned = await storage.presign_get_async(file.file_key)
     internal = storage.to_internal_redirect(presigned)
     mime = file.mime_type or "application/octet-stream"
     # permission=read 여도 Phase 1 은 다운로드와 동일 취급하되, 구분은 응답에 담아 전달한다.
-    return internal, file.name, mime, share.permission
+    return internal, file.name, mime, permission
+
+
+async def prepare_ticketed_share_download(
+    session: AsyncSession,
+    storage: StorageService,
+    file_id: int,
+) -> tuple[str, str, str]:
+    """공개 공유 티켓 소비 후 다운로드 준비. 인가·횟수 소모는 티켓 발급 시 이미 끝났으므로,
+    여기서는 파일 유효성만 확인하고 presign 한다. 반환: (internal_redirect, filename, mime).
+    """
+    file = await session.get(File, file_id)
+    if file is None or file.is_deleted:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    presigned = await storage.presign_get_async(file.file_key)
+    internal = storage.to_internal_redirect(presigned)
+    mime = file.mime_type or "application/octet-stream"
+    return internal, file.name, mime

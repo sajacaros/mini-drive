@@ -46,3 +46,34 @@ class FileRenameRequest(BaseModel):
     """이름 변경 (PRD 6.2 PUT /api/files/{id})."""
 
     name: str = Field(min_length=1, max_length=255)
+
+
+class FileVersionResponse(BaseModel):
+    """버전 히스토리 항목 (PRD 3.3, 6.2). 오브젝트 키는 노출하지 않는다."""
+
+    version: int
+    size: int
+    mime_type: str | None = None
+    uploaded_by: int
+    uploaded_by_name: str
+    uploaded_at: datetime
+    is_current: bool
+
+
+class FileVersionListResponse(BaseModel):
+    """파일 버전 목록 (PRD 6.2 GET /api/files/{id}/versions)."""
+
+    file_id: int
+    current_version: int
+    items: list[FileVersionResponse]
+
+
+class DownloadTicketResponse(BaseModel):
+    """단기 일회성 다운로드 티켓 (브라우저 대용량 다운로드용).
+
+    `url` 로 무헤더 GET 하면 스트리밍 다운로드가 시작된다. 티켓은 60초 후 만료되며 1회만 유효.
+    """
+
+    ticket: str
+    url: str
+    expires_in: int

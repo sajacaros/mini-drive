@@ -15,6 +15,7 @@ from app.services.files import (
     build_file_key,
     build_version_key,
     ensure_file_access,
+    versioned_filename,
 )
 from app.services.storage import StorageService
 
@@ -25,6 +26,20 @@ class TestObjectKeys:
 
     def test_version_key(self) -> None:
         assert build_version_key(42, 3) == "versions/42/v3"
+
+
+class TestVersionedFilename:
+    def test_inserts_before_extension(self) -> None:
+        assert versioned_filename("report.pdf", 3) == "report (v3).pdf"
+
+    def test_no_extension(self) -> None:
+        assert versioned_filename("README", 2) == "README (v2)"
+
+    def test_multi_dot_uses_last_extension(self) -> None:
+        assert versioned_filename("archive.tar.gz", 5) == "archive.tar (v5).gz"
+
+    def test_unicode_name(self) -> None:
+        assert versioned_filename("보고서.hwp", 1) == "보고서 (v1).hwp"
 
 
 class TestInternalRedirect:

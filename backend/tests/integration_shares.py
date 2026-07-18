@@ -153,6 +153,25 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         assert mine[share_url]["download_count"] == 1, r.text
         _ok("목록에서 download_count=1 확인")
 
+        # --- 공개 다운로드 티켓: 발급(횟수 소모) → 무헤더 GET → 재사용 실패 ------
+        r = await c.post(f"/api/public/shares/{share_url}/download-ticket")
+        assert r.status_code == 200, r.text
+        ticket_url = r.json()["url"]
+        assert r.json()["expires_in"] == 60
+        # 티켓 발급이 download_count 를 소모(2)
+        r2 = await c.get("/api/shares", headers=alice_h)
+        assert {s["share_url"]: s for s in r2.json()}[share_url]["download_count"] == 2
+        # 무헤더 GET → 바이트 일치
+        r = await c.get(ticket_url)
+        assert r.status_code == 200, r.text
+        assert await _direct_minio_bytes(r.headers["X-Accel-Redirect"]) == PAYLOAD
+        # 재사용 실패(1회용) + 무효 티켓 404
+        assert (await c.get(ticket_url)).status_code == 404
+        assert (
+            await c.get("/api/public/shares/download", params={"ticket": "bogus"})
+        ).status_code == 404
+        _ok("공개 다운로드 티켓 (발급→GET 바이트 일치→재사용 404, 횟수 소모)")
+
         # --- 비밀번호 공유: 오답 401 / 정답 200 ------------------------------
         pw_file = await _upload(c, alice_h, "secret.bin")
         r = await c.post(

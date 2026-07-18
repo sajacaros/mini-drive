@@ -17,6 +17,7 @@ from typing import BinaryIO
 from urllib.parse import urlsplit
 
 from minio import Minio
+from minio.commonconfig import CopySource
 from minio.deleteobjects import DeleteObject
 
 from app.core.config import settings
@@ -90,6 +91,15 @@ class StorageService:
             self.bucket, key, expires=timedelta(seconds=ttl)
         )
 
+    def copy(self, src_key: str, dst_key: str) -> None:
+        """버킷 내 서버측 복사(bytes 를 backend 로 내려받지 않음). 버전 스냅샷 생성용(PRD 2.1).
+
+        같은 버킷 내 `src_key → dst_key`. 원본이 없으면 minio.error.S3Error(NoSuchKey).
+        """
+        self._client.copy_object(
+            self.bucket, dst_key, CopySource(self.bucket, src_key)
+        )
+
     def delete(self, key: str) -> None:
         """단일 오브젝트 삭제. 존재하지 않아도 예외 없이 성공(S3 remove 시맨틱)."""
         self._client.remove_object(self.bucket, key)
@@ -119,6 +129,9 @@ class StorageService:
 
     async def presign_get_async(self, key: str, ttl: int = PRESIGN_TTL_SECONDS) -> str:
         return await asyncio.to_thread(self.presign_get, key, ttl)
+
+    async def copy_async(self, src_key: str, dst_key: str) -> None:
+        await asyncio.to_thread(self.copy, src_key, dst_key)
 
     async def delete_async(self, key: str) -> None:
         await asyncio.to_thread(self.delete, key)

@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
@@ -354,6 +354,282 @@ async def prepare_download(
     return internal, file.name, mime
 
 
+# --- 버전 관리 (PRD 3.3, 5.3, 6.2) ------------------------------------------
+#
+# 키 불변식(invariant): 어떤 파일이든 `version == current_version` 인 file_versions 행의
+# object_key 는 항상 원본 키(file_key = users/{uid}/{fileId})를 가리키고, 그보다 오래된
+# 버전은 스냅샷 키(versions/{fileId}/v{n})를 가리킨다. 새 버전이 생길 때(재업로드/복구)
+# 직전 원본을 스냅샷으로 서버측 복사하고 직전 버전 행의 object_key 를 스냅샷 키로 갱신한다.
+#
+# 할당량: 스냅샷은 이전 바이트를 계속 점유하므로, 새 버전이 추가될 때 storage_used 는
+# "새 내용 크기"만큼만 추가로 선점한다. 결과적으로 storage_used == 모든 버전 크기 합계.
+
+
+def versioned_filename(name: str, version: int) -> str:
+    """다운로드 파일명에 버전 표기를 넣는다: `report.pdf` → `report (v3).pdf`."""
+    base, dot, ext = name.rpartition(".")
+    if dot:
+        return f"{base} (v{version}).{ext}"
+    return f"{name} (v{version})"
+
+
+async def _snapshot_current_original(
+    session: AsyncSession, storage: StorageService, file: File
+) -> str:
+    """현재 원본(file_key)을 versions/{id}/v{current} 로 서버측 복사하고, 현재 버전 행의
+    object_key 를 그 스냅샷 키로 갱신한다. 반환: 생성한 스냅샷 키.
+
+    이후 file_key 에 새 내용을 덮어써도 직전 버전 바이트는 스냅샷에 보존된다.
+    """
+    snapshot_key = build_version_key(file.id, file.current_version)
+    await storage.copy_async(file.file_key, snapshot_key)
+    await session.execute(
+        update(FileVersion)
+        .where(
+            FileVersion.file_id == file.id,
+            FileVersion.version == file.current_version,
+        )
+        .values(object_key=snapshot_key)
+    )
+    return snapshot_key
+
+
+async def _commit_new_version(
+    session: AsyncSession,
+    storage: StorageService,
+    file: File,
+    *,
+    size: int,
+    mime: str,
+    uploaded_by: int,
+    write_new_content,
+) -> File:
+    """새 버전 생성의 공통 절차 — 재업로드/복구가 공유한다.
+
+    호출 전 제약: 할당량 선점 완료, `file` 은 접근 검증된 활성 파일.
+    `write_new_content()` 는 file_key 에 새 버전 바이트를 기록하는 async 콜러블이다
+    (재업로드=스트림 put, 복구=대상 버전에서 서버측 copy).
+
+    절차: 직전 원본 스냅샷 → DB(직전 행 object_key 갱신 + 새 버전 행 + files 갱신) flush →
+    file_key 에 새 내용 기록 → commit. 실패 시 롤백 + best-effort 로 오브젝트 원상복구한다.
+    """
+    prev_original_key = file.file_key
+    new_version = file.current_version + 1
+
+    # 1) 직전 원본을 스냅샷으로 보존 (MinIO 서버측 복사).
+    try:
+        snapshot_key = await _snapshot_current_original(session, storage, file)
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        raise FileServiceError(502, "버전 스냅샷 복사에 실패했습니다.") from exc
+
+    # 2) DB 반영(flush 로 무결성 오류 조기 감지). new_version 행의 object_key 는 file_key 재사용.
+    session.add(
+        FileVersion(
+            file_id=file.id,
+            version=new_version,
+            object_key=prev_original_key,
+            size=size,
+            mime_type=mime,
+            uploaded_by=uploaded_by,
+        )
+    )
+    file.base_version = file.current_version
+    file.current_version = new_version
+    file.size = size
+    file.mime_type = mime
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        await _safe_delete_object(storage, snapshot_key)
+        raise FileServiceError(409, "버전 기록에 실패했습니다.") from exc
+
+    # 3) file_key 에 새 내용 기록 (스트림 put 또는 서버측 copy).
+    try:
+        await write_new_content(prev_original_key)
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        await _safe_delete_object(storage, snapshot_key)
+        raise FileServiceError(502, "오브젝트 스토리지 저장에 실패했습니다.") from exc
+
+    # 4) commit. 실패 시 file_key 는 이미 새 내용이므로 스냅샷에서 원상복구를 시도한다.
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        await _safe_restore_object(storage, snapshot_key, prev_original_key)
+        await _safe_delete_object(storage, snapshot_key)
+        raise FileServiceError(500, "버전 저장에 실패했습니다.") from exc
+
+    await session.refresh(file)
+    return file
+
+
+async def _safe_restore_object(
+    storage: StorageService, src_key: str, dst_key: str
+) -> None:
+    try:
+        await storage.copy_async(src_key, dst_key)
+    except Exception:  # noqa: BLE001 - best-effort 복구
+        pass
+
+
+async def reupload_file(
+    session: AsyncSession,
+    storage: StorageService,
+    user: User,
+    file_id: int,
+    upload: UploadFile,
+    base_version: int | None,
+) -> File:
+    """기존 파일에 새 내용을 올려 새 버전을 만든다 (PRD 3.3).
+
+    base_version 이 주어지고 current_version 과 불일치하면 409(충돌 감지). 미전달 시 강제 덮어쓰기.
+    파일명은 유지하고 내용/크기/mime 만 갱신한다.
+    """
+    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    if file.is_folder:
+        raise FileServiceError(400, "폴더는 재업로드할 수 없습니다.")
+    if file.is_deleted:
+        raise FileServiceError(409, "삭제된 파일은 재업로드할 수 없습니다.")
+
+    if base_version is not None and base_version != file.current_version:
+        raise FileServiceError(
+            409,
+            f"버전 충돌: 최신 버전은 v{file.current_version} 입니다 (요청 base v{base_version}).",
+        )
+
+    size = _upload_size(upload)
+    if size > MAX_FILE_SIZE:
+        raise FileServiceError(413, "파일 크기가 상한(10GB)을 초과했습니다.")
+    mime = upload.content_type or file.mime_type or "application/octet-stream"
+
+    # 할당량 선점 — 스냅샷이 이전 바이트를 점유하므로 새 크기만큼만 추가 선점.
+    if not await _reserve_quota(session, user.id, size):
+        await session.rollback()
+        raise FileServiceError(413, "저장 용량 할당량을 초과했습니다.")
+
+    async def _put_stream(_prev_key: str) -> None:
+        await upload.seek(0)
+        await storage.put_async(file.file_key, upload.file, size, mime)
+
+    return await _commit_new_version(
+        session,
+        storage,
+        file,
+        size=size,
+        mime=mime,
+        uploaded_by=user.id,
+        write_new_content=_put_stream,
+    )
+
+
+async def list_versions(
+    session: AsyncSession, user: User, file_id: int
+) -> tuple[File, list[tuple[FileVersion, str]]]:
+    """버전 히스토리 (PRD 6.2). (file, [(version, 업로더 표시명), ...] 최신순) 반환."""
+    file = ensure_file_access(user, await get_file(session, file_id))
+    if file.is_folder:
+        raise FileServiceError(400, "폴더는 버전이 없습니다.")
+
+    rows = (
+        await session.execute(
+            select(FileVersion, User.display_name)
+            .join(User, FileVersion.uploaded_by == User.id)
+            .where(FileVersion.file_id == file.id)
+            .order_by(FileVersion.version.desc())
+        )
+    ).all()
+    return file, [(v, name) for v, name in rows]
+
+
+async def prepare_version_download(
+    session: AsyncSession,
+    storage: StorageService,
+    user: User,
+    file_id: int,
+    version: int,
+) -> tuple[str, str, str]:
+    """특정 버전 게이트웨이 다운로드 준비 (PRD 6.2). 반환: (internal_redirect, filename, mime).
+
+    파일명에 버전 표기를 넣는다(예: `report (v2).pdf`). 없는 버전이면 404.
+    """
+    file = ensure_file_access(user, await get_file(session, file_id))
+    if file.is_folder:
+        raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
+
+    row = (
+        await session.execute(
+            select(FileVersion).where(
+                FileVersion.file_id == file.id, FileVersion.version == version
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise FileServiceError(404, "해당 버전을 찾을 수 없습니다.")
+
+    presigned = await storage.presign_get_async(row.object_key)
+    internal = storage.to_internal_redirect(presigned)
+    mime = row.mime_type or file.mime_type or "application/octet-stream"
+    return internal, versioned_filename(file.name, version), mime
+
+
+async def restore_version(
+    session: AsyncSession,
+    storage: StorageService,
+    user: User,
+    file_id: int,
+    version: int,
+) -> File:
+    """과거 버전을 새 버전으로 복사 생성한다 (PRD 3.3 — 이력 보존, 유실 0%).
+
+    대상 버전 바이트를 file_key 로 서버측 복사해 current_version+1 을 만든다. files.size/mime 을
+    대상 버전 기준으로 갱신하고 할당량에 반영한다.
+    """
+    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    if file.is_folder:
+        raise FileServiceError(400, "폴더는 복구할 수 없습니다.")
+    if file.is_deleted:
+        raise FileServiceError(409, "삭제된 파일은 복구할 수 없습니다.")
+
+    target = (
+        await session.execute(
+            select(FileVersion).where(
+                FileVersion.file_id == file.id, FileVersion.version == version
+            )
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise FileServiceError(404, "해당 버전을 찾을 수 없습니다.")
+
+    # 대상 버전 키를 미리 확정한다 — 스냅샷 단계에서 현재 버전 행 object_key 가 바뀌므로,
+    # 대상이 곧 현재 버전이면 그 키(=file_key)를 먼저 캡처해 둔다.
+    target_size = target.size
+    target_mime = target.mime_type or file.mime_type or "application/octet-stream"
+    target_key = target.object_key
+
+    if not await _reserve_quota(session, user.id, target_size):
+        await session.rollback()
+        raise FileServiceError(413, "저장 용량 할당량을 초과했습니다.")
+
+    async def _copy_from_target(prev_key: str) -> None:
+        # 대상이 직전 현재 버전이었다면 그 바이트는 방금 스냅샷 키로 복사됐고 file_key 는
+        # 아직 동일 바이트다. 어느 경우든 target_key(캡처값) 또는 file_key 에서 복사하면 된다.
+        source = prev_key if target_key == prev_key else target_key
+        await storage.copy_async(source, file.file_key)
+
+    return await _commit_new_version(
+        session,
+        storage,
+        file,
+        size=target_size,
+        mime=target_mime,
+        uploaded_by=user.id,
+        write_new_content=_copy_from_target,
+    )
+
+
 # --- 삭제 / 휴지통 -----------------------------------------------------------
 
 # 대상 파일과 모든 하위 항목을 재귀로 훑는 공통 CTE (parent_folder_id 자기참조 트리).
@@ -470,31 +746,34 @@ async def permanent_delete(
     if not file.is_deleted:
         raise FileServiceError(409, "휴지통에 있는 항목만 영구 삭제할 수 있습니다.")
 
-    # 1) 하위 전체의 크기 합계와 삭제할 오브젝트 키를 수집한다.
-    rows = (
+    # 1) 삭제할 오브젝트 키와 회수할 용량을 수집한다.
+    #    storage_used 는 모든 버전 크기 합계를 반영하므로(스냅샷 포함), 회수량도 file_versions
+    #    의 크기 합계로 계산한다. 원본 키(file_key)는 현재 버전 행의 object_key 와 겹치므로
+    #    set 으로 중복 제거해 같은 오브젝트를 두 번 지우지 않는다.
+    file_rows = (
         await session.execute(
             text(
                 _SUBTREE_CTE
-                + " SELECT f.is_folder, f.size, f.file_key FROM files f "
-                "WHERE f.id IN (SELECT id FROM sub)"
+                + " SELECT f.file_key FROM files f "
+                "WHERE f.id IN (SELECT id FROM sub) AND f.is_folder = FALSE"
             ),
             {"root": file.id},
         )
     ).all()
-    total_size = sum(r.size for r in rows if not r.is_folder)
-    keys: set[str] = {r.file_key for r in rows if not r.is_folder and r.file_key}
+    keys: set[str] = {r.file_key for r in file_rows if r.file_key}
 
-    version_keys = (
+    version_rows = (
         await session.execute(
             text(
                 _SUBTREE_CTE
-                + " SELECT object_key FROM file_versions "
+                + " SELECT object_key, size FROM file_versions "
                 "WHERE file_id IN (SELECT id FROM sub)"
             ),
             {"root": file.id},
         )
-    ).scalars().all()
-    keys.update(k for k in version_keys if k)
+    ).all()
+    total_size = sum(r.size for r in version_rows)
+    keys.update(r.object_key for r in version_rows if r.object_key)
 
     # 2) DB 확정 — 행 삭제(versions CASCADE) + storage_used 감소.
     #    shares.file_id 는 ON DELETE CASCADE 가 없어(모델/마이그레이션 변경 회피), 영구 삭제

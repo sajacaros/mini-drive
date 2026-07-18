@@ -20,18 +20,24 @@ from fastapi import (
 )
 from fastapi import File as FileParam
 
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import CurrentUser, DbSession, RedisClient
 from app.api.download import content_disposition as _content_disposition
 from app.api.download import gateway_download_response
+from app.models.enums import UserStatus
 from app.schemas.files import (
+    DownloadTicketResponse,
     FileListResponse,
     FileRenameRequest,
     FileResponse,
+    FileVersionListResponse,
+    FileVersionResponse,
     FolderCreateRequest,
 )
 from app.services import files as files_service
+from app.services import tickets as tickets_service
 from app.services.files import FileServiceError
 from app.services.storage import get_storage
+from app.services.users import get_user_by_id
 
 # _content_disposition 은 app.api.download.content_disposition 로 승격되어 공유 라우트와
 # 공용으로 쓰인다. 기존 임포트 경로 호환을 위해 이 모듈에서도 별칭으로 노출한다.
@@ -104,6 +110,39 @@ async def create_folder(
     return FileResponse.model_validate(folder)
 
 
+@router.get("/download")
+async def download_by_ticket(
+    session: DbSession, redis: RedisClient, ticket: str = Query(...)
+) -> Response:
+    """티켓 기반 무헤더 스트리밍 다운로드 (브라우저 대용량 다운로드용).
+
+    발급 시 이미 인가된 티켓을 원자적으로 소비(1회용)하고, 저장된 사용자/파일/버전으로
+    게이트웨이 다운로드를 재구성한다. 만료/재사용/무효 티켓은 404.
+    """
+    payload = await tickets_service.consume_ticket(redis, ticket)
+    if payload is None or payload.get("kind") != "file":
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+
+    user = await get_user_by_id(session, int(payload["uid"]))
+    if user is None or user.status != UserStatus.ACTIVE:
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+
+    file_id = int(payload["file_id"])
+    version = payload.get("version")
+    try:
+        if version is None:
+            internal, filename, mime = await files_service.prepare_download(
+                session, get_storage(), user, file_id
+            )
+        else:
+            internal, filename, mime = await files_service.prepare_version_download(
+                session, get_storage(), user, file_id, int(version)
+            )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return gateway_download_response(internal, filename, mime)
+
+
 # --- /{file_id} ------------------------------------------------------------
 
 
@@ -134,6 +173,148 @@ async def download(file_id: int, user: CurrentUser, session: DbSession) -> Respo
         raise _http_error(exc) from exc
 
     return gateway_download_response(internal, filename, mime)
+
+
+@router.post(
+    "/{file_id}/upload", response_model=FileResponse, status_code=status.HTTP_201_CREATED
+)
+async def reupload(
+    file_id: int,
+    user: CurrentUser,
+    session: DbSession,
+    file: Annotated[UploadFile, FileParam(...)],
+    base_version: Annotated[int | None, Form()] = None,
+) -> FileResponse:
+    """재업로드 = 새 버전 (PRD 3.3). base_version 이 현재 버전과 다르면 409(충돌).
+
+    미전달 시 충돌 검사 없이 강제 덮어쓰기. 직전 원본은 스냅샷으로 보존된다.
+    """
+    try:
+        updated = await files_service.reupload_file(
+            session, get_storage(), user, file_id, file, base_version
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return FileResponse.model_validate(updated)
+
+
+@router.get("/{file_id}/versions", response_model=FileVersionListResponse)
+async def list_versions(
+    file_id: int, user: CurrentUser, session: DbSession
+) -> FileVersionListResponse:
+    """버전 히스토리 (PRD 6.2). 최신 버전이 먼저 온다."""
+    try:
+        file, rows = await files_service.list_versions(session, user, file_id)
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return FileVersionListResponse(
+        file_id=file.id,
+        current_version=file.current_version,
+        items=[
+            FileVersionResponse(
+                version=v.version,
+                size=v.size,
+                mime_type=v.mime_type,
+                uploaded_by=v.uploaded_by,
+                uploaded_by_name=name,
+                uploaded_at=v.uploaded_at,
+                is_current=(v.version == file.current_version),
+            )
+            for v, name in rows
+        ],
+    )
+
+
+@router.get("/{file_id}/versions/{version}/download")
+async def download_version(
+    file_id: int, version: int, user: CurrentUser, session: DbSession
+) -> Response:
+    """특정 버전 게이트웨이 다운로드 (PRD 6.2). 파일명에 버전 표기."""
+    try:
+        internal, filename, mime = await files_service.prepare_version_download(
+            session, get_storage(), user, file_id, version
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return gateway_download_response(internal, filename, mime)
+
+
+@router.post(
+    "/{file_id}/versions/{version}/restore", response_model=FileResponse
+)
+async def restore_version(
+    file_id: int, version: int, user: CurrentUser, session: DbSession
+) -> FileResponse:
+    """과거 버전을 새 버전으로 복사 생성 (PRD 3.3, 이력 보존)."""
+    try:
+        updated = await files_service.restore_version(
+            session, get_storage(), user, file_id, version
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return FileResponse.model_validate(updated)
+
+
+@router.post("/{file_id}/download-ticket", response_model=DownloadTicketResponse)
+async def issue_download_ticket(
+    file_id: int, user: CurrentUser, session: DbSession, redis: RedisClient
+) -> DownloadTicketResponse:
+    """현재 버전 다운로드 티켓 발급 (브라우저 대용량 다운로드용). 인가 후 60초 1회용 티켓."""
+    try:
+        file = files_service.ensure_file_access(
+            user, await files_service.get_file(session, file_id)
+        )
+        if file.is_folder:
+            raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
+        if file.is_deleted:
+            raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+
+    token = await tickets_service.issue_ticket(
+        redis, {"kind": "file", "file_id": file.id, "version": None, "uid": user.id}
+    )
+    return DownloadTicketResponse(
+        ticket=token,
+        url=f"/api/files/download?ticket={token}",
+        expires_in=tickets_service.TICKET_TTL_SECONDS,
+    )
+
+
+@router.post(
+    "/{file_id}/versions/{version}/download-ticket",
+    response_model=DownloadTicketResponse,
+)
+async def issue_version_download_ticket(
+    file_id: int,
+    version: int,
+    user: CurrentUser,
+    session: DbSession,
+    redis: RedisClient,
+) -> DownloadTicketResponse:
+    """특정 버전 다운로드 티켓 발급 (브라우저 대용량 다운로드용). 인가 후 60초 1회용."""
+    try:
+        file = files_service.ensure_file_access(
+            user, await files_service.get_file(session, file_id)
+        )
+        if file.is_folder:
+            raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
+        # 버전 존재 검증까지 수행해 발급 시점에 인가+유효성을 함께 확정한다.
+        await files_service.prepare_version_download(
+            session, get_storage(), user, file_id, version
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+
+    token = await tickets_service.issue_ticket(
+        redis,
+        {"kind": "file", "file_id": file.id, "version": version, "uid": user.id},
+    )
+    return DownloadTicketResponse(
+        ticket=token,
+        url=f"/api/files/download?ticket={token}",
+        expires_in=tickets_service.TICKET_TTL_SECONDS,
+    )
 
 
 @router.put("/{file_id}", response_model=FileResponse)
