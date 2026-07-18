@@ -41,6 +41,11 @@ export function useToast() {
   };
 }
 
+/** 훅 밖(예: axios 인터셉터)에서 토스트를 띄우는 명령형 헬퍼. */
+export function showToast(kind: ToastKind, message: string): void {
+  useToastStore.getState().push(kind, message);
+}
+
 const KIND_STYLE: Record<ToastKind, string> = {
   success: "border-l-[color:var(--success)]",
   error: "border-l-[color:var(--danger)]",

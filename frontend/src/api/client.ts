@@ -4,6 +4,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from "axios";
 
+import { showToast } from "@/components/Toast";
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "@/lib/tokenStore";
 import type { TokenResponse } from "./types";
 
@@ -96,6 +97,14 @@ apiClient.interceptors.response.use(
       }
     }
 
+    // 429: rate limit. Retry-After(초)를 읽어 공통 토스트로 안내한다 (전역 처리).
+    // 개별 catch 는 errorStatus(err) === 429 로 자신의 토스트를 생략할 수 있다.
+    if (error.response?.status === 429) {
+      const seconds = retryAfterSeconds(error);
+      const suffix = seconds ? ` ${seconds}초 후 다시 시도하세요.` : "";
+      showToast("error", `요청이 너무 잦습니다.${suffix}`);
+    }
+
     return Promise.reject(error);
   },
 );
@@ -114,6 +123,15 @@ export function extractErrorMessage(error: unknown, fallback = "요청을 처리
 export function errorStatus(error: unknown): number | undefined {
   if (axios.isAxiosError(error)) return error.response?.status;
   return undefined;
+}
+
+/** 429 응답의 Retry-After 헤더(초). 없거나 파싱 불가면 undefined. */
+export function retryAfterSeconds(error: unknown): number | undefined {
+  if (!axios.isAxiosError(error)) return undefined;
+  const raw = error.response?.headers?.["retry-after"];
+  if (raw == null) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 export default apiClient;

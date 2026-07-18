@@ -11,7 +11,8 @@ import {
   transferOwnership,
   updateGroup,
 } from "@/api/groups";
-import type { GroupDetail, GroupMember, GroupRole } from "@/api/types";
+import { lookupUserByEmail } from "@/api/users";
+import type { GroupDetail, GroupMember, GroupRole, UserLookup } from "@/api/types";
 import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 import { Badge, ErrorState, LoadingState, Spinner } from "@/components/ui";
@@ -274,7 +275,6 @@ export function GroupDetailPage() {
       {inviteOpen && (
         <InviteMemberModal
           groupId={groupId}
-          isSystemAdmin={me?.role === "admin"}
           onClose={() => setInviteOpen(false)}
           onInvited={() => {
             setInviteOpen(false);
@@ -439,42 +439,79 @@ function EditGroupModal({
 
 function InviteMemberModal({
   groupId,
-  isSystemAdmin,
   onClose,
   onInvited,
 }: {
   groupId: number;
-  isSystemAdmin: boolean;
   onClose: () => void;
   onInvited: () => void;
 }) {
   const toast = useToast();
-  const [userId, setUserId] = useState("");
+  const [email, setEmail] = useState("");
   const [role, setRole] = useState<Exclude<GroupRole, "owner">>("member");
+  // 이메일 조회 결과. 확정(초대) 전 표시명 미리보기에 사용한다.
+  const [found, setFound] = useState<UserLookup | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [looking, setLooking] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const submit = async () => {
-    const uid = Number(userId);
-    if (!Number.isInteger(uid) || uid <= 0) {
-      toast.error("올바른 사용자 ID를 입력하세요.");
+  const lookup = async () => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) {
+      setLookupError("이메일을 입력하세요.");
       return;
     }
+    setLooking(true);
+    setLookupError(null);
+    setFound(null);
+    try {
+      setFound(await lookupUserByEmail(trimmed));
+    } catch (err) {
+      const status = errorStatus(err);
+      // 429 는 인터셉터가 Retry-After 토스트로 안내하므로 여기서는 별도 문구만.
+      setLookupError(
+        status === 404
+          ? "해당 이메일의 활성 사용자가 없습니다."
+          : status === 429
+            ? "조회 요청이 너무 잦습니다. 잠시 후 다시 시도하세요."
+            : extractErrorMessage(err, "사용자 조회에 실패했습니다."),
+      );
+    } finally {
+      setLooking(false);
+    }
+  };
+
+  const invite = async () => {
+    if (!found) return;
     setBusy(true);
     try {
-      await inviteMember(groupId, uid, role);
-      toast.success("멤버를 초대했습니다.");
+      await inviteMember(groupId, found.id, role);
+      toast.success(`${found.display_name}님을 초대했습니다.`);
       onInvited();
     } catch (err) {
       const status = errorStatus(err);
+      if (status === 429) {
+        setBusy(false);
+        return; // 인터셉터 토스트에 위임.
+      }
       const msg =
         status === 404
-          ? "해당 ID의 사용자를 찾을 수 없습니다."
+          ? "해당 사용자를 찾을 수 없습니다."
           : status === 400
             ? "활성 상태의 사용자만 초대할 수 있습니다."
-            : extractErrorMessage(err, "멤버 초대에 실패했습니다.");
+            : status === 409
+              ? "이미 이 그룹의 멤버입니다."
+              : extractErrorMessage(err, "멤버 초대에 실패했습니다.");
       toast.error(msg);
       setBusy(false);
     }
+  };
+
+  // 이메일을 다시 편집하면 이전 조회 결과를 무효화한다.
+  const onEmailChange = (value: string) => {
+    setEmail(value);
+    setFound(null);
+    setLookupError(null);
   };
 
   return (
@@ -487,35 +524,45 @@ function InviteMemberModal({
           <button className="btn btn-secondary" onClick={onClose}>
             취소
           </button>
-          <button className="btn btn-primary" onClick={submit} disabled={busy}>
-            {busy ? <Spinner className="h-4 w-4" /> : "초대"}
-          </button>
+          {found ? (
+            <button className="btn btn-primary" onClick={invite} disabled={busy}>
+              {busy ? <Spinner className="h-4 w-4" /> : "초대"}
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={lookup} disabled={looking}>
+              {looking ? <Spinner className="h-4 w-4" /> : "조회"}
+            </button>
+          )}
         </>
       }
     >
       <div className="flex flex-col gap-4">
         <div>
-          <label className="label" htmlFor="inviteUid">
-            사용자 ID
+          <label className="label" htmlFor="inviteEmail">
+            이메일
           </label>
           <input
-            id="inviteUid"
+            id="inviteEmail"
             className="input"
-            type="number"
-            min={1}
-            inputMode="numeric"
-            placeholder="예: 42"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
+            type="email"
+            inputMode="email"
+            placeholder="user@example.com"
+            value={email}
+            onChange={(e) => onEmailChange(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !found && lookup()}
             autoFocus
           />
-          <p className="mt-1.5 text-xs text-muted">
-            초대할 사용자의 숫자 ID를 입력하세요.
-            {isSystemAdmin
-              ? " '사용자 관리' 화면에서 각 사용자의 ID를 확인할 수 있습니다."
-              : " ID는 초대할 사용자 본인에게 문의하세요."}
-          </p>
+          {lookupError && (
+            <p className="mt-1.5 text-xs" style={{ color: "var(--danger)" }}>
+              {lookupError}
+            </p>
+          )}
+          {found && (
+            <div className="mt-2 flex items-center gap-2 rounded-lg bg-muted-token px-3 py-2 text-sm">
+              <span className="font-medium">{found.display_name}</span>
+              <span className="text-xs text-muted">{found.email}</span>
+            </div>
+          )}
         </div>
         <div>
           <label className="label" htmlFor="inviteRole">

@@ -5,6 +5,10 @@ import { AdminRoute, ProtectedRoute } from "@/components/ProtectedRoute";
 import { Layout } from "@/components/Layout";
 import { Toaster } from "@/components/Toast";
 import { LoadingState } from "@/components/ui";
+import { AdminAuditPage } from "@/pages/AdminAuditPage";
+import { AdminDashboardPage } from "@/pages/AdminDashboardPage";
+import { AdminGroupsPage } from "@/pages/AdminGroupsPage";
+import { AdminSharesPage } from "@/pages/AdminSharesPage";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
 import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPage";
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
@@ -57,7 +61,11 @@ function App() {
         {/* admin 전용 */}
         <Route element={<AdminRoute />}>
           <Route element={<Layout />}>
+            <Route path="/admin" element={<AdminDashboardPage />} />
             <Route path="/admin/users" element={<AdminUsersPage />} />
+            <Route path="/admin/groups" element={<AdminGroupsPage />} />
+            <Route path="/admin/shares" element={<AdminSharesPage />} />
+            <Route path="/admin/audit" element={<AdminAuditPage />} />
           </Route>
         </Route>
 

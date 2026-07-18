@@ -58,3 +58,84 @@ const PERMISSION_RANK: Record<string, number> = {
 export function permissionCovers(level: string, need: GroupPermissionLevel): boolean {
   return (PERMISSION_RANK[level] ?? 0) >= (PERMISSION_RANK[need] ?? 99);
 }
+
+// --- 사용자 상태 (admin UI 공용) -------------------------------------------
+
+const USER_STATUS_LABELS: Record<string, string> = {
+  pending: "승인 대기",
+  active: "활성",
+  inactive: "비활성",
+  rejected: "거절됨",
+};
+
+const USER_STATUS_TONES: Record<string, Tone> = {
+  pending: "warning",
+  active: "success",
+  inactive: "neutral",
+  rejected: "danger",
+};
+
+export function userStatusLabel(status: string): string {
+  return USER_STATUS_LABELS[status] ?? status;
+}
+
+export function userStatusTone(status: string): Tone {
+  return USER_STATUS_TONES[status] ?? "neutral";
+}
+
+// --- 공유 링크 권한 (admin UI 공용) ----------------------------------------
+
+const SHARE_PERMISSION_LABELS: Record<string, string> = {
+  read: "읽기",
+  download: "다운로드",
+};
+
+export function sharePermissionLabel(permission: string): string {
+  return SHARE_PERMISSION_LABELS[permission] ?? permission;
+}
+
+// --- 감사 로그 (admin UI 공용) ---------------------------------------------
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  "user.approve": "가입 승인",
+  "user.reject": "가입 거절",
+  "user.activate": "활성화",
+  "user.deactivate": "비활성화",
+  "user.quota_update": "할당량 변경",
+  "user.role_update": "역할 변경",
+  "share.force_disable": "공유 강제 차단",
+  "permission.grant": "권한 부여",
+  "permission.revoke": "권한 회수",
+};
+
+export function auditActionLabel(action: string): string {
+  return AUDIT_ACTION_LABELS[action] ?? action;
+}
+
+const AUDIT_ACTION_TONES: Record<string, Tone> = {
+  approve: "success",
+  activate: "success",
+  grant: "success",
+  reject: "danger",
+  deactivate: "danger",
+  force_disable: "danger",
+  revoke: "danger",
+  quota_update: "accent",
+  role_update: "accent",
+};
+
+export function auditActionTone(action: string): Tone {
+  const verb = action.split(".")[1] ?? action;
+  return AUDIT_ACTION_TONES[verb] ?? "neutral";
+}
+
+const TARGET_TYPE_LABELS: Record<string, string> = {
+  user: "사용자",
+  group: "그룹",
+  file: "파일",
+  share: "공유",
+};
+
+export function targetTypeLabel(targetType: string): string {
+  return TARGET_TYPE_LABELS[targetType] ?? targetType;
+}

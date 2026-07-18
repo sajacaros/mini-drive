@@ -141,6 +141,102 @@ export interface AdminUserListResponse {
   size: number;
 }
 
+// --- admin 대시보드/통제 (PRD 6.7) -----------------------------------------
+
+/** 공유 링크 활성/비활성 집계. */
+export interface ShareCounts {
+  active: number;
+  inactive: number;
+  total: number;
+}
+
+/** 사용량 상위 사용자 (GET /api/admin/stats). */
+export interface TopUser {
+  email: string;
+  storage_used: number;
+  max_storage: number;
+}
+
+/** 인스턴스 대시보드 통계 (GET /api/admin/stats). 메타데이터 집계만 (3.6.4). */
+export interface AdminStats {
+  total_users: number;
+  users_by_status: Record<string, number>;
+  total_files: number;
+  total_folders: number;
+  total_storage_used: number;
+  total_shares: ShareCounts;
+  total_groups: number;
+  top_users: TopUser[];
+}
+
+/** 전체 그룹 목록 항목 (GET /api/admin/groups). */
+export interface AdminGroup {
+  id: number;
+  name: string;
+  description: string | null;
+  owner_id: number;
+  owner_email: string;
+  is_active: boolean;
+  member_count: number;
+  file_count: number;
+  created_at: string;
+}
+
+export interface AdminGroupListResponse {
+  items: AdminGroup[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** 전체 공유 링크 목록 항목 (GET /api/admin/shares). 파일 내용은 노출하지 않음 (3.6.4). */
+export interface AdminShare {
+  id: number;
+  file_id: number;
+  file_name: string;
+  created_by: number;
+  creator_email: string;
+  permission: string;
+  is_active: boolean;
+  download_count: number;
+  max_downloads: number | null;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface AdminShareListResponse {
+  items: AdminShare[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** 감사 로그 항목 (GET /api/admin/audit-logs). */
+export interface AdminAuditLog {
+  id: number;
+  actor_id: number;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id: number | null;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AdminAuditLogListResponse {
+  items: AdminAuditLog[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** 이메일 정확 일치 사용자 조회 (GET /api/users/lookup). */
+export interface UserLookup {
+  id: number;
+  email: string;
+  display_name: string;
+}
+
 // --- 그룹 (PRD 6.4) --------------------------------------------------------
 
 export type GroupRole = "owner" | "admin" | "member";

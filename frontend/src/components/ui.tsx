@@ -52,6 +52,36 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
+/** 페이지네이션 컨트롤 (이전/다음). totalPages<=1 이면 렌더하지 않는다. */
+export function Pagination({
+  page,
+  totalPages,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="mt-4 flex items-center justify-center gap-3 text-sm">
+      <button className="btn btn-secondary" disabled={page <= 1} onClick={() => onChange(page - 1)}>
+        이전
+      </button>
+      <span className="text-muted">
+        {page} / {totalPages}
+      </span>
+      <button
+        className="btn btn-secondary"
+        disabled={page >= totalPages}
+        onClick={() => onChange(page + 1)}
+      >
+        다음
+      </button>
+    </div>
+  );
+}
+
 /** 상태 배지 (사용자 상태, 공유 활성 여부 등). */
 export function Badge({
   children,
