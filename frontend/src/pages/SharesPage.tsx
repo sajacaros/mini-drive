@@ -54,7 +54,9 @@ export function SharesPage() {
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
         <h1 className="text-lg font-semibold">공유 링크</h1>
-        <p className="mt-0.5 text-sm text-muted">내가 만든 공유 링크를 관리합니다.</p>
+        <p className="mt-0.5 text-sm text-muted">
+          내가 만든 공유 링크를 관리합니다. 조회수·마지막 접근은 근사치입니다.
+        </p>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
@@ -75,7 +77,9 @@ export function SharesPage() {
                 <tr className="border-b border-token text-left text-xs text-muted">
                   <th className="px-4 py-2.5 font-medium">파일</th>
                   <th className="w-24 px-4 py-2.5 font-medium">상태</th>
-                  <th className="w-28 px-4 py-2.5 font-medium">다운로드</th>
+                  <th className="w-24 px-4 py-2.5 font-medium">다운로드</th>
+                  <th className="w-20 px-4 py-2.5 font-medium">조회수</th>
+                  <th className="w-44 px-4 py-2.5 font-medium">마지막 접근</th>
                   <th className="w-40 px-4 py-2.5 font-medium">생성일</th>
                   <th className="w-44 px-4 py-2.5" />
                 </tr>
@@ -103,6 +107,10 @@ export function SharesPage() {
                     <td className="px-4 py-2.5 text-muted">
                       {s.download_count}
                       {s.max_downloads != null ? ` / ${s.max_downloads}` : ""}
+                    </td>
+                    <td className="px-4 py-2.5 text-muted">~{s.view_count}</td>
+                    <td className="px-4 py-2.5 text-muted">
+                      {s.last_access_at ? formatDateTime(s.last_access_at) : "-"}
                     </td>
                     <td className="px-4 py-2.5 text-muted">{formatDateTime(s.created_at)}</td>
                     <td className="px-4 py-2.5">

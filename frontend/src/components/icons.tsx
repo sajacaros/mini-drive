@@ -155,3 +155,50 @@ export const ShieldIcon = (p: IconProps) => (
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
   </svg>
 );
+
+/** 미리보기 — 눈. */
+export const EyeIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+/** 그리드 보기 — 4칸. */
+export const GridIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3" y="3" width="7" height="7" rx="1" />
+    <rect x="14" y="3" width="7" height="7" rx="1" />
+    <rect x="3" y="14" width="7" height="7" rx="1" />
+    <rect x="14" y="14" width="7" height="7" rx="1" />
+  </svg>
+);
+
+/** 목록 보기 — 줄. */
+export const ListIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+  </svg>
+);
+
+/** 일시정지 — 두 막대. */
+export const PauseIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="6" y="4" width="4" height="16" rx="1" />
+    <rect x="14" y="4" width="4" height="16" rx="1" />
+  </svg>
+);
+
+/** 재개 — 재생 삼각형. */
+export const PlayIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M6 4l14 8-14 8V4Z" />
+  </svg>
+);
+
+/** 취소/닫기 — X. */
+export const XIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);

@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { errorStatus, extractErrorMessage } from "@/api/client";
 import {
+  abortResumableUpload,
   createFolder,
   getFile,
   listFiles,
@@ -15,28 +16,50 @@ import { checkPermission } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
 import { Modal } from "@/components/Modal";
 import { PermissionModal } from "@/components/PermissionModal";
+import { PreviewModal } from "@/components/PreviewModal";
 import { ShareModal } from "@/components/ShareModal";
+import { Thumbnail } from "@/components/Thumbnail";
 import { VersionHistoryModal } from "@/components/VersionHistoryModal";
 import { useToast } from "@/components/Toast";
 import { Badge, EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import {
   DownloadIcon,
+  EyeIcon,
   FileIcon,
   FolderIcon,
+  GridIcon,
   HistoryIcon,
+  ListIcon,
+  PauseIcon,
+  PlayIcon,
   PlusIcon,
   RenameIcon,
   ShareIcon,
   ShieldIcon,
   TrashIcon,
   UploadIcon,
+  XIcon,
 } from "@/components/icons";
 import { downloadFile } from "@/lib/download";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionCovers } from "@/lib/labels";
+import { fetchFilePreview } from "@/lib/preview";
+import {
+  forgetSession,
+  listPendingSessions,
+  RESUMABLE_THRESHOLD,
+  resumeFromPending,
+  startNewResumableUpload,
+  startVersionResumableUpload,
+  type PendingSession,
+  type ResumableController,
+  type UploadStatus,
+} from "@/lib/resumable";
 import { useAuthStore } from "@/store/auth";
 
 const PAGE_SIZE = 50;
+const VIEW_KEY = "minidrive:fileView";
+type ViewMode = "list" | "grid";
 
 interface Crumb {
   id: number | null;
@@ -48,6 +71,10 @@ interface UploadTask {
   name: string;
   percent: number;
   error?: string;
+  /** 진행 상태. 재개 가능 업로드는 일시정지/취소 컨트롤을 노출한다. */
+  status: UploadStatus;
+  /** 재개 가능 업로드일 때만 존재 — 일시정지/재개/취소 제어에 사용. */
+  controller?: ResumableController;
 }
 
 let uploadSeq = 0;
@@ -77,6 +104,20 @@ export function FileBrowserPage({
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
+  const [view, setView] = useState<ViewMode>(
+    () => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list",
+  );
+  const [previewTarget, setPreviewTarget] = useState<FileNode | null>(null);
+  // 중단된 재개 세션(새로고침 포함) — 파일 재선택으로 이어올릴 수 있다.
+  const [pending, setPending] = useState<PendingSession[]>([]);
+  // 이어올리기용으로 재선택을 기다리는 세션.
+  const [resumeTarget, setResumeTarget] = useState<PendingSession | null>(null);
+  const resumeInputRef = useRef<HTMLInputElement>(null);
+
+  const changeView = (v: ViewMode) => {
+    setView(v);
+    localStorage.setItem(VIEW_KEY, v);
+  };
 
   // 현재 폴더에 대한 내 유효 권한 수준 (own 모드는 항상 manage=소유자).
   const [perm, setPerm] = useState<string>(shared ? "none" : "manage");
@@ -122,6 +163,16 @@ export function FileBrowserPage({
     void load(parentId, page);
   }, [parentId, page, load]);
 
+  // 현재 폴더에서 시작됐다가 중단된 재개 세션을 노출한다(새로고침 후 이어올리기).
+  useEffect(() => {
+    const active = new Set(uploads.map((t) => t.controller?.sessionId).filter(Boolean));
+    setPending(
+      listPendingSessions().filter(
+        (s) => s.parentId === parentId && !active.has(s.sessionId),
+      ),
+    );
+  }, [parentId, uploads]);
+
   // 공유 모드: 폴더가 바뀔 때마다 현재 폴더의 내 유효 권한을 재확인해 액션을 게이팅한다.
   useEffect(() => {
     if (!shared) {
@@ -160,25 +211,70 @@ export function FileBrowserPage({
 
   // --- 업로드 ---------------------------------------------------------------
 
-  // 완료된 업로드는 잠시 후 목록에서 제거 (오류 항목은 유지).
+  // 완료된 업로드만 잠시 후 목록에서 제거 (오류/진행 중/일시정지 항목은 유지).
   const scheduleUploadCleanup = () =>
-    setTimeout(() => setUploads((u) => u.filter((t) => t.error)), 2500);
+    setTimeout(() => setUploads((u) => u.filter((t) => t.status !== "completed")), 2500);
+
+  const patchTask = (id: number, patch: Partial<UploadTask>) =>
+    setUploads((u) => u.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+
+  const afterUpload = async () => {
+    await reload();
+    await refreshUser();
+    scheduleUploadCleanup();
+  };
+
+  // 재개 가능 업로드 컨트롤러 콜백 — 태스크 상태를 갱신하고 완료 시 목록을 새로고침한다.
+  const resumableCallbacks = (id: number, name: string) => ({
+    onProgress: (percent: number) => patchTask(id, { percent }),
+    onStatus: (status: UploadStatus) => {
+      if (status === "canceled") {
+        setUploads((u) => u.filter((t) => t.id !== id));
+        return;
+      }
+      patchTask(id, { status });
+      if (status === "completed") {
+        toast.success(`${name}: 업로드를 완료했습니다.`);
+        void afterUpload();
+      }
+    },
+    onError: (msg: string) => {
+      patchTask(id, { error: msg, status: "error" as UploadStatus });
+      toast.error(`${name}: ${msg}`);
+    },
+    onDone: () => {},
+  });
 
   const runUpload = async (files: FileList | File[]) => {
     const list = Array.from(files);
     if (list.length === 0) return;
 
-    // 진행률 표시용 초기 상태 등록 (id 로 추적해 인덱스 어긋남을 방지).
-    const tasks = list.map((f) => ({ id: ++uploadSeq, name: f.name, percent: 0 }));
-    setUploads((u) => [...u, ...tasks]);
+    for (const file of list) {
+      const id = ++uploadSeq;
+      setUploads((u) => [...u, { id, name: file.name, percent: 0, status: "uploading" }]);
 
-    for (let i = 0; i < list.length; i++) {
-      const { id } = tasks[i];
+      // 1GB 초과: 재개 가능 업로드로 분기(청킹/일시정지/재개/취소).
+      if (file.size > RESUMABLE_THRESHOLD) {
+        try {
+          const controller = await startNewResumableUpload(
+            file,
+            parentId,
+            resumableCallbacks(id, file.name),
+          );
+          patchTask(id, { controller });
+          void controller.start();
+        } catch (err) {
+          const msg = extractErrorMessage(err, "업로드 시작 실패");
+          patchTask(id, { error: msg, status: "error" });
+          toast.error(`${file.name}: ${msg}`);
+        }
+        continue;
+      }
+
+      // 1GB 이하: 기존 단일 업로드 경로.
       try {
-        await uploadFile(list[i], parentId, (percent) => {
-          setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent } : t)));
-        });
-        setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent: 100 } : t)));
+        await uploadFile(file, parentId, (percent) => patchTask(id, { percent }));
+        patchTask(id, { percent: 100, status: "completed" });
       } catch (err) {
         const status = errorStatus(err);
         const msg =
@@ -189,14 +285,59 @@ export function FileBrowserPage({
               : status === 403 || status === 404
                 ? "이 폴더에 업로드할 권한이 없습니다"
                 : extractErrorMessage(err, "업로드 실패");
-        setUploads((u) => u.map((t) => (t.id === id ? { ...t, error: msg } : t)));
-        toast.error(`${list[i].name}: ${msg}`);
+        patchTask(id, { error: msg, status: "error" });
+        toast.error(`${file.name}: ${msg}`);
       }
+      await afterUpload();
     }
+  };
 
-    await reload();
-    await refreshUser();
-    scheduleUploadCleanup();
+  // 중단된 세션을 재선택한 파일로 이어올린다(새로고침 후 복구).
+  const startResume = (session: PendingSession) => {
+    setResumeTarget(session);
+    resumeInputRef.current?.click();
+  };
+
+  const onResumeFileSelected = async (files: FileList | null) => {
+    const session = resumeTarget;
+    setResumeTarget(null);
+    const file = files?.[0];
+    if (!session || !file) return;
+
+    const id = ++uploadSeq;
+    const name = session.kind === "version" ? `${session.name} (새 버전)` : session.name;
+    setUploads((u) => [...u, { id, name, percent: 0, status: "uploading" }]);
+    try {
+      const controller = await resumeFromPending(session, file, resumableCallbacks(id, name));
+      if (!controller) {
+        setUploads((u) => u.filter((t) => t.id !== id));
+        setPending((p) => p.filter((s) => s.sessionId !== session.sessionId));
+        toast.error(`${session.name}: 업로드 세션이 만료되어 이어올릴 수 없습니다. 다시 업로드해 주세요.`);
+        return;
+      }
+      patchTask(id, { controller });
+      setPending((p) => p.filter((s) => s.sessionId !== session.sessionId));
+      void controller.start();
+    } catch (err) {
+      setUploads((u) => u.filter((t) => t.id !== id));
+      const msg =
+        errorStatus(err) != null
+          ? extractErrorMessage(err, "이어올리기 실패")
+          : err instanceof Error
+            ? err.message
+            : "이어올리기 실패";
+      toast.error(`${session.name}: ${msg}`);
+    }
+  };
+
+  const cancelPending = async (session: PendingSession) => {
+    forgetSession(session.sessionId);
+    setPending((p) => p.filter((s) => s.sessionId !== session.sessionId));
+    try {
+      await abortResumableUpload(session.sessionId);
+    } catch {
+      /* 이미 만료/삭제됐을 수 있음 — 무시 */
+    }
   };
 
   // --- 새 버전 업로드 -------------------------------------------------------
@@ -217,16 +358,41 @@ export function FileBrowserPage({
 
   const runVersionUpload = async (target: FileNode, file: File, baseVersion?: number) => {
     const id = ++uploadSeq;
-    setUploads((u) => [...u, { id, name: `${file.name} (새 버전)`, percent: 0 }]);
+    const name = `${file.name} (새 버전)`;
+
+    // 1GB 초과: 재개 가능 재업로드로 분기.
+    if (file.size > RESUMABLE_THRESHOLD) {
+      setUploads((u) => [...u, { id, name, percent: 0, status: "uploading" }]);
+      try {
+        const controller = await startVersionResumableUpload(
+          target.id,
+          file,
+          baseVersion,
+          parentId,
+          resumableCallbacks(id, name),
+        );
+        patchTask(id, { controller });
+        void controller.start();
+      } catch (err) {
+        // 개시 단계 실패는 항목을 제거하고, 409(base_version 충돌)는 충돌 모달로 유도한다.
+        setUploads((u) => u.filter((t) => t.id !== id));
+        const status = errorStatus(err);
+        if (status === 409) {
+          setConflict({ target, file });
+          return;
+        }
+        toast.error(`${target.name}: ${extractErrorMessage(err, "새 버전 업로드 시작 실패")}`);
+      }
+      return;
+    }
+
+    // 1GB 이하: 기존 단일 재업로드 경로.
+    setUploads((u) => [...u, { id, name, percent: 0, status: "uploading" }]);
     try {
-      await reuploadFile(target.id, file, baseVersion, (percent) => {
-        setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent } : t)));
-      });
-      setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent: 100 } : t)));
+      await reuploadFile(target.id, file, baseVersion, (percent) => patchTask(id, { percent }));
+      patchTask(id, { percent: 100, status: "completed" });
       toast.success(`${target.name}: 새 버전을 업로드했습니다.`);
-      await reload();
-      await refreshUser();
-      scheduleUploadCleanup();
+      await afterUpload();
     } catch (err) {
       // 진행 중 항목은 제거하고, 409 는 충돌 안내 모달로 유도한다.
       setUploads((u) => u.filter((t) => t.id !== id));
@@ -302,6 +468,11 @@ export function FileBrowserPage({
     }
   };
 
+  const openPreview = (file: FileNode) => {
+    if (file.is_folder) return;
+    setPreviewTarget(file);
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
@@ -327,7 +498,37 @@ export function FileBrowserPage({
           ))}
         </nav>
 
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 items-center gap-2">
+          {/* 보기 전환: 목록 / 그리드(썸네일) */}
+          <div className="flex items-center rounded-lg border border-token p-0.5">
+            <button
+              className={`rounded-md p-1.5 transition-colors ${
+                view === "list"
+                  ? "bg-[color:var(--bg-muted)] text-[color:var(--text-primary)]"
+                  : "text-muted hover:text-[color:var(--text-primary)]"
+              }`}
+              title="목록 보기"
+              aria-label="목록 보기"
+              aria-pressed={view === "list"}
+              onClick={() => changeView("list")}
+            >
+              <ListIcon width={16} height={16} />
+            </button>
+            <button
+              className={`rounded-md p-1.5 transition-colors ${
+                view === "grid"
+                  ? "bg-[color:var(--bg-muted)] text-[color:var(--text-primary)]"
+                  : "text-muted hover:text-[color:var(--text-primary)]"
+              }`}
+              title="그리드 보기"
+              aria-label="그리드 보기"
+              aria-pressed={view === "grid"}
+              onClick={() => changeView("grid")}
+            >
+              <GridIcon width={16} height={16} />
+            </button>
+          </div>
+
           {canWrite && (
             <>
               <button className="btn btn-secondary" onClick={() => setNewFolderOpen(true)}>
@@ -359,6 +560,16 @@ export function FileBrowserPage({
               e.target.value = "";
             }}
           />
+          {/* 중단된 세션 이어올리기용 재선택 입력 */}
+          <input
+            ref={resumeInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              void onResumeFileSelected(e.target.files);
+              e.target.value = "";
+            }}
+          />
         </div>
       </div>
 
@@ -382,21 +593,92 @@ export function FileBrowserPage({
           </div>
         )}
 
+        {/* 중단된 재개 세션 — 파일 재선택으로 이어올리기 */}
+        {pending.length > 0 && (
+          <div className="mb-4 flex flex-col gap-2">
+            {pending.map((s) => (
+              <div
+                key={s.sessionId}
+                className="card flex items-center justify-between gap-3 px-4 py-2.5"
+                style={{ borderColor: "var(--warning)" }}
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{s.name}</p>
+                  <p className="text-xs text-muted">
+                    중단된 업로드 · {formatBytes(s.size)} · 같은 파일을 다시 선택하면 이어올립니다
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <button className="btn btn-secondary" onClick={() => startResume(s)}>
+                    이어올리기
+                  </button>
+                  <button className="btn btn-ghost text-danger" onClick={() => void cancelPending(s)}>
+                    취소
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 업로드 진행률 */}
         {uploads.length > 0 && (
           <div className="mb-4 flex flex-col gap-2">
-            {uploads.map((t, i) => (
-              <div key={i} className="card px-4 py-2.5">
-                <div className="mb-1 flex items-center justify-between text-sm">
+            {uploads.map((t) => (
+              <div key={t.id} className="card px-4 py-2.5">
+                <div className="mb-1 flex items-center justify-between gap-3 text-sm">
                   <span className="truncate">{t.name}</span>
-                  <span className={t.error ? "text-danger" : "text-muted"}>
-                    {t.error ?? `${t.percent}%`}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={t.error ? "text-danger" : "text-muted"}>
+                      {t.error ??
+                        (t.status === "paused"
+                          ? "일시정지됨"
+                          : t.status === "completed"
+                            ? "완료"
+                            : `${t.percent}%`)}
+                    </span>
+                    {/* 재개 가능 업로드만 일시정지/재개/취소 컨트롤 노출 */}
+                    {t.controller && !t.error && t.status !== "completed" && (
+                      <div className="flex items-center gap-1">
+                        {t.status === "paused" ? (
+                          <button
+                            className="rounded p-1 text-muted transition-colors hover:text-[color:var(--text-primary)]"
+                            title="재개"
+                            aria-label="재개"
+                            onClick={() => t.controller?.resume()}
+                          >
+                            <PlayIcon width={14} height={14} />
+                          </button>
+                        ) : (
+                          <button
+                            className="rounded p-1 text-muted transition-colors hover:text-[color:var(--text-primary)]"
+                            title="일시정지"
+                            aria-label="일시정지"
+                            onClick={() => t.controller?.pause()}
+                          >
+                            <PauseIcon width={14} height={14} />
+                          </button>
+                        )}
+                        <button
+                          className="rounded p-1 text-muted transition-colors hover:text-danger"
+                          title="취소"
+                          aria-label="취소"
+                          onClick={() => void t.controller?.cancel()}
+                        >
+                          <XIcon width={14} height={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {!t.error && (
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted-token">
                     <div
-                      className="h-full rounded-full bg-[color:var(--accent)] transition-all"
+                      className={`h-full rounded-full transition-all ${
+                        t.status === "paused"
+                          ? "bg-[color:var(--warning)]"
+                          : "bg-[color:var(--accent)]"
+                      }`}
                       style={{ width: `${t.percent}%` }}
                     />
                   </div>
@@ -421,23 +703,30 @@ export function FileBrowserPage({
             }
           />
         ) : (
-          <FileTable
-            items={items}
-            shared={shared}
-            canWrite={canWrite}
-            canManage={canManage}
-            onOpenFolder={openFolder}
-            onDownload={onDownload}
-            onRename={(f) => {
-              setRenameTarget(f);
-              setRenameValue(f.name);
-            }}
-            onShare={(f) => setShareTarget(f)}
-            onPermissions={(f) => setPermTarget(f)}
-            onDelete={(f) => setDeleteTarget(f)}
-            onVersions={(f) => setVersionsTarget(f)}
-            onNewVersion={startVersionUpload}
-          />
+          (() => {
+            const rowProps = {
+              shared,
+              canWrite,
+              canManage,
+              onOpenFolder: openFolder,
+              onPreview: openPreview,
+              onDownload,
+              onRename: (f: FileNode) => {
+                setRenameTarget(f);
+                setRenameValue(f.name);
+              },
+              onShare: (f: FileNode) => setShareTarget(f),
+              onPermissions: (f: FileNode) => setPermTarget(f),
+              onDelete: (f: FileNode) => setDeleteTarget(f),
+              onVersions: (f: FileNode) => setVersionsTarget(f),
+              onNewVersion: startVersionUpload,
+            };
+            return view === "grid" ? (
+              <FileGrid items={items} {...rowProps} />
+            ) : (
+              <FileTable items={items} {...rowProps} />
+            );
+          })()
         )}
 
         {/* 페이지네이션 */}
@@ -595,6 +884,14 @@ export function FileBrowserPage({
           void refreshUser();
         }}
       />
+
+      <PreviewModal
+        open={previewTarget !== null}
+        title={previewTarget?.name ?? ""}
+        onClose={() => setPreviewTarget(null)}
+        load={() => fetchFilePreview(previewTarget!.id)}
+        onDownload={previewTarget ? () => void onDownload(previewTarget) : undefined}
+      />
     </div>
   );
 }
@@ -650,25 +947,13 @@ export function SharedFolderBrowserPage() {
   return <FileBrowserPage rootId={id} rootName={name} shared />;
 }
 
-function FileTable({
-  items,
-  shared,
-  canWrite,
-  canManage,
-  onOpenFolder,
-  onDownload,
-  onRename,
-  onShare,
-  onPermissions,
-  onDelete,
-  onVersions,
-  onNewVersion,
-}: {
-  items: FileNode[];
+/** 목록/그리드가 공유하는 행 동작 핸들러. */
+interface FileRowProps {
   shared: boolean;
   canWrite: boolean;
   canManage: boolean;
   onOpenFolder: (f: FileNode) => void;
+  onPreview: (f: FileNode) => void;
   onDownload: (f: FileNode) => void;
   onRename: (f: FileNode) => void;
   onShare: (f: FileNode) => void;
@@ -676,7 +961,56 @@ function FileTable({
   onDelete: (f: FileNode) => void;
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
-}) {
+}
+
+/** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용). */
+function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
+  return (
+    <>
+      {!f.is_folder && (
+        <>
+          <IconAction title="미리보기" onClick={() => p.onPreview(f)}>
+            <EyeIcon width={16} height={16} />
+          </IconAction>
+          <IconAction title="다운로드" onClick={() => p.onDownload(f)}>
+            <DownloadIcon width={16} height={16} />
+          </IconAction>
+          {p.canWrite && (
+            <IconAction title="새 버전 업로드" onClick={() => p.onNewVersion(f)}>
+              <UploadIcon width={16} height={16} />
+            </IconAction>
+          )}
+          <IconAction title="버전 기록" onClick={() => p.onVersions(f)}>
+            <HistoryIcon width={16} height={16} />
+          </IconAction>
+          {/* 공유 링크 생성은 소유자 전용 — 공유 폴더 탐색 중에는 숨긴다. */}
+          {!p.shared && (
+            <IconAction title="공유" onClick={() => p.onShare(f)}>
+              <ShareIcon width={16} height={16} />
+            </IconAction>
+          )}
+        </>
+      )}
+      {p.canManage && (
+        <IconAction title="권한 관리" onClick={() => p.onPermissions(f)}>
+          <ShieldIcon width={16} height={16} />
+        </IconAction>
+      )}
+      {p.canWrite && (
+        <>
+          <IconAction title="이름 변경" onClick={() => p.onRename(f)}>
+            <RenameIcon width={16} height={16} />
+          </IconAction>
+          <IconAction title="삭제" onClick={() => p.onDelete(f)} danger>
+            <TrashIcon width={16} height={16} />
+          </IconAction>
+        </>
+      )}
+    </>
+  );
+}
+
+function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-sm">
@@ -685,7 +1019,7 @@ function FileTable({
             <th className="px-4 py-2.5 font-medium">이름</th>
             <th className="w-28 px-4 py-2.5 font-medium">크기</th>
             <th className="w-40 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-64 px-4 py-2.5" />
+            <th className="w-72 px-4 py-2.5" />
           </tr>
         </thead>
         <tbody>
@@ -694,11 +1028,19 @@ function FileTable({
               <td className="px-4 py-2.5">
                 <button
                   className="flex items-center gap-2.5 text-left"
-                  onClick={() => f.is_folder && onOpenFolder(f)}
-                  disabled={!f.is_folder}
+                  onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
                 >
-                  <span className={f.is_folder ? "text-[color:var(--accent)]" : "text-muted"}>
-                    {f.is_folder ? <FolderIcon /> : <FileIcon />}
+                  {/* 이미지면 미니 썸네일, 아니면 유형 아이콘 */}
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
+                      f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+                    }`}
+                  >
+                    <Thumbnail
+                      file={f}
+                      className="h-8 w-8 rounded object-cover"
+                      fallback={f.is_folder ? <FolderIcon /> : <FileIcon />}
+                    />
                   </span>
                   <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
                   {!f.is_folder && f.current_version >= 2 && (
@@ -710,48 +1052,69 @@ function FileTable({
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
                 <div className="flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                  {!f.is_folder && (
-                    <>
-                      <IconAction title="다운로드" onClick={() => onDownload(f)}>
-                        <DownloadIcon width={16} height={16} />
-                      </IconAction>
-                      {canWrite && (
-                        <IconAction title="새 버전 업로드" onClick={() => onNewVersion(f)}>
-                          <UploadIcon width={16} height={16} />
-                        </IconAction>
-                      )}
-                      <IconAction title="버전 기록" onClick={() => onVersions(f)}>
-                        <HistoryIcon width={16} height={16} />
-                      </IconAction>
-                      {/* 공유 링크 생성은 소유자 전용 — 공유 폴더 탐색 중에는 숨긴다. */}
-                      {!shared && (
-                        <IconAction title="공유" onClick={() => onShare(f)}>
-                          <ShareIcon width={16} height={16} />
-                        </IconAction>
-                      )}
-                    </>
-                  )}
-                  {canManage && (
-                    <IconAction title="권한 관리" onClick={() => onPermissions(f)}>
-                      <ShieldIcon width={16} height={16} />
-                    </IconAction>
-                  )}
-                  {canWrite && (
-                    <>
-                      <IconAction title="이름 변경" onClick={() => onRename(f)}>
-                        <RenameIcon width={16} height={16} />
-                      </IconAction>
-                      <IconAction title="삭제" onClick={() => onDelete(f)} danger>
-                        <TrashIcon width={16} height={16} />
-                      </IconAction>
-                    </>
-                  )}
+                  <RowActions file={f} {...p} />
                 </div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** 썸네일 중심 그리드 뷰 (PRD 3.2). 폴더 클릭은 탐색, 파일 클릭은 미리보기. */
+function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+      {items.map((f) => (
+        <div key={f.id} className="group card flex flex-col overflow-hidden p-0">
+          {/* 썸네일/아이콘 영역 (정사각형) */}
+          <button
+            className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-muted-token"
+            onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
+            title={f.is_folder ? "폴더 열기" : "미리보기"}
+          >
+            <span
+              className={`flex items-center justify-center ${
+                f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+              }`}
+            >
+              <Thumbnail
+                file={f}
+                className="h-full w-full object-cover"
+                fallback={
+                  f.is_folder ? (
+                    <FolderIcon width={44} height={44} />
+                  ) : (
+                    <FileIcon width={40} height={40} />
+                  )
+                }
+              />
+            </span>
+            {!f.is_folder && f.current_version >= 2 && (
+              <span className="absolute left-1.5 top-1.5">
+                <Badge tone="neutral">v{f.current_version}</Badge>
+              </span>
+            )}
+          </button>
+
+          {/* 이름 + 동작 */}
+          <div className="flex flex-col gap-1 border-t border-token px-2.5 py-2">
+            <button
+              className="min-w-0 text-left"
+              onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
+            >
+              <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
+              <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
+            </button>
+            {/* 좁은 셀에서 넘치지 않도록 아이콘은 줄바꿈 허용 */}
+            <div className="flex flex-wrap opacity-0 transition-opacity group-hover:opacity-100">
+              <RowActions file={f} {...p} />
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

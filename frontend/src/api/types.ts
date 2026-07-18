@@ -85,6 +85,30 @@ export interface DownloadTicketResponse {
   expires_in: number;
 }
 
+/**
+ * 재개 가능 업로드 세션 상태 (PRD 3.2). 개시(POST) 응답이자 재개(GET) 응답.
+ * 클라이언트는 part_size 로 청크를 나누고(마지막 파트 제외 정확히 part_size), uploaded_parts 로
+ * 빠진 파트만 이어올린다.
+ */
+export interface ResumableSession {
+  session_id: string;
+  kind: "new" | "version";
+  file_id: number;
+  part_size: number;
+  total_parts: number;
+  total_size: number;
+  uploaded_parts: number[];
+  received_bytes: number;
+  expires_at: string;
+}
+
+/** 단일 파트 업로드 결과 (PUT .../parts/{n}). */
+export interface ResumablePart {
+  part_number: number;
+  size: number;
+  etag: string;
+}
+
 export type SharePermission = "read" | "download";
 
 /** 소유자용 공유 링크 응답 (POST/GET /api/shares). */
@@ -100,6 +124,20 @@ export interface Share {
   max_downloads: number | null;
   download_count: number;
   created_at: string;
+  /**
+   * 접근 통계 (PRD 3.4). view_count/last_access_at 는 Redis 근사 집계라 재시작/flush 시
+   * 소실될 수 있다. download_count 는 DB 정확값(횟수 제한과 직결).
+   */
+  view_count: number;
+  last_access_at: string | null;
+}
+
+/** 단건 공유 통계 (GET /api/shares/{id}/stats). */
+export interface ShareStats {
+  share_id: number;
+  view_count: number;
+  last_access_at: string | null;
+  download_count: number;
 }
 
 export interface ShareCreateRequest {

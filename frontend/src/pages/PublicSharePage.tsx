@@ -3,10 +3,12 @@ import { useParams } from "react-router-dom";
 
 import { fetchPublicShareMeta, ShareMetaError } from "@/api/shares";
 import type { SharePublicMeta } from "@/api/types";
-import { DownloadIcon, DriveIcon, FileIcon, LockIcon } from "@/components/icons";
+import { PreviewModal } from "@/components/PreviewModal";
+import { DownloadIcon, DriveIcon, EyeIcon, FileIcon, LockIcon } from "@/components/icons";
 import { LoadingState, Spinner } from "@/components/ui";
 import { downloadSharedFile, ShareDownloadError } from "@/lib/download";
 import { formatBytes, formatDateTime } from "@/lib/format";
+import { fetchPublicSharePreview } from "@/lib/preview";
 
 type ViewState =
   | { kind: "loading" }
@@ -20,6 +22,7 @@ export function PublicSharePage() {
   const [password, setPassword] = useState("");
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -125,16 +128,22 @@ export function PublicSharePage() {
                 <p className="rounded-lg alert-danger px-3 py-2 text-sm">{downloadError}</p>
               )}
 
-              <button className="btn btn-primary" onClick={onDownload} disabled={downloading}>
-                {downloading ? (
-                  <Spinner className="h-4 w-4" />
-                ) : (
-                  <>
-                    <DownloadIcon width={16} height={16} />
-                    다운로드
-                  </>
-                )}
-              </button>
+              <div className="flex flex-col gap-2">
+                <button className="btn btn-secondary" onClick={() => setPreviewOpen(true)}>
+                  <EyeIcon width={16} height={16} />
+                  미리보기
+                </button>
+                <button className="btn btn-primary" onClick={onDownload} disabled={downloading}>
+                  {downloading ? (
+                    <Spinner className="h-4 w-4" />
+                  ) : (
+                    <>
+                      <DownloadIcon width={16} height={16} />
+                      다운로드
+                    </>
+                  )}
+                </button>
+              </div>
 
               {state.meta.permission === "read" && (
                 <p className="text-center text-xs text-muted">읽기 전용으로 공유된 파일입니다.</p>
@@ -143,6 +152,18 @@ export function PublicSharePage() {
           )}
         </div>
       </div>
+
+      {/* 미리보기 모달 — 다운로드 횟수를 소모하지 않는다. 비밀번호가 필요하면 위 입력값을 사용한다. */}
+      <PreviewModal
+        open={previewOpen}
+        title={state.kind === "ready" ? state.meta.file_name : ""}
+        onClose={() => setPreviewOpen(false)}
+        load={() => fetchPublicSharePreview(shareUrl, password || undefined)}
+        onDownload={() => {
+          setPreviewOpen(false);
+          void onDownload();
+        }}
+      />
     </div>
   );
 }

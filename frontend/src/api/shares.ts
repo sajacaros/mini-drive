@@ -1,7 +1,7 @@
 /** 공유 링크 API (PRD 6.3). */
 
 import apiClient from "./client";
-import type { Share, ShareCreateRequest, SharePublicMeta } from "./types";
+import type { Share, ShareCreateRequest, SharePublicMeta, ShareStats } from "./types";
 
 export async function createShare(payload: ShareCreateRequest): Promise<Share> {
   const { data } = await apiClient.post<Share>("/shares", payload);
@@ -10,6 +10,12 @@ export async function createShare(payload: ShareCreateRequest): Promise<Share> {
 
 export async function listShares(): Promise<Share[]> {
   const { data } = await apiClient.get<Share[]>("/shares");
+  return data;
+}
+
+/** 단건 공유 통계 (PRD 3.4). download_count 는 DB 정확값, view/last_access 는 Redis 근사치. */
+export async function getShareStats(id: number): Promise<ShareStats> {
+  const { data } = await apiClient.get<ShareStats>(`/shares/${id}/stats`);
   return data;
 }
 
