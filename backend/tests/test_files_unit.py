@@ -71,22 +71,21 @@ class TestInternalRedirect:
 
 
 class TestEnsureFileAccess:
-    def test_owner_allowed(self) -> None:
+    """소유자/부재 경로는 DB 접근 전에 판정되므로 session 없이 검증한다.
+
+    비소유자의 그룹 권한 판정(조회 시 상속)은 DB/Redis 가 필요하므로 통합 테스트
+    (integration_permissions)에서 다룬다. 순수 판정 로직은 test_permissions_unit 참조.
+    """
+
+    async def test_owner_allowed(self) -> None:
         user = SimpleNamespace(id=1)
         file = SimpleNamespace(user_id=1)
-        assert ensure_file_access(user, file) is file
+        assert await ensure_file_access(None, user, file) is file  # type: ignore[arg-type]
 
-    def test_non_owner_404(self) -> None:
-        user = SimpleNamespace(id=2)
-        file = SimpleNamespace(user_id=1)
-        with pytest.raises(FileServiceError) as exc:
-            ensure_file_access(user, file)
-        assert exc.value.status_code == 404
-
-    def test_missing_404(self) -> None:
+    async def test_missing_404(self) -> None:
         user = SimpleNamespace(id=1)
         with pytest.raises(FileServiceError) as exc:
-            ensure_file_access(user, None)
+            await ensure_file_access(None, user, None)  # type: ignore[arg-type]
         assert exc.value.status_code == 404
 
 

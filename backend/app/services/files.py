@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
 from app.models import File, FileVersion, User
+from app.services import permissions as permissions_service
 from app.services.storage import StorageService
 
 AccessNeed = Literal["read", "write", "manage"]
@@ -57,13 +58,23 @@ def build_version_key(file_id: int, version: int) -> str:
 # --- 권한 검사 (단일 관문) ---------------------------------------------------
 
 
-def ensure_file_access(user: User, file: File | None, need: AccessNeed = "read") -> File:
-    """파일 접근 권한을 검사한다. 통과하면 file 을 반환한다.
+async def ensure_file_access(
+    session: AsyncSession, user: User, file: File | None, need: AccessNeed = "read"
+) -> File:
+    """파일 접근 권한을 검사하는 단일 관문. 통과하면 file 을 반환한다.
 
-    Phase 1: 소유자(user_id)만 접근 가능. 그룹 권한(Phase 3)은 이 함수만 확장한다.
+    판정 순서 (PRD 3.1.3, 5.7):
+      1) 생성자(user_id)면 전권(전 need 통과).
+      2) 아니면 그룹 권한을 조회 시 판정(조상 상속 포함, 캐시)해 need 를 충족하는지 본다.
+    시스템 admin(users.role)은 파일 내용 접근 권한이 없다(PRD 3.6.4) — 여기서 특별대우 없음.
     존재하지 않거나 접근 불가면 404 로 통일해 리소스 존재 여부 노출을 막는다.
     """
-    if file is None or file.user_id != user.id:
+    if file is None:
+        raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+    if file.user_id == user.id:
+        return file
+    level = await permissions_service.get_access_level(session, user, file)
+    if level is None or not permissions_service.permission_covers(level, need):
         raise FileServiceError(404, "파일을 찾을 수 없습니다.")
     return file
 
@@ -92,16 +103,17 @@ async def get_file(session: AsyncSession, file_id: int) -> File | None:
 
 
 async def _resolve_parent(
-    session: AsyncSession, user: User, parent_id: int | None
+    session: AsyncSession, user: User, parent_id: int | None, need: AccessNeed = "read"
 ) -> File:
     """parent_id 를 대상 부모 폴더로 해석한다. None 이면 루트 폴더.
 
-    부모는 소유자의 것이어야 하고, 폴더이며, 삭제되지 않았어야 한다.
+    부모는 접근 권한(need)을 만족해야 하고, 폴더이며, 삭제되지 않았어야 한다. 그룹 write 권한자가
+    공유 폴더에 항목을 만들 수 있도록, 생성(폴더/업로드)은 need="write" 로 부모를 해석한다.
     """
     if parent_id is None:
         return await get_root_folder(session, user.id)
 
-    parent = ensure_file_access(user, await get_file(session, parent_id))
+    parent = await ensure_file_access(session, user, await get_file(session, parent_id), need)
     if not parent.is_folder:
         raise FileServiceError(400, "부모가 폴더가 아닙니다.")
     if parent.is_deleted:
@@ -182,7 +194,7 @@ async def create_folder(
     name = name.strip()
     if not name:
         raise FileServiceError(422, "폴더 이름이 비어 있습니다.")
-    parent = await _resolve_parent(session, user, parent_id)
+    parent = await _resolve_parent(session, user, parent_id, need="write")
 
     folder = File(
         user_id=user.id,
@@ -212,7 +224,7 @@ async def rename_file(
     if not new_name:
         raise FileServiceError(422, "이름이 비어 있습니다.")
 
-    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="write")
     if file.is_deleted:
         raise FileServiceError(409, "삭제된 항목은 이름을 변경할 수 없습니다.")
     if file.parent_folder_id is None:
@@ -262,7 +274,7 @@ async def upload_file(
     if size > MAX_FILE_SIZE:
         raise FileServiceError(413, "파일 크기가 상한(10GB)을 초과했습니다.")
 
-    parent = await _resolve_parent(session, user, parent_id)
+    parent = await _resolve_parent(session, user, parent_id, need="write")
 
     # 1) 할당량 원자적 선점 (같은 트랜잭션 — 실패 시 롤백으로 함께 취소).
     if not await _reserve_quota(session, user.id, size):
@@ -342,7 +354,7 @@ async def prepare_download(
     소유자 검사 후 내부 presign(60s)을 생성해 nginx `/_minio/` 경로(X-Accel-Redirect 값)로
     변환한다. 반환: (internal_redirect_path, filename, mime_type). 폴더면 400.
     """
-    file = ensure_file_access(user, await get_file(session, file_id))
+    file = await ensure_file_access(session, user, await get_file(session, file_id))
     if file.is_folder:
         raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
     if file.is_deleted:
@@ -488,7 +500,7 @@ async def reupload_file(
     base_version 이 주어지고 current_version 과 불일치하면 409(충돌 감지). 미전달 시 강제 덮어쓰기.
     파일명은 유지하고 내용/크기/mime 만 갱신한다.
     """
-    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="write")
     if file.is_folder:
         raise FileServiceError(400, "폴더는 재업로드할 수 없습니다.")
     if file.is_deleted:
@@ -529,7 +541,7 @@ async def list_versions(
     session: AsyncSession, user: User, file_id: int
 ) -> tuple[File, list[tuple[FileVersion, str]]]:
     """버전 히스토리 (PRD 6.2). (file, [(version, 업로더 표시명), ...] 최신순) 반환."""
-    file = ensure_file_access(user, await get_file(session, file_id))
+    file = await ensure_file_access(session, user, await get_file(session, file_id))
     if file.is_folder:
         raise FileServiceError(400, "폴더는 버전이 없습니다.")
 
@@ -555,7 +567,7 @@ async def prepare_version_download(
 
     파일명에 버전 표기를 넣는다(예: `report (v2).pdf`). 없는 버전이면 404.
     """
-    file = ensure_file_access(user, await get_file(session, file_id))
+    file = await ensure_file_access(session, user, await get_file(session, file_id))
     if file.is_folder:
         raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
 
@@ -587,7 +599,7 @@ async def restore_version(
     대상 버전 바이트를 file_key 로 서버측 복사해 current_version+1 을 만든다. files.size/mime 을
     대상 버전 기준으로 갱신하고 할당량에 반영한다.
     """
-    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="write")
     if file.is_folder:
         raise FileServiceError(400, "폴더는 복구할 수 없습니다.")
     if file.is_deleted:
@@ -644,7 +656,7 @@ _SUBTREE_CTE = (
 
 async def soft_delete(session: AsyncSession, user: User, file_id: int) -> None:
     """소프트 삭제 (PRD 6.2). 폴더면 하위 전체를 단일 recursive CTE UPDATE 로 처리한다."""
-    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="write")
     if file.parent_folder_id is None:
         raise FileServiceError(400, "루트 폴더는 삭제할 수 없습니다.")
     if file.is_deleted:
@@ -688,7 +700,7 @@ async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File
 
     대상과 하위 전체를 재귀로 되살린다(재귀 삭제의 역연산).
     """
-    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="write")
     if not file.is_deleted:
         raise FileServiceError(409, "휴지통에 있는 항목만 복구할 수 있습니다.")
 
@@ -742,7 +754,7 @@ async def permanent_delete(
     MinIO 오브젝트(원본+버전) 삭제 + storage_used 감소 + files 행 삭제(versions CASCADE).
     DB 를 먼저 확정하고 오브젝트는 best-effort 로 정리해 DB 를 진실 소스로 유지한다.
     """
-    file = ensure_file_access(user, await get_file(session, file_id), need="manage")
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="manage")
     if not file.is_deleted:
         raise FileServiceError(409, "휴지통에 있는 항목만 영구 삭제할 수 있습니다.")
 

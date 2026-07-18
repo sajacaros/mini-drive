@@ -33,9 +33,20 @@ from app.schemas.files import (
     FileVersionResponse,
     FolderCreateRequest,
 )
+from app.schemas.permissions import (
+    DirectPermissionResponse,
+    FilePermissionsResponse,
+    InheritedPermissionResponse,
+    PermissionGrantRequest,
+    PermissionUpdateRequest,
+    SharedItemResponse,
+    SharedWithMeResponse,
+)
 from app.services import files as files_service
+from app.services import permissions as permissions_service
 from app.services import tickets as tickets_service
 from app.services.files import FileServiceError
+from app.services.permissions import PermissionServiceError
 from app.services.storage import get_storage
 from app.services.users import get_user_by_id
 
@@ -50,7 +61,28 @@ def _http_error(exc: FileServiceError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
+def _perm_http_error(exc: PermissionServiceError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
 # --- 고정 경로 (/{file_id} 보다 먼저) ---------------------------------------
+
+
+@router.get("/shared-with-me", response_model=SharedWithMeResponse)
+async def shared_with_me(user: CurrentUser, session: DbSession) -> SharedWithMeResponse:
+    """내 소속 그룹에 공유된 항목(부여 지점) 목록 (PRD 3.1.3). 폴더로 진입해 하위 탐색."""
+    items = await permissions_service.list_shared_with_me(session, user)
+    return SharedWithMeResponse(
+        items=[
+            SharedItemResponse(
+                file=FileResponse.model_validate(item.file),
+                group_id=item.group_id,
+                group_name=item.group_name,
+                permission=item.permission,
+            )
+            for item in items
+        ]
+    )
 
 
 @router.post("/upload", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
@@ -150,8 +182,8 @@ async def download_by_ticket(
 async def get_metadata(file_id: int, user: CurrentUser, session: DbSession) -> FileResponse:
     """파일/폴더 메타데이터 (PRD 6.2)."""
     try:
-        node = files_service.ensure_file_access(
-            user, await files_service.get_file(session, file_id)
+        node = await files_service.ensure_file_access(
+            session, user, await files_service.get_file(session, file_id)
         )
     except FileServiceError as exc:
         raise _http_error(exc) from exc
@@ -261,8 +293,8 @@ async def issue_download_ticket(
 ) -> DownloadTicketResponse:
     """현재 버전 다운로드 티켓 발급 (브라우저 대용량 다운로드용). 인가 후 60초 1회용 티켓."""
     try:
-        file = files_service.ensure_file_access(
-            user, await files_service.get_file(session, file_id)
+        file = await files_service.ensure_file_access(
+            session, user, await files_service.get_file(session, file_id)
         )
         if file.is_folder:
             raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
@@ -294,8 +326,8 @@ async def issue_version_download_ticket(
 ) -> DownloadTicketResponse:
     """특정 버전 다운로드 티켓 발급 (브라우저 대용량 다운로드용). 인가 후 60초 1회용."""
     try:
-        file = files_service.ensure_file_access(
-            user, await files_service.get_file(session, file_id)
+        file = await files_service.ensure_file_access(
+            session, user, await files_service.get_file(session, file_id)
         )
         if file.is_folder:
             raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
@@ -357,3 +389,132 @@ async def restore(file_id: int, user: CurrentUser, session: DbSession) -> FileRe
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return FileResponse.model_validate(file)
+
+
+# --- 파일 그룹 권한 (PRD 6.5) — 폴더도 files 행이므로 /folders 별칭 없이 통일 ----
+
+
+@router.post(
+    "/{file_id}/permissions",
+    response_model=DirectPermissionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def grant_permission(
+    file_id: int,
+    payload: PermissionGrantRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> DirectPermissionResponse:
+    """그룹 권한 부여 (PRD 6.5). 소유자/manage 권한자만. (file,group) 중복은 upsert."""
+    try:
+        row = await permissions_service.grant_permission(
+            session,
+            user,
+            file_id,
+            payload.group_id,
+            payload.permission,
+            payload.inherit_to_children,
+            payload.expires_at,
+        )
+    except PermissionServiceError as exc:
+        raise _perm_http_error(exc) from exc
+    return await _direct_permission_response(session, row)
+
+
+@router.get("/{file_id}/permissions", response_model=FilePermissionsResponse)
+async def list_permissions(
+    file_id: int, user: CurrentUser, session: DbSession
+) -> FilePermissionsResponse:
+    """직접 부여 목록 + 유효 상속 권한 목록 (PRD 6.5/6.6). manage 권한자만."""
+    try:
+        direct, inherited = await permissions_service.list_permissions(
+            session, user, file_id
+        )
+    except PermissionServiceError as exc:
+        raise _perm_http_error(exc) from exc
+    return FilePermissionsResponse(
+        file_id=file_id,
+        direct=[
+            DirectPermissionResponse(
+                group_id=d.group_id,
+                group_name=d.group_name,
+                permission=d.permission,
+                inherit_to_children=d.inherit_to_children,
+                granted_at=d.granted_at,
+                expires_at=d.expires_at,
+                granted_by=d.granted_by,
+            )
+            for d in direct
+        ],
+        inherited=[
+            InheritedPermissionResponse(
+                group_id=i.group_id,
+                group_name=i.group_name,
+                permission=i.permission,
+                source_file_id=i.source_file_id,
+                source_file_name=i.source_file_name,
+                depth=i.depth,
+                expires_at=i.expires_at,
+            )
+            for i in inherited
+        ],
+    )
+
+
+@router.put(
+    "/{file_id}/permissions/{group_id}", response_model=DirectPermissionResponse
+)
+async def update_permission(
+    file_id: int,
+    group_id: int,
+    payload: PermissionUpdateRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> DirectPermissionResponse:
+    """그룹 권한 수정 (PRD 6.5). permission/inherit_to_children/expires_at 부분 갱신."""
+    try:
+        row = await permissions_service.update_permission(
+            session,
+            user,
+            file_id,
+            group_id,
+            payload.permission,
+            payload.inherit_to_children,
+            payload.expires_at,
+            expires_at_set="expires_at" in payload.model_fields_set,
+        )
+    except PermissionServiceError as exc:
+        raise _perm_http_error(exc) from exc
+    return await _direct_permission_response(session, row)
+
+
+@router.delete(
+    "/{file_id}/permissions/{group_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def revoke_permission(
+    file_id: int, group_id: int, user: CurrentUser, session: DbSession
+) -> Response:
+    """그룹 권한 회수 (PRD 6.5). 소유자/manage 권한자만."""
+    try:
+        await permissions_service.revoke_permission(session, user, file_id, group_id)
+    except PermissionServiceError as exc:
+        raise _perm_http_error(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _direct_permission_response(
+    session: DbSession, row: object
+) -> DirectPermissionResponse:
+    """FileGroupPermission 행을 그룹명과 함께 응답으로 변환."""
+    from app.models import Group
+
+    group = await session.get(Group, row.group_id)  # type: ignore[attr-defined]
+    return DirectPermissionResponse(
+        group_id=row.group_id,  # type: ignore[attr-defined]
+        group_name=group.name if group else "",
+        permission=row.permission,  # type: ignore[attr-defined]
+        inherit_to_children=row.inherit_to_children,  # type: ignore[attr-defined]
+        granted_at=row.granted_at,  # type: ignore[attr-defined]
+        expires_at=row.expires_at,  # type: ignore[attr-defined]
+        granted_by=row.granted_by,  # type: ignore[attr-defined]
+    )

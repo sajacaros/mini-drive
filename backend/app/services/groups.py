@@ -358,6 +358,18 @@ async def delete_group(session: AsyncSession, actor: User, group_id: int) -> Non
     group = await _get_active_group(session, group_id)
     await require_group_role(session, group_id, actor.id, {GroupRole.OWNER})
 
+    # 삭제로 모든 파일 권한이 사라지므로 활성 멤버 전원의 권한 캐시를 무효화한다 (PRD 1.4).
+    from app.services.permissions import invalidate_users
+
+    member_ids = (
+        await session.execute(
+            select(GroupMember.user_id).where(
+                GroupMember.group_id == group_id,
+                GroupMember.removed_at.is_(None),
+            )
+        )
+    ).scalars().all()
+
     perms_result = cast(
         "CursorResult[Any]",
         await session.execute(
@@ -388,6 +400,7 @@ async def delete_group(session: AsyncSession, actor: User, group_id: int) -> Non
         },
     )
     await session.commit()
+    await invalidate_users(member_ids)
 
 
 # --- 멤버 관리 --------------------------------------------------------------
@@ -436,6 +449,11 @@ async def add_member(
     )
     await session.commit()
 
+    # 멤버가 그룹에 합류하면 그 그룹의 파일 권한을 즉시 갖는다 — 권한 캐시 무효화 (PRD 1.4).
+    from app.services.permissions import invalidate_users
+
+    await invalidate_users([user_id])
+
     row = (
         await session.execute(
             select(GroupMember, User.email, User.display_name)
@@ -482,6 +500,11 @@ async def remove_member(
         {"user_id": user_id, "role": target_role.value},
     )
     await session.commit()
+
+    # 멤버 제거 시 그룹 권한을 잃으므로 그 사용자의 권한 캐시를 즉시 무효화 (PRD 1.4).
+    from app.services.permissions import invalidate_users
+
+    await invalidate_users([user_id])
 
 
 async def change_member_role(
