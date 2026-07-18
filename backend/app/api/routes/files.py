@@ -11,6 +11,7 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
+    Depends,
     Form,
     HTTPException,
     Query,
@@ -20,7 +21,7 @@ from fastapi import (
 )
 from fastapi import File as FileParam
 
-from app.api.deps import CurrentUser, DbSession, RedisClient
+from app.api.deps import CurrentUser, DbSession, RedisClient, rate_limit_user
 from app.api.download import content_disposition as _content_disposition
 from app.api.download import gateway_download_response
 from app.models.enums import UserStatus
@@ -85,7 +86,12 @@ async def shared_with_me(user: CurrentUser, session: DbSession) -> SharedWithMeR
     )
 
 
-@router.post("/upload", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/upload",
+    response_model=FileResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_user("upload", "rate_limit_upload_per_min"))],
+)
 async def upload(
     user: CurrentUser,
     session: DbSession,

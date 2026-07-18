@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
-from app.api.deps import CurrentUser, DbSession, RedisClient
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RedisClient,
+    rate_limit_ip,
+)
 from app.core.security import (
     PasswordPolicyError,
     TokenError,
@@ -31,7 +36,12 @@ from app.services.users import get_user_by_email
 router = APIRouter()
 
 
-@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_ip("register", "rate_limit_register_per_min"))],
+)
 async def register(payload: RegisterRequest, session: DbSession) -> RegisterResponse:
     """회원가입 — status='pending' 으로 생성. 관리자 승인 후 로그인 가능 (PRD 3.1)."""
     try:
@@ -57,7 +67,11 @@ async def register(payload: RegisterRequest, session: DbSession) -> RegisterResp
     return RegisterResponse(id=user.id, email=user.email, status=user.status)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit_ip("login", "rate_limit_login_per_min"))],
+)
 async def login(payload: LoginRequest, session: DbSession, redis: RedisClient) -> TokenResponse:
     """로그인 — status='active' 만 허용. 성공 시 access/refresh JWT 발급 (PRD 6.1, 10장)."""
     user = await get_user_by_email(session, payload.email)
@@ -81,7 +95,11 @@ async def login(payload: LoginRequest, session: DbSession, redis: RedisClient) -
     return await issue_token_pair(redis, user.id)
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post(
+    "/refresh",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit_ip("refresh", "rate_limit_refresh_per_min"))],
+)
 async def refresh(
     payload: RefreshRequest, session: DbSession, redis: RedisClient
 ) -> TokenResponse:

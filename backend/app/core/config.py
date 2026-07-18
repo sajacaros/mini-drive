@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # CORS: 프론트엔드 오리진 (게이트웨이 경유 시 동일 오리진이므로 로컬 개발용)
     cors_origins: list[str] = ["http://localhost", "http://localhost:5173"]
 
+    # Rate limiting (PRD 10장). 분당 허용 횟수 — 테스트/운영에서 환경변수로 조정 가능.
+    # rate_limit_enabled=False 로 전체 비활성화(테스트 편의).
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = 60
+    rate_limit_login_per_min: int = 5       # 로그인: IP 당
+    rate_limit_register_per_min: int = 3    # 회원가입: IP 당
+    rate_limit_refresh_per_min: int = 10    # 토큰 갱신: IP 당
+    rate_limit_upload_per_min: int = 10     # 업로드: user 당
+    rate_limit_lookup_per_min: int = 20     # 이메일 조회: user 당
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,10 +1,11 @@
 from fastapi import APIRouter
 
-from app.api.routes import admin, auth, files, groups, permissions, shares
+from app.api.routes import admin, auth, files, groups, permissions, shares, users
 
 api_router = APIRouter(prefix="/api")
 
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(files.router, prefix="/files", tags=["files"])
 api_router.include_router(shares.router, prefix="/shares", tags=["shares"])
 # 무인증 공개 공유 접근 — 인증 라우터와 경로 충돌을 피하려 별도 prefix 로 분리 (shares.py 참조).

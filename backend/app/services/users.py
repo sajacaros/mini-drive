@@ -26,6 +26,17 @@ async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
     return await session.get(User, user_id)
 
 
+async def get_active_user_by_email(session: AsyncSession, email: str) -> User | None:
+    """정확히 일치하는 active 사용자 1명 조회 (그룹 초대 UX용 이메일 조회).
+
+    부분 검색/목록은 열거 방지를 위해 지원하지 않는다 — 정확 일치 + active 만 반환.
+    """
+    result = await session.execute(
+        select(User).where(User.email == email, User.status == UserStatus.ACTIVE)
+    )
+    return result.scalar_one_or_none()
+
+
 async def has_root_folder(session: AsyncSession, user_id: int) -> bool:
     result = await session.execute(
         select(File.id).where(
