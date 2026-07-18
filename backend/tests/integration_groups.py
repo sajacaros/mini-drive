@@ -28,6 +28,7 @@ from app.core.redis import redis_client
 from app.main import app
 from app.models import AuditLog, File, FileGroupPermission, GroupMember, User
 from app.services.users import create_root_folder, ensure_admin_bootstrap
+from tests._dbreset import stamp_alembic_head
 
 USERS = {
     "alice": {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"},
@@ -45,6 +46,7 @@ async def _reset() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
 
 

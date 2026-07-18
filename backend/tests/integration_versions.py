@@ -8,7 +8,8 @@
   → 티켓 발급→GET 성공→재사용 실패 → 버전 티켓 발급→GET 성공
   → 영구 삭제 후 모든 오브젝트 제거 + 할당량 0.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.integration_versions`.
+env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+실행: `python -m tests.integration_versions`.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from app.main import app
 from app.models import FileVersion, User
 from app.services.storage import storage_service
 from app.services.users import ensure_admin_bootstrap
+from tests._dbreset import stamp_alembic_head
 
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
 
@@ -45,6 +47,7 @@ async def _reset() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
     if not storage_service._client.bucket_exists(storage_service.bucket):
         storage_service._client.make_bucket(storage_service.bucket)

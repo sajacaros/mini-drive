@@ -26,6 +26,7 @@ from app.main import app
 from app.models import User
 from app.services.storage import storage_service
 from app.services.users import ensure_admin_bootstrap
+from tests._dbreset import stamp_alembic_head
 
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
 TEN_MB = 10 * 1024 * 1024
@@ -40,6 +41,7 @@ async def _reset() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
     if not storage_service._client.bucket_exists(storage_service.bucket):
         storage_service._client.make_bucket(storage_service.bucket)

@@ -24,9 +24,10 @@ from app.core.config import settings
 from app.core.database import Base, SessionFactory, engine
 from app.core.redis import redis_client
 from app.main import app
-from app.models import Share, User
+from app.models import Share
 from app.services.storage import storage_service
 from app.services.users import ensure_admin_bootstrap
+from tests._dbreset import stamp_alembic_head
 
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
 PAYLOAD = b"MiniDrive-share-payload-0123456789" * 512  # ~17KB
@@ -40,6 +41,7 @@ async def _reset() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
     if not storage_service._client.bucket_exists(storage_service.bucket):
         storage_service._client.make_bucket(storage_service.bucket)

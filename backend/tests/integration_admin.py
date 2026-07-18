@@ -30,6 +30,7 @@ from app.main import app
 from app.models import AuditLog, File, Group, GroupMember, Share, User
 from app.models.enums import GroupRole, SharePermission, UserRole, UserStatus
 from app.services.users import create_root_folder, ensure_admin_bootstrap
+from tests._dbreset import stamp_alembic_head
 
 ADMIN = {"email": settings.admin_email, "password": settings.admin_initial_password}
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
@@ -45,6 +46,7 @@ async def _reset() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
 
 
@@ -278,7 +280,9 @@ async def scenario() -> None:
             f"/api/admin/shares/{ids['share_inactive']}/download",
         ):
             r = await c.get(path, headers=admin_h)
-            assert r.status_code == 404, f"{path} -> {r.status_code} (내용 접근 엔드포인트 부재여야)"
+            assert r.status_code == 404, (
+                f"{path} -> {r.status_code} (내용 접근 엔드포인트 부재여야)"
+            )
         _ok("admin 네임스페이스에 파일 내용 다운로드 엔드포인트 부재 (3.6.4)")
 
     await engine.dispose()
