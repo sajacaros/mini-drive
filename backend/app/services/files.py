@@ -1,0 +1,510 @@
+"""파일/폴더 서비스 (PRD 3.2, 5.2/5.3/5.10, 6.2).
+
+권한 검사는 `ensure_file_access` 한 곳에 모은다 — Phase 1 은 소유자(user_id)만 접근하고,
+그룹 권한(Phase 3)은 이 함수만 확장하면 된다.
+
+오브젝트 키 규약 (PRD 2.1 버킷 구조):
+  - 현재 버전 원본:  users/{userId}/{fileId}      → files.file_key
+  - 버전 스냅샷:     versions/{fileId}/v{n}       → file_versions.object_key (v2+)
+
+Phase 1 결정: v1 스냅샷은 별도 복사본을 만들지 않고 file_versions.object_key 가 현재 원본
+키(users/{uid}/{fileId})를 그대로 가리킨다. 업로드 시 중복 저장을 피하기 위함이며, 실제 버전
+스냅샷 복사는 새 버전 업로드가 생기는 Phase 2 에서 도입한다. 영구 삭제 시 키를 중복 제거해
+같은 오브젝트를 두 번 지우지 않는다.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Literal
+
+from sqlalchemy import Select, func, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import UploadFile
+
+from app.models import File, FileVersion, User
+from app.services.storage import StorageService
+
+AccessNeed = Literal["read", "write", "manage"]
+
+# 파일 크기 상한 10 GB (PRD 1.4). nginx client_max_body_size 와 이중 방어.
+MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024
+
+
+class FileServiceError(Exception):
+    """파일 조작 실패. HTTP 상태 코드를 함께 전달한다."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+# --- 오브젝트 키 규약 --------------------------------------------------------
+
+
+def build_file_key(user_id: int, file_id: int) -> str:
+    """현재 버전 원본 키 (PRD 2.1): users/{userId}/{fileId}."""
+    return f"users/{user_id}/{file_id}"
+
+
+def build_version_key(file_id: int, version: int) -> str:
+    """버전 스냅샷 키 (PRD 2.1): versions/{fileId}/v{n}. (Phase 2 신규 버전용)."""
+    return f"versions/{file_id}/v{version}"
+
+
+# --- 권한 검사 (단일 관문) ---------------------------------------------------
+
+
+def ensure_file_access(user: User, file: File | None, need: AccessNeed = "read") -> File:
+    """파일 접근 권한을 검사한다. 통과하면 file 을 반환한다.
+
+    Phase 1: 소유자(user_id)만 접근 가능. 그룹 권한(Phase 3)은 이 함수만 확장한다.
+    존재하지 않거나 접근 불가면 404 로 통일해 리소스 존재 여부 노출을 막는다.
+    """
+    if file is None or file.user_id != user.id:
+        raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+    return file
+
+
+# --- 조회 -------------------------------------------------------------------
+
+
+async def get_root_folder(session: AsyncSession, user_id: int) -> File:
+    """사용자 루트 폴더 행(parent_folder_id IS NULL, is_folder). 승인 시 생성되어 있어야 한다."""
+    row = (
+        await session.execute(
+            select(File).where(
+                File.user_id == user_id,
+                File.parent_folder_id.is_(None),
+                File.is_folder.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise FileServiceError(500, "사용자 루트 폴더가 없습니다.")
+    return row
+
+
+async def get_file(session: AsyncSession, file_id: int) -> File | None:
+    return await session.get(File, file_id)
+
+
+async def _resolve_parent(
+    session: AsyncSession, user: User, parent_id: int | None
+) -> File:
+    """parent_id 를 대상 부모 폴더로 해석한다. None 이면 루트 폴더.
+
+    부모는 소유자의 것이어야 하고, 폴더이며, 삭제되지 않았어야 한다.
+    """
+    if parent_id is None:
+        return await get_root_folder(session, user.id)
+
+    parent = ensure_file_access(user, await get_file(session, parent_id))
+    if not parent.is_folder:
+        raise FileServiceError(400, "부모가 폴더가 아닙니다.")
+    if parent.is_deleted:
+        raise FileServiceError(409, "삭제된 폴더에는 항목을 만들 수 없습니다.")
+    return parent
+
+
+def _child_listing_query(parent_id: int) -> Select:
+    """활성 하위 항목 — 폴더 우선, 이름순 (PRD 6.2)."""
+    return (
+        select(File)
+        .where(File.parent_folder_id == parent_id, File.is_deleted.is_(False))
+        .order_by(File.is_folder.desc(), File.name.asc())
+    )
+
+
+async def list_children(
+    session: AsyncSession, user: User, parent_id: int | None, page: int, size: int
+) -> tuple[list[File], int]:
+    """폴더 내 항목 목록 + 총 개수 (페이지네이션)."""
+    parent = await _resolve_parent(session, user, parent_id)
+
+    total = (
+        await session.execute(
+            select(func.count())
+            .select_from(File)
+            .where(File.parent_folder_id == parent.id, File.is_deleted.is_(False))
+        )
+    ).scalar_one()
+
+    offset = (page - 1) * size
+    rows = (
+        await session.execute(
+            _child_listing_query(parent.id).offset(offset).limit(size)
+        )
+    ).scalars().all()
+    return list(rows), total
+
+
+# --- 할당량 원자적 갱신 (PRD 5.10) -------------------------------------------
+
+
+async def _reserve_quota(session: AsyncSession, user_id: int, size: int) -> bool:
+    """storage_used 를 원자적으로 선점한다. 초과 시 False (0 rows).
+
+    애플리케이션에서 읽고 비교하지 않고 DB 레벨 조건부 UPDATE 로 레이스를 차단한다.
+    같은 트랜잭션에 있으므로 이후 rollback 시 선점도 함께 취소된다.
+    """
+    result = await session.execute(
+        text(
+            "UPDATE users SET storage_used = storage_used + :size "
+            "WHERE id = :uid AND storage_used + :size <= max_storage "
+            "RETURNING id"
+        ),
+        {"size": size, "uid": user_id},
+    )
+    return result.first() is not None
+
+
+async def _release_quota(session: AsyncSession, user_id: int, size: int) -> None:
+    """storage_used 를 감소시킨다(음수 방지). 영구 삭제 시 사용."""
+    await session.execute(
+        text(
+            "UPDATE users SET storage_used = GREATEST(0, storage_used - :size) "
+            "WHERE id = :uid"
+        ),
+        {"size": size, "uid": user_id},
+    )
+
+
+# --- 폴더 생성 / 이름 변경 ---------------------------------------------------
+
+
+async def create_folder(
+    session: AsyncSession, user: User, name: str, parent_id: int | None
+) -> File:
+    """폴더 생성 (PRD 6.2 POST /api/files). 같은 폴더 내 동명 시 409."""
+    name = name.strip()
+    if not name:
+        raise FileServiceError(422, "폴더 이름이 비어 있습니다.")
+    parent = await _resolve_parent(session, user, parent_id)
+
+    folder = File(
+        user_id=user.id,
+        group_id=None,
+        parent_folder_id=parent.id,
+        name=name,
+        file_key="",  # 폴더는 오브젝트 키가 없다.
+        mime_type=None,
+        size=0,
+        is_folder=True,
+    )
+    session.add(folder)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise FileServiceError(409, "같은 이름의 항목이 이미 있습니다.") from exc
+    await session.refresh(folder)
+    return folder
+
+
+async def rename_file(
+    session: AsyncSession, user: User, file_id: int, new_name: str
+) -> File:
+    """이름 변경 (PRD 6.2 PUT /api/files/{id}). 동명 충돌 시 409."""
+    new_name = new_name.strip()
+    if not new_name:
+        raise FileServiceError(422, "이름이 비어 있습니다.")
+
+    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    if file.is_deleted:
+        raise FileServiceError(409, "삭제된 항목은 이름을 변경할 수 없습니다.")
+    if file.parent_folder_id is None:
+        raise FileServiceError(400, "루트 폴더는 이름을 변경할 수 없습니다.")
+
+    file.name = new_name
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise FileServiceError(409, "같은 이름의 항목이 이미 있습니다.") from exc
+    await session.refresh(file)
+    return file
+
+
+# --- 업로드 (스트리밍) -------------------------------------------------------
+
+
+def _upload_size(upload: UploadFile) -> int:
+    """UploadFile 의 바이트 크기. 전체 메모리 적재 없이 구한다.
+
+    multipart 파서가 채운 .size 를 우선 쓰고, 없으면 디스크 스풀 파일을 seek 해 구한다.
+    """
+    if upload.size is not None:
+        return upload.size
+    upload.file.seek(0, os.SEEK_END)
+    size = upload.file.tell()
+    upload.file.seek(0)
+    return size
+
+
+async def upload_file(
+    session: AsyncSession,
+    storage: StorageService,
+    user: User,
+    upload: UploadFile,
+    parent_id: int | None,
+) -> File:
+    """스트리밍 업로드 (PRD 3.2, 5.10).
+
+    흐름: 할당량 원자적 선점 → files 행 생성(current_version=1) → MinIO put →
+    file_versions v1 기록 → commit. 실패 시 트랜잭션 롤백으로 할당량 선점까지 취소하고,
+    기록됐을 수 있는 MinIO 오브젝트는 best-effort 로 정리한다.
+    """
+    filename = (upload.filename or "untitled").strip() or "untitled"
+    size = _upload_size(upload)
+    if size > MAX_FILE_SIZE:
+        raise FileServiceError(413, "파일 크기가 상한(10GB)을 초과했습니다.")
+
+    parent = await _resolve_parent(session, user, parent_id)
+
+    # 1) 할당량 원자적 선점 (같은 트랜잭션 — 실패 시 롤백으로 함께 취소).
+    if not await _reserve_quota(session, user.id, size):
+        await session.rollback()
+        raise FileServiceError(413, "저장 용량 할당량을 초과했습니다.")
+
+    # 2) files 행 생성 — id 를 얻어 키를 확정한다.
+    mime = upload.content_type or "application/octet-stream"
+    file = File(
+        user_id=user.id,
+        group_id=None,
+        parent_folder_id=parent.id,
+        name=filename,
+        file_key="",
+        mime_type=mime,
+        size=size,
+        is_folder=False,
+        current_version=1,
+    )
+    session.add(file)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise FileServiceError(409, "같은 이름의 파일이 이미 있습니다.") from exc
+
+    file_key = build_file_key(user.id, file.id)
+    file.file_key = file_key
+    # v1 스냅샷은 현재 원본 키를 재사용한다 (모듈 docstring 참조).
+    session.add(
+        FileVersion(
+            file_id=file.id,
+            version=1,
+            object_key=file_key,
+            size=size,
+            mime_type=mime,
+            uploaded_by=user.id,
+        )
+    )
+    await session.flush()
+
+    # 3) MinIO 스트리밍 저장 — 실패 시 트랜잭션/오브젝트 롤백.
+    await upload.seek(0)
+    try:
+        await storage.put_async(file_key, upload.file, size, mime)
+    except Exception as exc:
+        await session.rollback()
+        await _safe_delete_object(storage, file_key)
+        raise FileServiceError(502, "오브젝트 스토리지 저장에 실패했습니다.") from exc
+
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        await _safe_delete_object(storage, file_key)
+        raise FileServiceError(409, "같은 이름의 파일이 이미 있습니다.") from exc
+
+    await session.refresh(file)
+    return file
+
+
+async def _safe_delete_object(storage: StorageService, key: str) -> None:
+    try:
+        await storage.delete_async(key)
+    except Exception:  # noqa: BLE001 - best-effort 정리, 실패해도 무시
+        pass
+
+
+# --- 다운로드 (게이트웨이 모델) ---------------------------------------------
+
+
+async def prepare_download(
+    session: AsyncSession, storage: StorageService, user: User, file_id: int
+) -> tuple[str, str, str]:
+    """게이트웨이 다운로드 준비 (PRD 2.2, 6.2).
+
+    소유자 검사 후 내부 presign(60s)을 생성해 nginx `/_minio/` 경로(X-Accel-Redirect 값)로
+    변환한다. 반환: (internal_redirect_path, filename, mime_type). 폴더면 400.
+    """
+    file = ensure_file_access(user, await get_file(session, file_id))
+    if file.is_folder:
+        raise FileServiceError(400, "폴더는 다운로드할 수 없습니다.")
+    if file.is_deleted:
+        raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+
+    presigned = await storage.presign_get_async(file.file_key)
+    internal = storage.to_internal_redirect(presigned)
+    mime = file.mime_type or "application/octet-stream"
+    return internal, file.name, mime
+
+
+# --- 삭제 / 휴지통 -----------------------------------------------------------
+
+# 대상 파일과 모든 하위 항목을 재귀로 훑는 공통 CTE (parent_folder_id 자기참조 트리).
+_SUBTREE_CTE = (
+    "WITH RECURSIVE sub AS ("
+    "  SELECT id FROM files WHERE id = :root "
+    "  UNION ALL "
+    "  SELECT f.id FROM files f JOIN sub s ON f.parent_folder_id = s.id"
+    ")"
+)
+
+
+async def soft_delete(session: AsyncSession, user: User, file_id: int) -> None:
+    """소프트 삭제 (PRD 6.2). 폴더면 하위 전체를 단일 recursive CTE UPDATE 로 처리한다."""
+    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    if file.parent_folder_id is None:
+        raise FileServiceError(400, "루트 폴더는 삭제할 수 없습니다.")
+    if file.is_deleted:
+        raise FileServiceError(409, "이미 휴지통에 있는 항목입니다.")
+
+    await session.execute(
+        text(
+            _SUBTREE_CTE
+            + " UPDATE files SET is_deleted = TRUE, deleted_at = now() "
+            "WHERE id IN (SELECT id FROM sub) AND is_deleted = FALSE"
+        ),
+        {"root": file.id},
+    )
+    await session.commit()
+
+
+async def list_trash(session: AsyncSession, user: User) -> list[File]:
+    """휴지통 목록 — 직접 삭제된 최상위 항목만 (PRD 6.2).
+
+    부모가 아직 살아 있는(또는 없는) 삭제 항목이 '삭제 루트'다. 폴더 재귀 삭제로 함께
+    지워진 하위 항목은 부모도 삭제 상태이므로 제외된다 — 별도 플래그 없이 판별한다.
+    """
+    parent = File.__table__.alias("p")
+    rows = (
+        await session.execute(
+            select(File)
+            .outerjoin(parent, File.parent_folder_id == parent.c.id)
+            .where(
+                File.user_id == user.id,
+                File.is_deleted.is_(True),
+                (parent.c.id.is_(None)) | (parent.c.is_deleted.is_(False)),
+            )
+            .order_by(File.deleted_at.desc())
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File:
+    """휴지통 복구 (PRD 6.2). 부모가 삭제됐으면 루트로 재부착, 동명 충돌 시 409.
+
+    대상과 하위 전체를 재귀로 되살린다(재귀 삭제의 역연산).
+    """
+    file = ensure_file_access(user, await get_file(session, file_id), need="write")
+    if not file.is_deleted:
+        raise FileServiceError(409, "휴지통에 있는 항목만 복구할 수 있습니다.")
+
+    # 재부착 대상 부모 결정: 원래 부모가 사라졌으면(삭제됐으면) 루트로.
+    target_parent_id = file.parent_folder_id
+    if target_parent_id is not None:
+        parent = await get_file(session, target_parent_id)
+        if parent is None or parent.is_deleted:
+            target_parent_id = (await get_root_folder(session, user.id)).id
+
+    # 대상 위치에서 활성 동명 충돌 사전 검사.
+    conflict = (
+        await session.execute(
+            select(File.id).where(
+                File.parent_folder_id == target_parent_id,
+                File.name == file.name,
+                File.is_deleted.is_(False),
+                File.id != file.id,
+            )
+        )
+    ).first()
+    if conflict is not None:
+        raise FileServiceError(409, "복구 위치에 같은 이름의 항목이 있습니다.")
+
+    if target_parent_id != file.parent_folder_id:
+        file.parent_folder_id = target_parent_id
+        await session.flush()
+
+    try:
+        await session.execute(
+            text(
+                _SUBTREE_CTE
+                + " UPDATE files SET is_deleted = FALSE, deleted_at = NULL "
+                "WHERE id IN (SELECT id FROM sub) AND is_deleted = TRUE"
+            ),
+            {"root": file.id},
+        )
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise FileServiceError(409, "복구 위치에 같은 이름의 항목이 있습니다.") from exc
+    await session.refresh(file)
+    return file
+
+
+async def permanent_delete(
+    session: AsyncSession, storage: StorageService, user: User, file_id: int
+) -> None:
+    """영구 삭제 (PRD 6.2). 휴지통 항목만 허용. 폴더는 하위 전체 재귀.
+
+    MinIO 오브젝트(원본+버전) 삭제 + storage_used 감소 + files 행 삭제(versions CASCADE).
+    DB 를 먼저 확정하고 오브젝트는 best-effort 로 정리해 DB 를 진실 소스로 유지한다.
+    """
+    file = ensure_file_access(user, await get_file(session, file_id), need="manage")
+    if not file.is_deleted:
+        raise FileServiceError(409, "휴지통에 있는 항목만 영구 삭제할 수 있습니다.")
+
+    # 1) 하위 전체의 크기 합계와 삭제할 오브젝트 키를 수집한다.
+    rows = (
+        await session.execute(
+            text(
+                _SUBTREE_CTE
+                + " SELECT f.is_folder, f.size, f.file_key FROM files f "
+                "WHERE f.id IN (SELECT id FROM sub)"
+            ),
+            {"root": file.id},
+        )
+    ).all()
+    total_size = sum(r.size for r in rows if not r.is_folder)
+    keys: set[str] = {r.file_key for r in rows if not r.is_folder and r.file_key}
+
+    version_keys = (
+        await session.execute(
+            text(
+                _SUBTREE_CTE
+                + " SELECT object_key FROM file_versions "
+                "WHERE file_id IN (SELECT id FROM sub)"
+            ),
+            {"root": file.id},
+        )
+    ).scalars().all()
+    keys.update(k for k in version_keys if k)
+
+    # 2) DB 확정 — 행 삭제(versions CASCADE) + storage_used 감소.
+    await session.execute(
+        text(_SUBTREE_CTE + " DELETE FROM files WHERE id IN (SELECT id FROM sub)"),
+        {"root": file.id},
+    )
+    if total_size:
+        await _release_quota(session, user.id, total_size)
+    await session.commit()
+
+    # 3) 오브젝트 정리 — best-effort (실패해도 DB 는 이미 일관).
+    if keys:
+        await storage.delete_many_async(list(keys))

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.routes import admin, auth
+from app.api.routes import admin, auth, files
 
 api_router = APIRouter(prefix="/api")
 
@@ -8,7 +8,7 @@ api_router = APIRouter(prefix="/api")
 # from app.api.routes import auth, files, shares, groups, permissions, admin
 #
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
-# api_router.include_router(files.router,       prefix="/files",  tags=["files"])
+api_router.include_router(files.router, prefix="/files", tags=["files"])
 # api_router.include_router(shares.router,      prefix="/shares", tags=["shares"])
 # api_router.include_router(groups.router,      prefix="/groups", tags=["groups"])
 # api_router.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
