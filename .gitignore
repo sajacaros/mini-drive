@@ -41,6 +41,9 @@ redis_data/
 *.log
 logs/
 
+# ── 백업 산출물 (scripts/backup.sh) ───────────────────
+backups/
+
 # ── IDE / Editor ──────────────────────────────────────
 .idea/
 .vscode/

@@ -1,0 +1,90 @@
+# Mini Drive — 프로덕션 오버라이드 (PRD 7·10·11장).
+# 기동:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# 이 파일은 base(docker-compose.yml)를 덮어써 운영 기본값을 적용한다.
+#   - restart: unless-stopped (장애·재부팅 시 자동 복구)
+#   - 구조화 JSON 로깅 + docker json-file 로그 로테이션(디스크 폭주 방지)
+#   - 리소스 limits(예시값 — 실제 노드 사양에 맞게 조정)
+#   - DEBUG=false, LOG_FORMAT=json
+#   - nginx 443/TLS 마운트 지점(아래 주석 참조)
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  nginx:
+    restart: unless-stopped
+    logging: *default-logging
+    # ── TLS(443) 활성화 안내 (PRD 10장 — 전송 구간 TLS) ──
+    # 1) 인증서를 nginx/certs/ 아래 배치: fullchain.pem, privkey.pem
+    #    (사내/개발용 자가서명 예시)
+    #      mkdir -p nginx/certs
+    #      openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+    #        -keyout nginx/certs/privkey.pem -out nginx/certs/fullchain.pem \
+    #        -subj "/CN=minidrive.local"
+    # 2) 아래 volume 주석을 해제해 인증서를 마운트하고, conf.d 에 443 server 블록
+    #    (ssl_certificate /etc/nginx/certs/fullchain.pem; ssl_certificate_key .../privkey.pem;)을 추가한다.
+    # volumes:
+    #   - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    #   - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    #   - ./nginx/certs:/etc/nginx/certs:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+
+  backend:
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DEBUG: "false"
+      ENVIRONMENT: production
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+      METRICS_ENABLED: "true"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  frontend:
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+
+  minio:
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  db:
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  redis:
+    restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M

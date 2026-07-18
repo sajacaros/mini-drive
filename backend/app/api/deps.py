@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.metrics import observe_rate_limit_rejection
 from app.core.ratelimit import check_rate_limit
 from app.core.redis import get_redis
 from app.core.security import TokenError, decode_token
@@ -95,7 +96,8 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _raise_429(retry_after: int) -> None:
+def _raise_429(retry_after: int, scope: str) -> None:
+    observe_rate_limit_rejection(scope)
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
@@ -123,7 +125,7 @@ def rate_limit_ip(scope: str, limit_attr: str) -> Callable[..., Awaitable[None]]
             window_seconds=settings.rate_limit_window_seconds,
         )
         if not result.allowed:
-            _raise_429(result.retry_after)
+            _raise_429(result.retry_after, scope)
 
     return dependency
 
@@ -148,6 +150,6 @@ def rate_limit_user(scope: str, limit_attr: str) -> Callable[..., Awaitable[None
             window_seconds=settings.rate_limit_window_seconds,
         )
         if not result.allowed:
-            _raise_429(result.retry_after)
+            _raise_429(result.retry_after, scope)
 
     return dependency

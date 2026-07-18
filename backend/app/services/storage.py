@@ -21,6 +21,7 @@ from minio.commonconfig import CopySource
 from minio.deleteobjects import DeleteObject
 
 from app.core.config import settings
+from app.core.metrics import observe_upload_bytes
 
 # nginx `location /_minio/` (internal) 접두어 — X-Accel-Redirect 대상 (PRD 8.1).
 INTERNAL_REDIRECT_PREFIX = "/_minio"
@@ -76,6 +77,8 @@ class StorageService:
             content_type=content_type or "application/octet-stream",
             part_size=_UPLOAD_PART_SIZE,
         )
+        # 실제 저장된 업로드 바이트 계측 (PRD 11장). copy(스냅샷)는 put 을 거치지 않으므로 제외.
+        observe_upload_bytes(length)
 
     def get(self, key: str):
         """오브젝트 스트림(urllib3 응답)을 반환한다. 호출자가 close/release 해야 한다."""

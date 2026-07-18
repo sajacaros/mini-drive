@@ -13,3 +13,5 @@ minio>=7.2.10
 pyjwt>=2.10.0
 argon2-cffi>=23.1.0
 redis>=5.2.0
+structlog>=24.4.0
+prometheus-client>=0.21.0

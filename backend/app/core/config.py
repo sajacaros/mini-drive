@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = False
 
+    # 로깅 (PRD 11장). log_format=json(운영)/console(개발 컬러). log_level 은 stdlib 레벨명.
+    log_format: str = "console"
+    log_level: str = "INFO"
+
+    # 메트릭 (PRD 11장). /metrics 노출 여부 — 게이트웨이에서 별도 차단(nginx deny).
+    metrics_enabled: bool = True
+
     # PostgreSQL (asyncpg)
     database_url: str = "postgresql+asyncpg://postgres:password@db:5432/minidrive"
 

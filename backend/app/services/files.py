@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
+from app.core.metrics import observe_download_bytes
 from app.models import File, FileVersion, User
 from app.services import permissions as permissions_service
 from app.services.storage import StorageService
@@ -363,6 +364,8 @@ async def prepare_download(
     presigned = await storage.presign_get_async(file.file_key)
     internal = storage.to_internal_redirect(presigned)
     mime = file.mime_type or "application/octet-stream"
+    # 게이트웨이 모델상 실제 스트리밍은 nginx 가 하므로, 인가된 파일 크기를 계측한다 (PRD 11장).
+    observe_download_bytes(file.size)
     return internal, file.name, mime
 
 
@@ -584,6 +587,7 @@ async def prepare_version_download(
     presigned = await storage.presign_get_async(row.object_key)
     internal = storage.to_internal_redirect(presigned)
     mime = row.mime_type or file.mime_type or "application/octet-stream"
+    observe_download_bytes(row.size)
     return internal, versioned_filename(file.name, version), mime
 
 
