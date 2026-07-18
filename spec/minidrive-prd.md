@@ -554,12 +554,13 @@ RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `POST` | `/api/files/{id}/permissions` | 파일에 그룹 권한 부여 (group_id, permission 지정) |
-| `GET`  | `/api/files/{id}/permissions` | 파일의 그룹 권한 목록 조회 |
-| `DELETE`| `/api/files/{id}/permissions/{groupId}` | 파일 그룹 권한 제거 |
-| `PUT`  | `/api/files/{id}/permissions/{groupId}` | 파일 그룹 권한 수정 |
-| `POST` | `/api/folders/{id}/permissions` | 폴더에 그룹 권한 부여 (하위 상속 옵션 포함) |
-| `PUT`  | `/api/folders/{id}/permissions/{groupId}/inherit` | 하위 폴더 권한 상속 설정/해제 |
+| `POST` | `/api/files/{id}/permissions` | 파일/폴더에 그룹 권한 부여·upsert (group_id, permission, inherit_to_children, expires_at) |
+| `GET`  | `/api/files/{id}/permissions` | 직접 부여 + 유효 상속 권한 목록 조회 (manage 권한 필요) |
+| `PUT`  | `/api/files/{id}/permissions/{groupId}` | 권한 수정 (permission / inherit_to_children / expires_at) |
+| `DELETE`| `/api/files/{id}/permissions/{groupId}` | 권한 제거 (캐시 무효화로 즉시 차단) |
+| `GET`  | `/api/files/shared-with-me` | 내 그룹에 공유된 부여 지점 목록 (공유 탐색 진입점) |
+
+> 폴더도 `files` 행이므로 별도 `/api/folders/*` 경로를 두지 않고 files로 통일한다. 상속 설정/해제는 PUT의 `inherit_to_children` 필드로 처리.
 
 ### 6.6 권한 검사 (내부용)
 
