@@ -4,6 +4,20 @@
 
 전체 요구사항은 [`spec/minidrive-prd.md`](spec/minidrive-prd.md) 를 진실 소스로 삼습니다.
 
+## 주요 기능
+
+- **인증/가입**: JWT(access + refresh 회전, Redis 폐기), argon2 해싱. 가입은 **관리자 발급 가입 코드**로만 가능하며 코드 검증 즉시 활성화됩니다(만료일·사용 횟수 제한, 원자적 소모).
+- **첫 부팅 셋업 위저드**: admin 이 없으면 `/setup` 에서 첫 관리자 계정 + 초기 가입 코드 + 기본 할당량을 한 번에 설정하고 셋업이 잠깁니다. 비상 복구용 CLI `python -m app.cli create-admin` 제공.
+- **파일 관리**: 드래그 앤 드롭 스트리밍 업로드(최대 10 GB), 폴더, 목록/그리드(썸네일) 뷰, 휴지통(소프트 삭제)/영구 삭제, 사용자별 저장 용량 할당량(DB 원자 갱신).
+- **재개 가능 업로드**: 1 GiB 초과 파일은 S3 Multipart 기반 청크 업로드 — 진행률/일시정지/취소, 중단(새로고침 포함) 후 이어올리기.
+- **미리보기·썸네일**: 이미지/PDF/텍스트 미리보기 모달, 이미지 업로드 시 썸네일 자동 생성(`thumbnails/{fileId}.png`).
+- **버전 관리**: 업로드마다 버전 기록, 히스토리 조회, 특정 버전 다운로드, 이전 버전 복구(새 버전으로 생성 — 이력 보존), `baseVersion` 충돌 감지(409).
+- **공유 링크**: 만료일·비밀번호·다운로드 횟수 제한, 비활성화 즉시 410 차단(게이트웨이 모델), 공개 미리보기, 접근 통계(조회 수·마지막 접근).
+- **그룹 기반 권한**: 그룹/멤버 관리, 폴더 권한 부여와 하위 상속(조회 시 recursive CTE 판정 + Redis 캐시 — 권한 변경 즉시 반영), 권한 재정의, 그룹 소유권 이전.
+- **시스템 관리자**: 사용자 관리(활성/비활성·할당량·role), 가입 코드 관리, 전체 그룹/공유 링크 통제, 스토리지 통계, 감사 로그. **admin 도 파일 내용에는 접근 불가**(메타데이터만).
+- **UI 테마 4종**: 모던/게임보이 × 다크/라이트.
+- **운영**: 구조화 로깅(structlog), Prometheus 메트릭, rate limiting(fail-open), 백업/복원 스크립트, 프로덕션 compose 프로파일.
+
 ## 아키텍처 개요
 
 ```
@@ -47,6 +61,22 @@ curl http://localhost/health     # {"status":"ok","database":"ok","minio":"ok","
 - 웹 UI: <http://localhost/>
 - API 문서 (Swagger): <http://localhost/api/docs>
 - 종료: `docker compose down` (볼륨까지 삭제하려면 `docker compose down -v`)
+
+### 첫 부팅 셋업
+
+빈 DB 로 처음 기동하면 관리자가 없으므로 웹 UI 가 **셋업 위저드(`/setup`)** 로 안내합니다.
+여기서 첫 관리자 계정, 초기 가입 코드, 신규 가입자 기본 할당량을 설정하면 셋업이 영구 잠깁니다.
+
+1. `http://localhost/` 접속 → `/setup` 으로 유도
+2. 관리자 이메일/비밀번호 + 기본 할당량 입력 → 초기 가입 코드 발급
+3. 구성원에게 가입 코드 전달 → 가입 즉시 로그인 가능 (승인 대기 없음)
+4. 추가 코드 발급/비활성화는 admin 대시보드의 **가입 코드 관리**에서
+
+관리자 계정을 잃어버린 경우 비상 복구:
+
+```bash
+docker compose exec backend python -m app.cli create-admin --email you@example.com
+```
 
 > nginx 설정을 변경한 경우 inode 교체 문제를 피하려면 컨테이너를 재생성하세요:
 > `docker compose up -d --force-recreate nginx`
@@ -152,43 +182,72 @@ npm install
 npm run dev                     # http://localhost:5173 (‑> /api 는 :8000 으로 프록시)
 ```
 
+### 테스트
+
+유닛 테스트는 로컬에서 실행합니다:
+
+```bash
+cd backend && pytest
+```
+
+통합 테스트(`backend/tests/integration_*.py`)는 **compose 스택이 떠 있는 상태에서, compose
+네트워크 내부의 일회성 컨테이너**로 실행합니다. 런타임 이미지에는 dev 의존성이 없으므로
+소스를 마운트하고 httpx 를 임시 설치합니다:
+
+```bash
+docker compose run --rm \
+  -v "$(pwd)/backend/app:/app/app" -v "$(pwd)/backend/tests:/app/tests" \
+  -e RATE_LIMIT_ENABLED=false \
+  --entrypoint sh backend -c "pip install -q httpx && python -m tests.integration_files"
+```
+
+- `integration_admin` 은 rate limit 동작 자체를 검증하므로 `RATE_LIMIT_ENABLED` 를 끄지 않고 실행합니다.
+- `integration_resumable` 은 다청크 검증을 위해 `-e RESUMABLE_PART_SIZE=5242880` 을 함께 줍니다.
+- **주의: 통합 테스트는 파괴적입니다** — dev DB/버킷을 초기화합니다. 운영 데이터가 있는 곳에서 실행하지 마세요.
+
 ## 디렉터리 구조
 
 ```
 mini-drive/
 ├── backend/                 # FastAPI 백엔드
 │   ├── app/
-│   │   ├── main.py          # 앱 팩토리 + /health
-│   │   ├── core/            # config, database, redis
-│   │   └── api/router.py    # 최상위 라우터 (도메인 라우터 include 지점)
+│   │   ├── main.py          # 앱 팩토리 + /health + 로깅/메트릭 미들웨어
+│   │   ├── cli.py           # 비상용 admin 생성 CLI
+│   │   ├── core/            # config, database, redis, security
+│   │   ├── api/             # 라우터 (auth, setup, files, shares, groups, admin …)
+│   │   ├── services/        # 도메인 서비스 계층
+│   │   ├── models/ schemas/ # SQLAlchemy 모델 / Pydantic 스키마
+│   │   └── ...
+│   ├── alembic/             # DB 마이그레이션
+│   ├── tests/               # 유닛 + 통합 테스트 (integration_*.py)
 │   ├── pyproject.toml
-│   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/                # React SPA
 │   ├── src/
-│   │   ├── main.tsx / App.tsx
-│   │   ├── api/client.ts    # axios 인스턴스 (baseURL=/api)
+│   │   ├── api/             # axios 클라이언트 + 도메인 API
+│   │   ├── components/      # Thumbnail, PreviewModal 등
+│   │   ├── lib/             # 재개 업로드 오케스트레이션 등
 │   │   └── pages/
 │   ├── package.json
 │   ├── Dockerfile           # multi-stage: node build → nginx serve
 │   └── nginx.conf
 ├── nginx/                   # 게이트웨이
-│   ├── nginx.conf
-│   └── conf.d/default.conf
+├── scripts/                 # backup.sh / restore.sh
 ├── spec/minidrive-prd.md    # PRD (진실 소스)
 ├── docker-compose.yml
+├── docker-compose.prod.yml  # 프로덕션 오버라이드
 └── .env.example
 ```
 
 ## 개발 마일스톤 (PRD 9절)
 
-| Phase | 내용 |
-|---|---|
-| **1. MVP** | 인증(가입 승인제) + 파일 업로드/다운로드/목록 + 공유 링크 + 최소 admin |
-| **2. 버전 관리** | 버전 히스토리 / 복구 / 충돌 감지 |
-| **3. 그룹 & 권한** | 그룹 CRUD, 폴더 권한 상속(조회 시 판정 + Redis 캐시) |
-| **4. 운영 안정성 + Admin** | 게이트웨이 정제, 메트릭, rate limiting, admin 대시보드 |
-| **5. 고도화** | 재개 업로드, 썸네일, 미리보기, UI 테마 4종, 델타 동기화 |
+| Phase | 내용 | 상태 |
+|---|---|---|
+| **1. MVP** | 인증 + 파일 업로드/다운로드/목록 + 공유 링크 + 최소 admin | ✅ |
+| **2. 버전 관리** | 버전 히스토리 / 복구 / 충돌 감지 | ✅ |
+| **3. 그룹 & 권한** | 그룹 CRUD, 폴더 권한 상속(조회 시 판정 + Redis 캐시) | ✅ |
+| **4. 운영 안정성 + Admin** | 게이트웨이 정제, 로깅/메트릭, rate limiting, 백업, admin 대시보드 | ✅ |
+| **5. 고도화** | 재개 업로드, 썸네일, 미리보기, 공유 통계, UI 테마 4종 | ✅ |
+| **6. 셋업 위저드 + 가입 코드제** | 첫 부팅 셋업, 가입 승인제 → 가입 코드제 전환 | 🚧 백엔드 완료, 프론트 진행 예정 |
 
-Phase 1~3(인증·파일·버전·그룹/권한)에 이어 **Phase 4 운영 안정성**(구조화 로깅, Prometheus 메트릭,
-rate limiting, 백업/복원 스크립트, 프로덕션 compose 프로파일)까지 반영되어 있습니다.
+델타 동기화는 웹 중심 서비스 특성상 범위에서 제외되었습니다(PRD 3.5).
