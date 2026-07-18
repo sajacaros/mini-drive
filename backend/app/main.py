@@ -10,13 +10,18 @@ from sqlalchemy import text
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import SessionFactory, engine
 from app.core.redis import redis_client
+from app.services.users import ensure_admin_bootstrap
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 이후 스테이지: admin 부트스트랩 시드, 스토리지 버킷 확인 등을 여기서 수행한다.
+    # admin 부트스트랩 — ADMIN_EMAIL 계정이 없으면 active/admin + 루트 폴더 생성 (PRD 3.6.2).
+    async with SessionFactory() as session:
+        await ensure_admin_bootstrap(
+            session, settings.admin_email, settings.admin_initial_password
+        )
     yield
     await engine.dispose()
     await redis_client.aclose()
