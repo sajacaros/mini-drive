@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     rate_limit_upload_per_min: int = 10     # 업로드: user 당
     rate_limit_lookup_per_min: int = 20     # 이메일 조회: user 당
 
+    # 재개 가능 업로드 (PRD 3.2). 파트 크기는 S3 최소(5MiB) 이상이어야 한다(마지막 파트 제외).
+    # 세션 TTL 초과분은 고아 multipart 로 간주해 abort + 세션 정리한다.
+    resumable_part_size: int = 8 * 1024 * 1024        # 8 MiB
+    resumable_session_ttl_seconds: int = 24 * 60 * 60  # 24h
+
 
 @lru_cache
 def get_settings() -> Settings:

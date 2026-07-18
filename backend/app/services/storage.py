@@ -133,6 +133,65 @@ class StorageService:
         """단일 오브젝트 삭제. 존재하지 않아도 예외 없이 성공(S3 remove 시맨틱)."""
         self._client.remove_object(self.bucket, key)
 
+    # --- S3 Multipart Upload (재개 가능 업로드, PRD 3.2) --------------------
+    #
+    # MinIO SDK 는 멀티파트를 공개 API 로 노출하지 않으므로 내부 메서드를 얇게 감싼다.
+    # 게이트웨이 모델 유지: presigned 파트 URL 을 클라이언트에 주지 않고, 파트 바이트도
+    # backend 를 경유해 여기서 업로드한다.
+
+    def create_multipart(self, key: str, content_type: str | None = None) -> str:
+        """멀티파트 업로드를 개시하고 upload_id 를 반환한다."""
+        return self._client._create_multipart_upload(
+            self.bucket,
+            key,
+            {"Content-Type": content_type or "application/octet-stream"},
+        )
+
+    def upload_part(
+        self, key: str, upload_id: str, part_number: int, data: bytes
+    ) -> str:
+        """단일 파트를 업로드하고 etag 를 반환한다. 실제 저장 바이트를 계측한다(PRD 11장)."""
+        etag = self._client._upload_part(
+            self.bucket, key, data, None, upload_id, part_number
+        )
+        observe_upload_bytes(len(data))
+        return etag
+
+    def list_parts(self, key: str, upload_id: str) -> list[tuple[int, int, str]]:
+        """스테이징된 파트 목록을 (part_number, size, etag) 로 반환한다(part_number 오름차순).
+
+        MinIO/S3 는 한 응답에 최대 1000개만 주므로 truncation 을 따라가며 전부 모은다.
+        """
+        collected: list[tuple[int, int, str]] = []
+        marker: str | None = None
+        while True:
+            res = self._client._list_parts(
+                self.bucket, key, upload_id, part_number_marker=marker
+            )
+            collected.extend((p.part_number, p.size, p.etag) for p in res.parts)
+            if not res.is_truncated:
+                break
+            marker = res.next_part_number_marker
+        collected.sort(key=lambda t: t[0])
+        return collected
+
+    def complete_multipart(
+        self, key: str, upload_id: str, parts: list[tuple[int, str]]
+    ) -> None:
+        """스테이징된 파트를 병합해 오브젝트를 확정한다. parts=[(part_number, etag), ...]."""
+        from minio.datatypes import Part
+
+        self._client._complete_multipart_upload(
+            self.bucket,
+            key,
+            upload_id,
+            [Part(pn, etag) for pn, etag in parts],
+        )
+
+    def abort_multipart(self, key: str, upload_id: str) -> None:
+        """멀티파트 업로드를 중단하고 스테이징된 파트를 폐기한다(확정 오브젝트는 건드리지 않음)."""
+        self._client._abort_multipart_upload(self.bucket, key, upload_id)
+
     def delete_many(self, keys: list[str]) -> list[str]:
         """여러 오브젝트를 일괄 삭제하고, 삭제 실패한 키 목록을 반환한다."""
         if not keys:
@@ -173,6 +232,31 @@ class StorageService:
 
     async def delete_many_async(self, keys: list[str]) -> list[str]:
         return await asyncio.to_thread(self.delete_many, keys)
+
+    async def create_multipart_async(
+        self, key: str, content_type: str | None = None
+    ) -> str:
+        return await asyncio.to_thread(self.create_multipart, key, content_type)
+
+    async def upload_part_async(
+        self, key: str, upload_id: str, part_number: int, data: bytes
+    ) -> str:
+        return await asyncio.to_thread(
+            self.upload_part, key, upload_id, part_number, data
+        )
+
+    async def list_parts_async(
+        self, key: str, upload_id: str
+    ) -> list[tuple[int, int, str]]:
+        return await asyncio.to_thread(self.list_parts, key, upload_id)
+
+    async def complete_multipart_async(
+        self, key: str, upload_id: str, parts: list[tuple[int, str]]
+    ) -> None:
+        await asyncio.to_thread(self.complete_multipart, key, upload_id, parts)
+
+    async def abort_multipart_async(self, key: str, upload_id: str) -> None:
+        await asyncio.to_thread(self.abort_multipart, key, upload_id)
 
     # --- X-Accel-Redirect 변환 ---------------------------------------------
 

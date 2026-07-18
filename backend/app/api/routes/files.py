@@ -15,6 +15,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     Response,
     UploadFile,
     status,
@@ -25,6 +26,7 @@ from app.api.deps import CurrentUser, DbSession, RedisClient, rate_limit_user
 from app.api.download import content_disposition as _content_disposition
 from app.api.download import gateway_download_response, gateway_inline_response
 from app.api.preview import render_preview
+from app.core.config import settings
 from app.models.enums import UserStatus
 from app.schemas.files import (
     DownloadTicketResponse,
@@ -44,9 +46,16 @@ from app.schemas.permissions import (
     SharedItemResponse,
     SharedWithMeResponse,
 )
+from app.schemas.uploads import (
+    ResumableInitRequest,
+    ResumablePartResponse,
+    ResumableReuploadInitRequest,
+    ResumableSessionResponse,
+)
 from app.services import files as files_service
 from app.services import permissions as permissions_service
 from app.services import tickets as tickets_service
+from app.services import uploads as uploads_service
 from app.services.files import FileServiceError
 from app.services.permissions import PermissionServiceError
 from app.services.storage import get_storage
@@ -107,6 +116,135 @@ async def upload(
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return FileResponse.model_validate(created)
+
+
+# --- 재개 가능 업로드 (PRD 3.2) — 고정 prefix /uploads 로 /{file_id} 충돌 회피 ---
+
+
+def _session_response(
+    row, parts: list[tuple[int, int, str]] | None = None
+) -> ResumableSessionResponse:
+    """UploadSession + (선택) 스테이징 파트 목록을 재개 응답으로 변환."""
+    return ResumableSessionResponse(
+        session_id=row.id,
+        kind=row.kind,
+        file_id=row.file_id,
+        part_size=row.part_size,
+        total_parts=uploads_service._total_parts(row.total_size, row.part_size),
+        total_size=row.total_size,
+        uploaded_parts=uploads_service.uploaded_part_numbers(parts or []),
+        received_bytes=uploads_service.received_bytes(parts or []),
+        expires_at=row.expires_at,
+    )
+
+
+@router.post(
+    "/uploads",
+    response_model=ResumableSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_user("upload", "rate_limit_upload_per_min"))],
+)
+async def init_resumable_upload(
+    payload: ResumableInitRequest, user: CurrentUser, session: DbSession
+) -> ResumableSessionResponse:
+    """새 파일 재개 업로드 세션 개시 (PRD 3.2). part_size 로 청크를 나눠 이어올린다."""
+    try:
+        row = await uploads_service.init_new_upload(
+            session,
+            get_storage(),
+            user,
+            filename=payload.filename,
+            parent_id=payload.parent_id,
+            total_size=payload.total_size,
+            mime_type=payload.mime_type,
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return _session_response(row)
+
+
+@router.get("/uploads/{session_id}", response_model=ResumableSessionResponse)
+async def get_resumable_session(
+    session_id: str, user: CurrentUser, session: DbSession
+) -> ResumableSessionResponse:
+    """세션 상태/재개 정보 (PRD 3.2). 이미 올라간 파트 번호로 남은 파트만 이어올린다."""
+    try:
+        row, parts = await uploads_service.session_status(
+            session, get_storage(), user, session_id
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return _session_response(row, parts)
+
+
+@router.put(
+    "/uploads/{session_id}/parts/{part_number}",
+    response_model=ResumablePartResponse,
+)
+async def upload_resumable_part(
+    session_id: str,
+    part_number: int,
+    request: Request,
+    user: CurrentUser,
+    session: DbSession,
+) -> ResumablePartResponse:
+    """단일 파트 업로드 (PRD 3.2). 본문은 raw 바이트(backend 경유 스트리밍).
+
+    같은 파트를 다시 올리면 덮어써 재시도를 지원한다. 파트 크기는 part_size(마지막 제외) 고정.
+    """
+    data = await _read_capped(request, settings.resumable_part_size)
+    try:
+        pn, size, etag = await uploads_service.upload_part(
+            session, get_storage(), user, session_id, part_number, data
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return ResumablePartResponse(part_number=pn, size=size, etag=etag)
+
+
+@router.post(
+    "/uploads/{session_id}/complete",
+    response_model=FileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_resumable_upload(
+    session_id: str, user: CurrentUser, session: DbSession
+) -> FileResponse:
+    """업로드 완료 = 파트 병합 → 파일 확정 (PRD 3.2). 새 파일/새 버전 경로로 합류."""
+    try:
+        file = await uploads_service.complete_upload(
+            session, get_storage(), user, session_id
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return FileResponse.model_validate(file)
+
+
+@router.delete("/uploads/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def abort_resumable_upload(
+    session_id: str, user: CurrentUser, session: DbSession
+) -> Response:
+    """업로드 세션 중단 (PRD 3.2). 스테이징 파트를 폐기하고 세션을 무효화한다."""
+    try:
+        await uploads_service.abort_upload(session, get_storage(), user, session_id)
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _read_capped(request: Request, cap: int) -> bytes:
+    """요청 본문을 스트리밍으로 읽되 cap 바이트를 넘으면 413 으로 조기 차단(OOM 방지)."""
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > cap:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="파트가 허용 크기를 초과했습니다.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.get("/trash", response_model=list[FileResponse])
@@ -267,6 +405,37 @@ async def reupload(
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return FileResponse.model_validate(updated)
+
+
+@router.post(
+    "/{file_id}/uploads",
+    response_model=ResumableSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_user("upload", "rate_limit_upload_per_min"))],
+)
+async def init_resumable_reupload(
+    file_id: int,
+    payload: ResumableReuploadInitRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> ResumableSessionResponse:
+    """기존 파일 재업로드(새 버전) 재개 세션 개시 (PRD 3.2, 3.3).
+
+    base_version 이 현재 버전과 다르면 409(충돌). 완료 시 기존 재업로드와 동일한 버저닝 경로.
+    """
+    try:
+        row = await uploads_service.init_version_upload(
+            session,
+            get_storage(),
+            user,
+            file_id,
+            total_size=payload.total_size,
+            mime_type=payload.mime_type,
+            base_version=payload.base_version,
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return _session_response(row)
 
 
 @router.get("/{file_id}/versions", response_model=FileVersionListResponse)

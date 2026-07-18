@@ -17,6 +17,7 @@ from app.models.file import File, FileVersion
 from app.models.group import Group, GroupMember
 from app.models.permission import FileGroupPermission
 from app.models.share import Share
+from app.models.upload_session import UploadSession
 from app.models.user import User
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "GroupMember",
     "FileGroupPermission",
     "AuditLog",
+    "UploadSession",
     # 열거형
     "UserRole",
     "UserStatus",
