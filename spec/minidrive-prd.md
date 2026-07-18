@@ -300,9 +300,18 @@ Karpathy 패턴의 요지는 "전통적 RAG는 매 질문마다 원문에서 지
 
 | 연산 | 동작 |
 |---|---|
-| **Ingest** | 소스 등록/버전 갱신 시: Upstage Document Parse로 텍스트 추출 → 청크 분할·임베딩(`file_chunks`, RAG 인덱스) → LLM이 관련 위키 페이지 생성/갱신 + 상호링크·`index.md`·`log.md` 갱신 |
-| **Query** | 챗봇 질문 → 권한 내 검색(위키 페이지 우선 + 원문 청크 보강) → 출처 인용 답변. 가치 있는 답변은 사용자가 위키 페이지로 승격 가능 |
-| **Lint** | 정기/트리거 헬스체크: 고아 페이지, 깨진 링크, 낡은 소스(버전 갱신·권한 회수) 탐지 → 재컴파일 또는 페이지 제거 |
+| **Ingest** | 소스 등록/버전 갱신 시: Upstage Document Parse로 텍스트 추출 → 청크 분할·임베딩(`file_chunks`, RAG 인덱스) → **2단계 LLM 호출**로 위키 컴파일 — ① *분석*: 엔티티·개념 추출, 기존 위키와의 연결점·**모순** 식별, 반영 계획 산출 ② *생성*: 아래 컴파일 규칙에 따라 페이지 생성/갱신 + `index.md`·`log.md` 부기 |
+| **Query** | 챗봇 질문 → 권한 내 검색(위키 페이지 우선 + 원문 청크 보강) → 출처 인용 답변. 가치 있는 답변은 사용자가 위키 페이지로 승격 가능. 위키 탐색은 `index.md` 선행 조회 → 관련 페이지 drill-in — 위키가 커져도 컨텍스트에 전체를 싣지 않는 스케일 기제 |
+| **Lint** | **정기 스케줄(arq cron) + 수동 트리거.** 결정적 검사는 **자동 수정**(index 정합성, 깨진 내부 링크, 상호참조 누락), 휴리스틱 검사는 **리포트만**(사실 모순, 낡은 주장, 고아 페이지, 소스 권한 회수·버전 갱신에 따른 stale 페이지 → 재컴파일/제거 제안) |
+
+**Ingest 컴파일 규칙** — 스페이스 schema 지침에 명문화하고 생성 단계 프롬프트에 주입한다. Karpathy 원안은 판단 규칙 없이 LLM 재량에 맡기는데, 그 결과 "위키가 backlink만 쌓이고 기존 페이지 본문은 안 고쳐지는 append-only 로그북"이 된다는 실증 보고가 있다(13.3 출처). 이를 규칙으로 방어한다:
+
+1. **동일 논지** → 기존 페이지에 병합하고 출처 목록에 소스 추가 (새 페이지 남발 금지)
+2. **새 개념** → 가장 관련된 토픽 아래 신규 페이지 생성
+3. **여러 토픽에 걸침** → 가장 관련된 곳 하나에 두고 나머지에는 "See Also" 상호참조
+4. **모순 발견** → 조용히 덮어쓰지 않는다. 페이지 안에 충돌을 명기하고 상충 페이지끼리 크로스링크. 해소는 Lint 리포트를 통한 사람 판단
+5. **연쇄 갱신(cascade)** — 1차 페이지 반영 후 같은 토픽의 관련 페이지를 스캔해 실질 영향이 있으면 함께 갱신 (소스 하나가 다수 페이지를 건드릴 수 있음). 단, **사람이 확정한 페이지(frontmatter `locked: true`)는 연쇄 갱신에서 제외** — 수동 편집과 LLM 갱신의 공존 장치. LLM이 페이지를 잘못 고친 경우 `file_versions`로 이전 버전 복구
+6. **부기** — 건드린 모든 페이지를 `index.md`에 반영하고 `log.md`에 append(일시·연산·1차 페이지·cascade 페이지 목록)
 
 **핵심 불변식 — 권한 경계 = 컴파일 경계.** 위키 스페이스는 `personal`(개인) 또는 `group`(그룹) 스코프를 가지며, 컴파일에 투입되는 소스는 **해당 스코프가 read 가능한 파일만**이다. 컴파일된 페이지는 스코프 소유 폴더(개인 소유 또는 `group_id` 소유)에 저장되므로, 페이지를 읽을 수 있는 사람 = 그 소스들을 읽을 수 있는 사람이 구조적으로 보장된다. 스코프를 가로지르는 컴파일(예: A그룹 문서 + B그룹 문서를 한 페이지로 종합)은 금지한다.
 
@@ -312,7 +321,7 @@ Karpathy 패턴의 요지는 "전통적 RAG는 매 질문마다 원문에서 지
 |---|---|---|
 | **위키 스페이스 생성** | personal/group 스코프 지정, 위키 페이지가 저장될 루트 폴더 자동 생성 | P0 |
 | **소스 등록** | 파일 또는 폴더(하위 재귀)를 스페이스 소스로 등록 → Ingest 잡 큐잉. 스코프가 read 불가한 파일은 등록 거부 | P0 |
-| **자동 재인덱싱** | 소스 파일 업로드/버전 갱신/삭제 훅 → 해당 청크·위키 페이지 stale 마킹 + 재인덱싱 잡 | P0 |
+| **자동 재인덱싱** | 소스 파일 업로드/버전 갱신/삭제/**이동** 훅 → 해당 청크·위키 페이지 stale 마킹 + 재인덱싱 잡. 이동은 상속 권한과 폴더 재귀 소스 범위를 바꿀 수 있으므로 훅 대상에 포함 | P0 |
 | **챗봇 질의** | 자연어 질문 → 권한 인지 검색 → 출처 인용(파일 링크) 포함 답변, SSE 스트리밍 | P0 |
 | **대화 세션** | 세션 생성/목록/이어가기, 히스토리 저장 | P1 |
 | **위키 브라우징** | 위키 페이지 마크다운 렌더링(기존 미리보기 확장), 상호링크 탐색 | P1 |
@@ -320,6 +329,7 @@ Karpathy 패턴의 요지는 "전통적 RAG는 매 질문마다 원문에서 지
 | **Lint 실행** | 수동/스케줄 헬스체크, 결과 리포트 | P1 |
 | **근거성 검증** | Upstage Groundedness Check로 답변-컨텍스트 사실 일치 검증, 불일치 시 경고 표시 | P2 |
 | **인덱싱 제외 플래그** | 민감 폴더/파일을 외부 API 전송·인덱싱 대상에서 제외 | P2 |
+| **관계 그래프 / backlink** | 컴파일 시 위키 링크를 `wiki_links`로 추출 저장(5.14) → backlink("이 파일을 인용하는 페이지")·그래프 뷰. 표시 시 상대 파일 read 권한 필터 적용 | P2 |
 
 #### 3.7.3 권한 인지 검색 (Permission-aware Retrieval)
 
@@ -664,7 +674,8 @@ CREATE TABLE wiki_sources (
 ```
 
 - 소스 등록 시 **스코프의 read 권한을 검증**한다(권한 경계 = 컴파일 경계, 3.7.1). group 스코프면 그룹이 해당 파일에 read 이상을 가져야 등록 가능.
-- 위키 페이지는 별도 테이블이 아니라 `root_folder_id` 하위의 일반 드라이브 파일 — 권한·버전·휴지통 모두 기존 체계.
+- 위키 페이지는 별도 테이블이 아니라 `root_folder_id` 하위의 일반 드라이브 파일 — 권한·버전·휴지통 모두 기존 체계. 페이지 frontmatter의 `locked: true`는 연쇄 갱신 제외(사람 확정 페이지 보호, 3.7.1 규칙 5).
+- **P2 확장 — `wiki_links(from_file_id, to_file_id, kind)`**: 컴파일 시 페이지 간·페이지→원문 링크를 추출 저장해 backlink·그래프 뷰에 사용. Phase 7 본 범위에서는 마크다운 링크 자체가 진실 소스이므로 테이블 없이 시작한다.
 
 ### 5.15 wiki_jobs 테이블 (비동기 워커 큐, Phase 7)
 
@@ -1138,6 +1149,8 @@ server {
 | **외부 API로 문서 내용 전송 (Phase 7)** | 기밀 유출 | 챗 생성 기본 사내 vLLM, 민감 폴더 인덱싱 제외 플래그, 필요 시 vLLM 임베딩 모델 배포로 완전 사내화 |
 | **임베딩 인덱스 낡음 — 버전 갱신 미반영 (Phase 7)** | 낡은 답변 | 업로드/버전/삭제 훅에서 stale 마킹 + 재인덱싱 잡 자동 큐잉, `version` 컬럼으로 판정 |
 | **LLM 응답의 사실 불일치(할루시네이션) (Phase 7)** | 잘못된 사내 정보 확산 | 출처 인용 강제 + Upstage Groundedness Check(P2), 위키 승격은 사용자 검토 후 수동 |
+| **위키의 append-only 로그북화 — 기존 페이지 미갱신·모순 누적 (Phase 7)** | 위키 신뢰도 붕괴 | 컴파일 규칙 명문화(동일 논지 병합·모순 명기·연쇄 갱신, 3.7.1) + Ingest 자동 훅 + 정기 Lint(결정적 자동 수정 / 휴리스틱 리포트 분리) |
+| **LLM 재컴파일의 의미 드리프트·수동 편집 훼손 (Phase 7)** | 지식 왜곡, 사용자 불신 | 원문은 드라이브 파일로 불변, 위키 페이지는 `file_versions`로 복구 가능, 사람 확정 페이지는 `locked` frontmatter로 연쇄 갱신 제외 |
 
 ---
 
@@ -1174,14 +1187,17 @@ Karpathy가 2026-04 공개한 [LLM Wiki gist](https://gist.github.com/karpathy/4
 | Wiki = 로컬 마크다운 + Obsidian 브라우징 | 변형 — 위키 페이지를 **드라이브 파일**로 저장해 권한·버전·미리보기 재사용. 브라우징은 자체 마크다운 렌더 |
 | 단일 사용자 — 권한 개념 없음 | **변형 (핵심)** — 스페이스 스코프(personal/group)로 "권한 경계 = 컴파일 경계" 불변식 추가 (3.7.1) |
 | 순수 위키 (RAG 대체) | 하이브리드 — 위키 페이지 우선 + 원문 청크 RAG 보강. 파생 구현체들(nashsu/llm_wiki, lucasastorian/llmwiki)도 원문 인덱스를 인용용으로 유지하는 동일 결론 |
-| Ingest / Query / Lint 3연산 | ✅ 동일 채택. Lint에 권한 회수 감지(stale 마킹) 역할 추가 |
-| CLI/에이전트가 수동 실행 | 변형 — arq 워커가 업로드/버전 훅으로 자동 실행 |
+| Ingest / Query / Lint 3연산 | ✅ 동일 채택하되 구체화 — Ingest는 2단계(분석→생성) 호출 + 컴파일 규칙 6항(3.7.1, nashsu·Astro-Han 구현체 방식), Lint는 결정적 자동 수정/휴리스틱 리포트 분리에 권한 회수 감지(stale 마킹) 역할 추가 |
+| 판단 규칙 없음 — LLM 재량 (append-only 로그북화 함정) | **변형** — 생성 vs 갱신 판단·모순 명기·연쇄 갱신을 규칙으로 명문화, `locked` 페이지 보호 (3.7.1) |
+| CLI/에이전트가 수동 실행 (유지보수가 안 일어나는 함정) | 변형 — arq 워커가 업로드/버전/삭제/이동 훅으로 자동 실행, Lint는 정기 스케줄 |
 
 **조사 참고 자료** (2026-07 기준):
 - 원 출처: [Karpathy llm-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
 - 파생 구현체: [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) (~14.8k★, 그래프 연관도 모델·증분 캐싱), [lucasastorian/llmwiki](https://github.com/lucasastorian/llmwiki) (VaultFS 저장 추상화·MCP), [Astro-Han/karpathy-llm-wiki](https://github.com/Astro-Han/karpathy-llm-wiki) (gist를 Agent Skill로 코드화)
 - 권한 인지 RAG: [Oso — Authorization in RAG](https://www.osohq.com/post/right-approach-to-authorization-in-rag), [Cerbos — RAG Access Control](https://cerbos.dev/blog/access-control-for-rag-llms), [AWS Security Blog — Authorizing access to data with RAG](https://aws.amazon.com/blogs/security/authorizing-access-to-data-with-rag-implementations/)
 - LangChain 통합: [vLLM(OpenAI 호환) 연결](https://docs.langchain.com/oss/python/integrations/chat/vllm), [Upstage 통합(langchain-upstage)](https://docs.langchain.com/oss/python/integrations/providers/upstage)
+- 증분 갱신 함정 실증(append-only 로그북화): [theaioperator — I rebuilt Karpathy's LLM Wiki](https://theaioperator.io/p/i-rebuilt-karpathys-llm-wiki-heres)
+- 인접 기법: [Microsoft GraphRAG](https://microsoft.github.io/graphrag/index/default_dataflow/) (엔티티·관계 추출→커뮤니티 요약 — 상호링크 자동 제안·synthesis 초안에 차용 가능), [DeepWiki](https://cognition.com/blog/deepwiki) (코드베이스 원샷 위키), [RAPTOR](https://arxiv.org/abs/2401.18059) (재귀 클러스터링 계층 요약 — 대형 위키 계층 구조에 차용 가능)
 
 ---
 
