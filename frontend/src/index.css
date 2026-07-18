@@ -1,15 +1,105 @@
 @import "tailwindcss";
 
 /*
- * 테마 토큰 (PRD 3.1.4). 이후 스테이지에서 다크/라이트 x 모던/게임보이 4종을
- * body 클래스(theme-modern-dark 등) + CSS 변수로 확장한다. 지금은 기본값만 둔다.
+ * 테마 토큰 (PRD 3.1.4). Phase 5 에서 다크/라이트 × 모던/게임보이 4종으로 확장한다.
+ * 지금은 "라이트 모던"(PRD 3.1.4.2: slate 계열 + blue-500 accent, Inter) 단일 테마이며,
+ * body 클래스(theme-modern-light 등) + CSS 변수 구조를 미리 잡아 확장 여지만 남긴다.
  */
-:root {
-  color-scheme: light dark;
+:root,
+.theme-modern-light {
+  --bg-primary: #f8fafc; /* slate-50 */
+  --bg-secondary: #ffffff;
+  --bg-muted: #f1f5f9; /* slate-100 */
+  --accent: #3b82f6; /* blue-500 */
+  --accent-hover: #2563eb; /* blue-600 */
+  --accent-fg: #ffffff;
+  --text-primary: #0f172a; /* slate-900 */
+  --text-secondary: #64748b; /* slate-500 */
+  --border-color: #e2e8f0; /* slate-200 */
+  --danger: #dc2626; /* red-600 */
+  --success: #16a34a; /* green-600 */
+  --radius: 10px;
+  --shadow-soft: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+  color-scheme: light;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  /* 버튼 */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+  .btn-secondary {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--bg-muted);
+  }
+  .btn-ghost {
+    color: var(--text-secondary);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-muted);
+    color: var(--text-primary);
+  }
+  .btn-danger {
+    background: var(--danger);
+    color: #ffffff;
+  }
+  .btn-danger:hover:not(:disabled) {
+    filter: brightness(0.93);
+  }
+
+  /* 입력 */
+  .input {
+    @apply w-full rounded-lg px-3 py-2 text-sm outline-none transition;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+  }
+  .input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium;
+    color: var(--text-primary);
+  }
+
+  /* 카드/표면 */
+  .card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-soft);
+  }
+}
+
+/* 유틸: 토큰 색상 */
+.text-muted {
+  color: var(--text-secondary);
+}
+.border-token {
+  border-color: var(--border-color);
+}
+.bg-muted-token {
+  background: var(--bg-muted);
 }

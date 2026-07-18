@@ -1,30 +1,63 @@
+import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
-/*
- * 라우터 셸. 이후 스테이지에서 pages/ 의 실제 화면(로그인, 파일 브라우저,
- * 공유, admin 대시보드)을 여기에 연결한다.
- */
-function App() {
-  return (
-    <Routes>
-      <Route path="/" element={<Placeholder title="Mini Drive" />} />
-      {/*
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/files" element={<FileBrowserPage />} />
-        <Route path="/shares" element={<SharesPage />} />
-        <Route path="/admin" element={<AdminPage />} />
-      */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
-}
+import { AdminRoute, ProtectedRoute } from "@/components/ProtectedRoute";
+import { Layout } from "@/components/Layout";
+import { Toaster } from "@/components/Toast";
+import { LoadingState } from "@/components/ui";
+import { AdminUsersPage } from "@/pages/AdminUsersPage";
+import { FileBrowserPage } from "@/pages/FileBrowserPage";
+import { LoginPage } from "@/pages/LoginPage";
+import { PublicSharePage } from "@/pages/PublicSharePage";
+import { RegisterPage } from "@/pages/RegisterPage";
+import { SharesPage } from "@/pages/SharesPage";
+import { TrashPage } from "@/pages/TrashPage";
+import { useAuthStore } from "@/store/auth";
 
-function Placeholder({ title }: { title: string }) {
+function App() {
+  const { initialized, bootstrap } = useAuthStore();
+
+  // 앱 진입 시 저장된 토큰으로 세션 복원 (me 조회).
+  useEffect(() => {
+    void bootstrap();
+  }, [bootstrap]);
+
+  if (!initialized) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoadingState label="시작하는 중..." />
+      </div>
+    );
+  }
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-2">
-      <h1 className="text-2xl font-semibold">{title}</h1>
-      <p className="text-sm opacity-70">스캐폴딩 완료 — 화면은 이후 스테이지에서 구현됩니다.</p>
-    </main>
+    <>
+      <Routes>
+        {/* 무인증 */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+        <Route path="/s/:shareUrl" element={<PublicSharePage />} />
+
+        {/* 인증 필요 (공통 레이아웃) */}
+        <Route element={<ProtectedRoute />}>
+          <Route element={<Layout />}>
+            <Route path="/" element={<FileBrowserPage />} />
+            <Route path="/trash" element={<TrashPage />} />
+            <Route path="/shares" element={<SharesPage />} />
+          </Route>
+        </Route>
+
+        {/* admin 전용 */}
+        <Route element={<AdminRoute />}>
+          <Route element={<Layout />}>
+            <Route path="/admin/users" element={<AdminUsersPage />} />
+          </Route>
+        </Route>
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <Toaster />
+    </>
   );
 }
 
