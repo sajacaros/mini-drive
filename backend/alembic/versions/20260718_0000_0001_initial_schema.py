@@ -11,8 +11,9 @@ FK 의존성 순서로 생성하고 downgrade 는 역순으로 삭제한다.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0001_initial_schema"
@@ -21,7 +22,18 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _has_table(name: str) -> bool:
+    return name in sa.inspect(op.get_bind()).get_table_names()
+
+
 def upgrade() -> None:
+    # 멱등성: 통합 테스트가 dev DB 에 `Base.metadata.create_all` 로 전체 테이블을 out-of-band
+    # 재생성하는데(alembic_version 미갱신), 이때 alembic 은 실행되지 않는다
+    # (`docker compose run --entrypoint sh backend ...`). 그 뒤 backend 기동 시
+    # `alembic upgrade head` 가 이미 존재하는 테이블을 다시 만들려다 깨지므로, 존재하면 건너뛴다.
+    # (0001 의 테이블 8개는 create_all 로 원자적으로 생성되므로 users 존재를 대표 신호로 쓴다.)
+    if _has_table("users"):
+        return
     # ── users (PRD 5.1) ───────────────────────────────────────────────
     op.create_table(
         "users",
@@ -302,6 +314,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not _has_table("users"):
+        return
     op.drop_index("idx_audit_logs_actor", table_name="audit_logs")
     op.drop_index("idx_audit_logs_target", table_name="audit_logs")
     op.drop_table("audit_logs")
