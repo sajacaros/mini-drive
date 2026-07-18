@@ -5,18 +5,21 @@ import {
   createFolder,
   listFiles,
   renameFile,
+  reuploadFile,
   softDeleteFile,
   uploadFile,
 } from "@/api/files";
 import type { FileNode } from "@/api/types";
 import { Modal } from "@/components/Modal";
 import { ShareModal } from "@/components/ShareModal";
+import { VersionHistoryModal } from "@/components/VersionHistoryModal";
 import { useToast } from "@/components/Toast";
-import { EmptyState, ErrorState, LoadingState } from "@/components/ui";
+import { Badge, EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import {
   DownloadIcon,
   FileIcon,
   FolderIcon,
+  HistoryIcon,
   PlusIcon,
   RenameIcon,
   ShareIcon,
@@ -35,10 +38,13 @@ interface Crumb {
 }
 
 interface UploadTask {
+  id: number;
   name: string;
   percent: number;
   error?: string;
 }
+
+let uploadSeq = 0;
 
 export function FileBrowserPage() {
   const toast = useToast();
@@ -59,8 +65,13 @@ export function FileBrowserPage() {
   const [renameValue, setRenameValue] = useState("");
   const [shareTarget, setShareTarget] = useState<FileNode | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileNode | null>(null);
+  const [versionsTarget, setVersionsTarget] = useState<FileNode | null>(null);
+  // 새 버전 업로드: 파일 선택 대기 대상, 그리고 409 충돌 시 강제 덮어쓰기 후보.
+  const [versionTarget, setVersionTarget] = useState<FileNode | null>(null);
+  const [conflict, setConflict] = useState<{ target: FileNode; file: File } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const versionInputRef = useRef<HTMLInputElement>(null);
   const current = path[path.length - 1];
   const parentId = current.id;
 
@@ -101,21 +112,25 @@ export function FileBrowserPage() {
 
   // --- 업로드 ---------------------------------------------------------------
 
+  // 완료된 업로드는 잠시 후 목록에서 제거 (오류 항목은 유지).
+  const scheduleUploadCleanup = () =>
+    setTimeout(() => setUploads((u) => u.filter((t) => t.error)), 2500);
+
   const runUpload = async (files: FileList | File[]) => {
     const list = Array.from(files);
     if (list.length === 0) return;
 
-    // 진행률 표시용 초기 상태 등록.
-    const startIndex = uploads.length;
-    setUploads((u) => [...u, ...list.map((f) => ({ name: f.name, percent: 0 }))]);
+    // 진행률 표시용 초기 상태 등록 (id 로 추적해 인덱스 어긋남을 방지).
+    const tasks = list.map((f) => ({ id: ++uploadSeq, name: f.name, percent: 0 }));
+    setUploads((u) => [...u, ...tasks]);
 
     for (let i = 0; i < list.length; i++) {
-      const idx = startIndex + i;
+      const { id } = tasks[i];
       try {
         await uploadFile(list[i], parentId, (percent) => {
-          setUploads((u) => u.map((t, j) => (j === idx ? { ...t, percent } : t)));
+          setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent } : t)));
         });
-        setUploads((u) => u.map((t, j) => (j === idx ? { ...t, percent: 100 } : t)));
+        setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent: 100 } : t)));
       } catch (err) {
         const status = errorStatus(err);
         const msg =
@@ -124,15 +139,55 @@ export function FileBrowserPage() {
             : status === 409
               ? "같은 이름의 파일이 있습니다"
               : extractErrorMessage(err, "업로드 실패");
-        setUploads((u) => u.map((t, j) => (j === idx ? { ...t, error: msg } : t)));
+        setUploads((u) => u.map((t) => (t.id === id ? { ...t, error: msg } : t)));
         toast.error(`${list[i].name}: ${msg}`);
       }
     }
 
     await reload();
     await refreshUser();
-    // 완료된 업로드는 잠시 후 목록에서 제거 (오류 항목은 유지).
-    setTimeout(() => setUploads((u) => u.filter((t) => t.error)), 2500);
+    scheduleUploadCleanup();
+  };
+
+  // --- 새 버전 업로드 -------------------------------------------------------
+
+  const startVersionUpload = (file: FileNode) => {
+    setVersionTarget(file);
+    versionInputRef.current?.click();
+  };
+
+  const onVersionFileSelected = (files: FileList | null) => {
+    const target = versionTarget;
+    setVersionTarget(null);
+    const file = files?.[0];
+    if (!target || !file) return;
+    // 현재 알고 있는 버전을 base_version 으로 넘겨 충돌 감지를 활성화한다.
+    void runVersionUpload(target, file, target.current_version);
+  };
+
+  const runVersionUpload = async (target: FileNode, file: File, baseVersion?: number) => {
+    const id = ++uploadSeq;
+    setUploads((u) => [...u, { id, name: `${file.name} (새 버전)`, percent: 0 }]);
+    try {
+      await reuploadFile(target.id, file, baseVersion, (percent) => {
+        setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent } : t)));
+      });
+      setUploads((u) => u.map((t) => (t.id === id ? { ...t, percent: 100 } : t)));
+      toast.success(`${target.name}: 새 버전을 업로드했습니다.`);
+      await reload();
+      await refreshUser();
+      scheduleUploadCleanup();
+    } catch (err) {
+      // 진행 중 항목은 제거하고, 409 는 충돌 안내 모달로 유도한다.
+      setUploads((u) => u.filter((t) => t.id !== id));
+      const status = errorStatus(err);
+      if (status === 409) {
+        setConflict({ target, file });
+        return;
+      }
+      const msg = status === 413 ? "저장 용량 초과" : extractErrorMessage(err, "새 버전 업로드 실패");
+      toast.error(`${target.name}: ${msg}`);
+    }
   };
 
   const onDrop = (e: DragEvent) => {
@@ -190,9 +245,9 @@ export function FileBrowserPage() {
 
   const onDownload = async (file: FileNode) => {
     try {
-      await downloadFile(file.id, file.name);
+      await downloadFile(file.id);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "다운로드에 실패했습니다.");
+      toast.error(extractErrorMessage(err, "다운로드에 실패했습니다."));
     }
   };
 
@@ -237,6 +292,15 @@ export function FileBrowserPage() {
             className="hidden"
             onChange={(e) => {
               if (e.target.files) void runUpload(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <input
+            ref={versionInputRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              onVersionFileSelected(e.target.files);
               e.target.value = "";
             }}
           />
@@ -304,6 +368,8 @@ export function FileBrowserPage() {
             }}
             onShare={(f) => setShareTarget(f)}
             onDelete={(f) => setDeleteTarget(f)}
+            onVersions={(f) => setVersionsTarget(f)}
+            onNewVersion={startVersionUpload}
           />
         )}
 
@@ -405,11 +471,56 @@ export function FileBrowserPage() {
         </p>
       </Modal>
 
+      {/* 버전 충돌 안내 */}
+      <Modal
+        open={conflict !== null}
+        title="버전 충돌"
+        onClose={() => setConflict(null)}
+        footer={
+          <>
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                setConflict(null);
+                void reload();
+              }}
+            >
+              새로고침 후 다시 시도
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                const c = conflict;
+                setConflict(null);
+                if (c) void runVersionUpload(c.target, c.file);
+              }}
+            >
+              강제 덮어쓰기
+            </button>
+          </>
+        }
+      >
+        <p className="text-sm">
+          다른 사용자가 먼저 새 버전을 올렸습니다. 목록을 새로고침해 최신 버전을 확인한 뒤 다시
+          시도하거나, 그대로 덮어쓸 수 있습니다. (강제 덮어쓰기해도 기존 이력은 보존됩니다.)
+        </p>
+      </Modal>
+
       <ShareModal
         file={shareTarget}
         open={shareTarget !== null}
         onClose={() => setShareTarget(null)}
         onCreated={() => toast.success("공유 링크를 만들었습니다.")}
+      />
+
+      <VersionHistoryModal
+        file={versionsTarget}
+        open={versionsTarget !== null}
+        onClose={() => setVersionsTarget(null)}
+        onChanged={() => {
+          void reload();
+          void refreshUser();
+        }}
       />
     </div>
   );
@@ -422,6 +533,8 @@ function FileTable({
   onRename,
   onShare,
   onDelete,
+  onVersions,
+  onNewVersion,
 }: {
   items: FileNode[];
   onOpenFolder: (f: FileNode) => void;
@@ -429,6 +542,8 @@ function FileTable({
   onRename: (f: FileNode) => void;
   onShare: (f: FileNode) => void;
   onDelete: (f: FileNode) => void;
+  onVersions: (f: FileNode) => void;
+  onNewVersion: (f: FileNode) => void;
 }) {
   return (
     <div className="card overflow-hidden">
@@ -438,7 +553,7 @@ function FileTable({
             <th className="px-4 py-2.5 font-medium">이름</th>
             <th className="w-28 px-4 py-2.5 font-medium">크기</th>
             <th className="w-40 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-40 px-4 py-2.5" />
+            <th className="w-56 px-4 py-2.5" />
           </tr>
         </thead>
         <tbody>
@@ -454,6 +569,9 @@ function FileTable({
                     {f.is_folder ? <FolderIcon /> : <FileIcon />}
                   </span>
                   <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
+                  {!f.is_folder && f.current_version >= 2 && (
+                    <Badge tone="neutral">v{f.current_version}</Badge>
+                  )}
                 </button>
               </td>
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
@@ -464,6 +582,12 @@ function FileTable({
                     <>
                       <IconAction title="다운로드" onClick={() => onDownload(f)}>
                         <DownloadIcon width={16} height={16} />
+                      </IconAction>
+                      <IconAction title="새 버전 업로드" onClick={() => onNewVersion(f)}>
+                        <UploadIcon width={16} height={16} />
+                      </IconAction>
+                      <IconAction title="버전 기록" onClick={() => onVersions(f)}>
+                        <HistoryIcon width={16} height={16} />
                       </IconAction>
                       <IconAction title="공유" onClick={() => onShare(f)}>
                         <ShareIcon width={16} height={16} />

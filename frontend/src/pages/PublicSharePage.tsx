@@ -46,7 +46,7 @@ export function PublicSharePage() {
     setDownloadError(null);
     setDownloading(true);
     try {
-      await downloadSharedFile(shareUrl, state.meta.file_name, password || undefined);
+      await downloadSharedFile(shareUrl, password || undefined);
     } catch (err) {
       if (err instanceof ShareDownloadError) {
         // 401: 비밀번호 필요/오류, 410: 만료·비활성·횟수 초과.

@@ -1,63 +1,47 @@
 /**
- * 파일 다운로드 헬퍼.
+ * 파일 다운로드 헬퍼 (티켓 방식 — Phase 2).
  *
- * 백엔드 다운로드 응답은 X-Accel-Redirect(게이트웨이 스트리밍, PRD 2.2)이고, 다운로드
- * 엔드포인트는 Authorization(Bearer) 인증이 필수다. 쿼리 파라미터 토큰을 지원하지 않으므로
- * 단순한 `window.location`/`a[href]` 네비게이션으로는 토큰을 실을 수 없다. 따라서 fetch 로
- * Authorization 헤더를 붙여 받은 뒤 blob 으로 저장한다.
+ * 다운로드는 무헤더 GET 으로 스트리밍하도록 1회용 티켓 기반으로 전환됐다(PRD 2.2). 흐름:
+ *   1. axios(인증 헤더 포함) 또는 fetch 로 `download-ticket` 을 발급받는다.
+ *   2. 반환된 무헤더 URL 을 브라우저 네비게이션(숨김 a[href])으로 열어 nginx→MinIO 스트리밍을
+ *      받는다. 응답 본문을 메모리에 적재하지 않으므로 대용량 파일에도 안전하다.
  *
- * 한계: fetch→blob 방식은 응답 본문을 메모리에 모두 적재하므로 초대형 파일(수 GB)에는
- * 부적합하다. 근본 해결은 백엔드가 단기 서명 쿼리 토큰(예: ?token=...) 다운로드를 지원해
- * 브라우저 네비게이션 스트리밍을 허용하는 것 — Phase 후속 개선 제안으로 남긴다.
+ * 파일명은 게이트웨이 응답의 Content-Disposition 이 결정하므로 프론트에서 지정하지 않는다.
  */
 
-import { getAccessToken } from "./tokenStore";
+import {
+  issueDownloadTicket,
+  issueVersionDownloadTicket,
+} from "@/api/files";
+import type { DownloadTicketResponse } from "@/api/types";
 
-/** Content-Disposition 헤더에서 파일명을 파싱한다 (filename* 우선). */
-function parseFilename(disposition: string | null, fallback: string): string {
-  if (!disposition) return fallback;
-  const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
-  if (star?.[1]) {
-    try {
-      return decodeURIComponent(star[1]);
-    } catch {
-      /* fallthrough */
-    }
-  }
-  const plain = /filename="?([^";]+)"?/i.exec(disposition);
-  return plain?.[1] ?? fallback;
-}
-
-/** blob 을 받아 브라우저 다운로드를 트리거한다. */
-function saveBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
+/** 티켓 URL 로 브라우저 네이티브 다운로드를 트리거한다 (숨김 a[href] 네비게이션). */
+function navigateToDownload(url: string): void {
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
-  // 즉시 revoke 하면 일부 브라우저에서 다운로드가 취소되므로 살짝 지연한다.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** 인증 사용자의 파일 다운로드 (GET /api/files/{id}/download). */
-export async function downloadFile(fileId: number, fallbackName: string): Promise<void> {
-  const token = getAccessToken();
-  const res = await fetch(`/api/files/${fileId}/download`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) {
-    throw new Error(`다운로드 실패 (${res.status})`);
-  }
-  const blob = await res.blob();
-  const filename = parseFilename(res.headers.get("Content-Disposition"), fallbackName);
-  saveBlob(blob, filename);
+/** 인증 사용자의 현재 버전 다운로드 (티켓 발급 → 무헤더 스트리밍). */
+export async function downloadFile(fileId: number): Promise<void> {
+  const ticket = await issueDownloadTicket(fileId);
+  navigateToDownload(ticket.url);
+}
+
+/** 인증 사용자의 특정 버전 다운로드. */
+export async function downloadFileVersion(fileId: number, version: number): Promise<void> {
+  const ticket = await issueVersionDownloadTicket(fileId, version);
+  navigateToDownload(ticket.url);
 }
 
 /**
- * 공개 공유 다운로드 (POST /api/public/shares/{shareUrl}/download).
- * 404/410/401 등은 status 를 담은 에러로 던져 호출부가 상태별 안내를 하게 한다.
+ * 공개 공유 다운로드 (POST /api/public/shares/{shareUrl}/download-ticket).
+ * 무인증 경로이므로 apiClient 대신 순수 fetch 로 티켓을 발급받는다. 비밀번호가 있으면 body 에
+ * 담는다. 401(비밀번호 필요/오류)/410(만료·비활성·횟수 초과) 등은 status 를 담은 에러로 던져
+ * 호출부가 상태별 안내를 하게 한다.
  */
 export class ShareDownloadError extends Error {
   status: number;
@@ -67,12 +51,8 @@ export class ShareDownloadError extends Error {
   }
 }
 
-export async function downloadSharedFile(
-  shareUrl: string,
-  fallbackName: string,
-  password?: string,
-): Promise<void> {
-  const res = await fetch(`/api/public/shares/${shareUrl}/download`, {
+export async function downloadSharedFile(shareUrl: string, password?: string): Promise<void> {
+  const res = await fetch(`/api/public/shares/${shareUrl}/download-ticket`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: password ?? null }),
@@ -89,7 +69,6 @@ export async function downloadSharedFile(
     throw new ShareDownloadError(res.status, detail);
   }
 
-  const blob = await res.blob();
-  const filename = parseFilename(res.headers.get("Content-Disposition"), fallbackName);
-  saveBlob(blob, filename);
+  const ticket = (await res.json()) as DownloadTicketResponse;
+  navigateToDownload(ticket.url);
 }

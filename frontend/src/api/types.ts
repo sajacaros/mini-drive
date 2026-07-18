@@ -60,6 +60,31 @@ export interface FileListResponse {
   size: number;
 }
 
+/** 파일 버전 히스토리 항목 (GET /api/files/{id}/versions). */
+export interface FileVersion {
+  version: number;
+  size: number;
+  mime_type: string | null;
+  uploaded_by: number;
+  uploaded_by_name: string;
+  uploaded_at: string;
+  is_current: boolean;
+}
+
+/** 버전 목록 응답 (내림차순). */
+export interface FileVersionListResponse {
+  file_id: number;
+  current_version: number;
+  items: FileVersion[];
+}
+
+/** 단기 1회용 다운로드 티켓 (POST .../download-ticket). url 을 무헤더 GET 하면 스트리밍. */
+export interface DownloadTicketResponse {
+  ticket: string;
+  url: string;
+  expires_in: number;
+}
+
 export type SharePermission = "read" | "download";
 
 /** 소유자용 공유 링크 응답 (POST/GET /api/shares). */

@@ -126,6 +126,14 @@ export const ChevronRight = (p: IconProps) => (
   </svg>
 );
 
+export const HistoryIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+);
+
 export const LockIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <rect x="3" y="11" width="18" height="11" rx="2" />
