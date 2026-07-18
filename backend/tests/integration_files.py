@@ -25,7 +25,7 @@ from app.core.redis import redis_client
 from app.main import app
 from app.models import User
 from app.services.storage import storage_service
-from app.services.users import ensure_admin_bootstrap
+from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
@@ -55,26 +55,10 @@ async def _reset() -> None:
     storage_service.delete_many(leftover)
 
 
-async def _approved_alice_headers(c: httpx.AsyncClient) -> tuple[dict[str, str], int]:
-    # admin 로그인 → alice 등록/승인 → alice 로그인.
-    r = await c.post(
-        "/api/auth/login",
-        json={"email": settings.admin_email, "password": settings.admin_initial_password},
-    )
-    assert r.status_code == 200, r.text
-    admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-    r = await c.post("/api/auth/register", json=ALICE)
-    assert r.status_code == 201, r.text
-    alice_id = r.json()["id"]
-    r = await c.post(f"/api/admin/users/{alice_id}/approve", headers=admin_h)
-    assert r.status_code == 200, r.text
-
-    r = await c.post(
-        "/api/auth/login", json={"email": ALICE["email"], "password": ALICE["password"]}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}, alice_id
+async def _active_alice_headers(c: httpx.AsyncClient) -> tuple[dict[str, str], int]:
+    # 셋업 위저드로 admin + 초기 코드 생성 → 코드로 alice 즉시 active 가입.
+    _admin_h, code = await setup_admin(c)
+    return await register_active(c, code, ALICE)
 
 
 async def _storage_used(user_id: int) -> int:
@@ -86,17 +70,10 @@ async def _storage_used(user_id: int) -> int:
 async def scenario() -> None:
     await _reset()
 
-    async with SessionFactory() as session:
-        admin = await ensure_admin_bootstrap(
-            session, settings.admin_email, settings.admin_initial_password
-        )
-    assert admin is not None
-    _ok("admin 부트스트랩")
-
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
-        alice_h, alice_id = await _approved_alice_headers(c)
-        _ok("alice 승인/로그인")
+        alice_h, alice_id = await _active_alice_headers(c)
+        _ok("셋업 + 코드 가입 → alice 로그인")
 
         # 1. 10MB 업로드 (루트)
         r = await c.post(

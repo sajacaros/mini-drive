@@ -25,12 +25,11 @@ import httpx
 from httpx import ASGITransport
 
 import app.models  # noqa: F401 - 전체 모델을 metadata 에 등록
-from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.redis import redis_client
 from app.main import app
 from app.services.storage import storage_service
-from app.services.users import ensure_admin_bootstrap
+from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
 USERS = {
@@ -61,30 +60,6 @@ async def _reset() -> None:
     storage_service.delete_many(leftover)
 
 
-async def _admin_headers(c: httpx.AsyncClient) -> dict[str, str]:
-    r = await c.post(
-        "/api/auth/login",
-        json={"email": settings.admin_email, "password": settings.admin_initial_password},
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-
-async def _register_approve(
-    c: httpx.AsyncClient, admin_h: dict[str, str], creds: dict[str, str]
-) -> tuple[dict[str, str], int]:
-    r = await c.post("/api/auth/register", json=creds)
-    assert r.status_code == 201, r.text
-    uid = r.json()["id"]
-    r = await c.post(f"/api/admin/users/{uid}/approve", headers=admin_h)
-    assert r.status_code == 200, r.text
-    r = await c.post(
-        "/api/auth/login", json={"email": creds["email"], "password": creds["password"]}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}, uid
-
-
 async def _mkfolder(
     c: httpx.AsyncClient, h: dict[str, str], name: str, parent_id: int | None
 ) -> int:
@@ -109,23 +84,14 @@ async def _upload(
 async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
     await _reset()
 
-    from app.core.database import SessionFactory
-
-    async with SessionFactory() as session:
-        admin = await ensure_admin_bootstrap(
-            session, settings.admin_email, settings.admin_initial_password
-        )
-    assert admin is not None
-    _ok("admin 부트스트랩")
-
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test", timeout=60
     ) as c:
-        admin_h = await _admin_headers(c)
-        alice_h, alice_id = await _register_approve(c, admin_h, USERS["alice"])
-        bob_h, bob_id = await _register_approve(c, admin_h, USERS["bob"])
-        _ok("alice(A)/bob(B) 승인·로그인")
+        _admin_h, code = await setup_admin(c)
+        alice_h, alice_id = await register_active(c, code, USERS["alice"])
+        bob_h, bob_id = await register_active(c, code, USERS["bob"])
+        _ok("셋업 + 코드 가입 → alice(A)/bob(B) 로그인")
 
         # 1. A 가 트리 구성: root/depth1/{depth2/file, depth2b}
         depth1 = await _mkfolder(c, alice_h, "depth1", None)

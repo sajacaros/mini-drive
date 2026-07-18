@@ -20,7 +20,7 @@ def test_stats_schema_from_service_shape() -> None:
     # get_stats() 가 만드는 dict 와 동일한 형태.
     stats = {
         "total_users": 4,
-        "users_by_status": {"active": 3, "pending": 1},
+        "users_by_status": {"active": 3, "inactive": 1},
         "total_files": 12,
         "total_folders": 5,
         "total_storage_used": 2048,
@@ -37,7 +37,7 @@ def test_stats_schema_from_service_shape() -> None:
     # 직렬화가 안정적인지 (프론트 계약).
     dumped = resp.model_dump()
     assert dumped["total_shares"] == {"active": 2, "inactive": 1, "total": 3}
-    assert dumped["users_by_status"] == {"active": 3, "pending": 1}
+    assert dumped["users_by_status"] == {"active": 3, "inactive": 1}
 
 
 def test_group_response_shape() -> None:

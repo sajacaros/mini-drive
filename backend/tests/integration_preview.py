@@ -32,7 +32,7 @@ from app.core.redis import redis_client
 from app.main import app
 from app.models import File
 from app.services.storage import storage_service
-from app.services.users import ensure_admin_bootstrap
+from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
@@ -68,30 +68,6 @@ async def _reset() -> None:
     storage_service.delete_many(leftover)
 
 
-async def _register_approve_login(
-    c: httpx.AsyncClient, admin_h: dict[str, str], who: dict[str, str]
-) -> tuple[dict[str, str], int]:
-    r = await c.post("/api/auth/register", json=who)
-    assert r.status_code == 201, r.text
-    uid = r.json()["id"]
-    r = await c.post(f"/api/admin/users/{uid}/approve", headers=admin_h)
-    assert r.status_code == 200, r.text
-    r = await c.post(
-        "/api/auth/login", json={"email": who["email"], "password": who["password"]}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}, uid
-
-
-async def _admin_headers(c: httpx.AsyncClient) -> dict[str, str]:
-    r = await c.post(
-        "/api/auth/login",
-        json={"email": settings.admin_email, "password": settings.admin_initial_password},
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-
 async def _thumbnail_key(file_id: int) -> str | None:
     async with SessionFactory() as s:
         row = (await s.execute(select(File).where(File.id == file_id))).scalar_one()
@@ -110,19 +86,12 @@ async def _fetch_minio(accel: str) -> httpx.Response:
 async def scenario() -> None:
     await _reset()
 
-    async with SessionFactory() as session:
-        admin = await ensure_admin_bootstrap(
-            session, settings.admin_email, settings.admin_initial_password
-        )
-    assert admin is not None
-    _ok("admin 부트스트랩")
-
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
-        admin_h = await _admin_headers(c)
-        alice_h, _alice_id = await _register_approve_login(c, admin_h, ALICE)
-        bob_h, _bob_id = await _register_approve_login(c, admin_h, BOB)
-        _ok("alice/bob 승인·로그인")
+        admin_h, code = await setup_admin(c)
+        alice_h, _alice_id = await register_active(c, code, ALICE)
+        bob_h, _bob_id = await register_active(c, code, BOB)
+        _ok("셋업 + 코드 가입 → alice/bob 로그인")
 
         # === 1. 이미지 업로드 → 썸네일 자동 생성 ===
         png = _png_bytes(800, 600)

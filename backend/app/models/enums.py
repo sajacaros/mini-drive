@@ -15,12 +15,14 @@ class UserRole(StrEnum):
 
 
 class UserStatus(StrEnum):
-    """가입 승인제 상태 (users.status). 신규 가입은 PENDING 으로 시작 (PRD 3.1)."""
+    """계정 상태 (users.status). 가입 코드제이므로 코드 검증 통과 시 즉시 ACTIVE 이며,
+    admin 이 비활성화하면 INACTIVE 가 된다 (PRD 3.1 — 2026-07-19 승인제에서 전환).
 
-    PENDING = "pending"
+    구 승인제의 pending/rejected 는 폐지됐고, 마이그레이션 0003 에서 inactive 로 이관된다.
+    """
+
     ACTIVE = "active"
     INACTIVE = "inactive"
-    REJECTED = "rejected"
 
 
 class GroupRole(StrEnum):

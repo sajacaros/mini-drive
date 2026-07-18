@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditLog, File, Group, GroupMember, Share, User
 from app.models.enums import UserRole, UserStatus
-from app.services.users import create_root_folder
 
 
 class AdminActionError(Exception):
@@ -28,26 +27,14 @@ class AdminActionError(Exception):
 
 # --- 순수 상태 전이 검증 (DB 무관, 단위 테스트 대상) ---------------------------
 
-# PATCH 로 직접 지정 가능한 status (approve/reject 전용 전이는 제외).
+# PATCH 로 직접 지정 가능한 status (가입 코드제에서는 active/inactive 만 존재).
 _PATCHABLE_STATUSES = {UserStatus.ACTIVE, UserStatus.INACTIVE}
-
-
-def check_can_approve(current_status: str) -> None:
-    if current_status != UserStatus.PENDING:
-        raise AdminActionError(409, "가입 신청(pending) 상태의 사용자만 승인할 수 있습니다.")
-
-
-def check_can_reject(current_status: str) -> None:
-    if current_status != UserStatus.PENDING:
-        raise AdminActionError(409, "가입 신청(pending) 상태의 사용자만 거절할 수 있습니다.")
 
 
 def check_status_update(new_status: UserStatus) -> None:
     if new_status not in _PATCHABLE_STATUSES:
         raise AdminActionError(
-            422,
-            "status 는 active/inactive 만 지정할 수 있습니다 "
-            "(승인은 approve, 거절은 reject 사용).",
+            422, "status 는 active/inactive 만 지정할 수 있습니다."
         )
 
 
@@ -97,7 +84,7 @@ async def list_users(
     page: int,
     size: int,
 ) -> tuple[list[User], int]:
-    """사용자 목록 + 총 개수. status 로 필터링(예: pending)."""
+    """사용자 목록 + 총 개수. status 로 필터링(active/inactive)."""
     base = select(User)
     count_q = select(func.count()).select_from(User)
     if status_filter is not None:
@@ -118,31 +105,6 @@ async def _get_target(session: AsyncSession, user_id: int) -> User:
     user = await session.get(User, user_id)
     if user is None:
         raise AdminActionError(404, "사용자를 찾을 수 없습니다.")
-    return user
-
-
-async def approve_user(session: AsyncSession, actor: User, user_id: int) -> User:
-    """pending → active + 루트 폴더 생성 + 감사 로그 (PRD 6.7)."""
-    user = await _get_target(session, user_id)
-    check_can_approve(user.status)
-
-    user.status = UserStatus.ACTIVE
-    await create_root_folder(session, user)
-    _record_audit(session, actor.id, "user.approve", user.id, {"status": "active"})
-    await session.commit()
-    await session.refresh(user)
-    return user
-
-
-async def reject_user(session: AsyncSession, actor: User, user_id: int) -> User:
-    """pending → rejected + 감사 로그 (PRD 6.7)."""
-    user = await _get_target(session, user_id)
-    check_can_reject(user.status)
-
-    user.status = UserStatus.REJECTED
-    _record_audit(session, actor.id, "user.reject", user.id, {"status": "rejected"})
-    await session.commit()
-    await session.refresh(user)
     return user
 
 

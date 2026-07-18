@@ -10,12 +10,11 @@ from sqlalchemy import text
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.core.database import SessionFactory, engine
+from app.core.database import engine
 from app.core.logging import configure_logging, get_logger
 from app.core.metrics import render_metrics
 from app.core.middleware import RequestContextMiddleware
 from app.core.redis import redis_client
-from app.services.users import ensure_admin_bootstrap
 
 # import 시점에 로깅을 구성해 uvicorn/테스트 어느 진입점에서도 일관 포맷을 보장한다.
 configure_logging()
@@ -24,11 +23,7 @@ _log = get_logger("app.lifecycle")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # admin 부트스트랩 — ADMIN_EMAIL 계정이 없으면 active/admin + 루트 폴더 생성 (PRD 3.6.2).
-    async with SessionFactory() as session:
-        await ensure_admin_bootstrap(
-            session, settings.admin_email, settings.admin_initial_password
-        )
+    # 첫 admin 은 셋업 위저드(POST /api/setup)로 생성한다 — 기동 시 시드하지 않는다 (PRD 3.6.2).
     _log.info("startup_complete", app=settings.app_name, environment=settings.environment)
     yield
     await engine.dispose()

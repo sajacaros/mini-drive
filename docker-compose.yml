@@ -36,8 +36,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       REDIS_URL: redis://redis:6379/0
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
-      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-change-me-in-production}
+      # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
+      # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
     depends_on:
       db:
         condition: service_healthy

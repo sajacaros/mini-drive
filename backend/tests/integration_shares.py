@@ -26,7 +26,7 @@ from app.core.redis import redis_client
 from app.main import app
 from app.models import Share
 from app.services.storage import storage_service
-from app.services.users import ensure_admin_bootstrap
+from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
@@ -54,25 +54,10 @@ async def _reset() -> None:
     storage_service.delete_many(leftover)
 
 
-async def _approved_alice_headers(c: httpx.AsyncClient) -> dict[str, str]:
-    r = await c.post(
-        "/api/auth/login",
-        json={"email": settings.admin_email, "password": settings.admin_initial_password},
-    )
-    assert r.status_code == 200, r.text
-    admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-    r = await c.post("/api/auth/register", json=ALICE)
-    assert r.status_code == 201, r.text
-    alice_id = r.json()["id"]
-    r = await c.post(f"/api/admin/users/{alice_id}/approve", headers=admin_h)
-    assert r.status_code == 200, r.text
-
-    r = await c.post(
-        "/api/auth/login", json={"email": ALICE["email"], "password": ALICE["password"]}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+async def _active_alice_headers(c: httpx.AsyncClient) -> dict[str, str]:
+    _admin_h, code = await setup_admin(c)
+    alice_h, _alice_id = await register_active(c, code, ALICE)
+    return alice_h
 
 
 async def _upload(c: httpx.AsyncClient, headers: dict[str, str], name: str) -> int:
@@ -107,17 +92,10 @@ async def _set_expired(share_url: str) -> None:
 async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
     await _reset()
 
-    async with SessionFactory() as session:
-        admin = await ensure_admin_bootstrap(
-            session, settings.admin_email, settings.admin_initial_password
-        )
-    assert admin is not None
-    _ok("admin 부트스트랩")
-
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=60) as c:
-        alice_h = await _approved_alice_headers(c)
-        _ok("alice 승인/로그인")
+        alice_h = await _active_alice_headers(c)
+        _ok("셋업 + 코드 가입 → alice 로그인")
 
         # --- 기본 공유: 생성 → 메타 → 다운로드(바이트 일치) --------------------
         file_id = await _upload(c, alice_h, "hello.bin")

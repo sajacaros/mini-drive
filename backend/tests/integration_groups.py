@@ -22,12 +22,12 @@ from httpx import ASGITransport
 from sqlalchemy import func, select
 
 import app.models  # noqa: F401 - 전체 모델을 metadata 에 등록
-from app.core.config import settings
 from app.core.database import Base, SessionFactory, engine
 from app.core.redis import redis_client
 from app.main import app
 from app.models import AuditLog, File, FileGroupPermission, GroupMember, User
-from app.services.users import create_root_folder, ensure_admin_bootstrap
+from app.services.users import create_root_folder
+from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
 USERS = {
@@ -48,30 +48,6 @@ async def _reset() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
-
-
-async def _admin_headers(c: httpx.AsyncClient) -> dict[str, str]:
-    r = await c.post(
-        "/api/auth/login",
-        json={"email": settings.admin_email, "password": settings.admin_initial_password},
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
-
-async def _register_approve(
-    c: httpx.AsyncClient, admin_h: dict[str, str], creds: dict[str, str]
-) -> tuple[dict[str, str], int]:
-    r = await c.post("/api/auth/register", json=creds)
-    assert r.status_code == 201, r.text
-    uid = r.json()["id"]
-    r = await c.post(f"/api/admin/users/{uid}/approve", headers=admin_h)
-    assert r.status_code == 200, r.text
-    r = await c.post(
-        "/api/auth/login", json={"email": creds["email"], "password": creds["password"]}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}, uid
 
 
 async def _member_row_count(group_id: int, user_id: int) -> int:
@@ -106,23 +82,16 @@ def _role_of(members: list[dict], uid: int) -> str | None:
 async def scenario() -> None:  # noqa: C901 - 순차 시나리오
     await _reset()
 
-    async with SessionFactory() as session:
-        admin = await ensure_admin_bootstrap(
-            session, settings.admin_email, settings.admin_initial_password
-        )
-    assert admin is not None
-    _ok("admin 부트스트랩")
-
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test", timeout=60
     ) as c:
-        admin_h = await _admin_headers(c)
-        alice_h, alice_id = await _register_approve(c, admin_h, USERS["alice"])
-        bob_h, bob_id = await _register_approve(c, admin_h, USERS["bob"])
-        carol_h, carol_id = await _register_approve(c, admin_h, USERS["carol"])
-        dave_h, dave_id = await _register_approve(c, admin_h, USERS["dave"])
-        _ok("4명 사용자 승인/로그인")
+        admin_h, code = await setup_admin(c)
+        alice_h, alice_id = await register_active(c, code, USERS["alice"])
+        bob_h, bob_id = await register_active(c, code, USERS["bob"])
+        carol_h, carol_id = await register_active(c, code, USERS["carol"])
+        dave_h, dave_id = await register_active(c, code, USERS["dave"])
+        _ok("셋업 + 코드로 4명 즉시 active 가입")
 
         # 1. 그룹 생성 — 생성자가 owner 자동 등록
         r = await c.post(
@@ -200,18 +169,26 @@ async def scenario() -> None:  # noqa: C901 - 순차 시나리오
         assert r.status_code == 400, r.text
         _ok("owner 직접 부여 400")
 
-        # 9. 비활성 사용자 초대 불가 — pending 사용자 생성
+        # 9. 비활성 사용자 초대 불가 — 코드 가입 후 admin 이 inactive 로 전환
         r = await c.post("/api/auth/register", json={
-            "email": "pending@example.com", "password": "Passw0rd!", "display_name": "Pend"
+            "email": "inactive@example.com", "password": "Passw0rd!",
+            "display_name": "Inact", "signup_code": code,
         })
-        pending_id = r.json()["id"]
+        assert r.status_code == 201, r.text
+        inactive_id = r.json()["id"]
+        r = await c.patch(
+            f"/api/admin/users/{inactive_id}",
+            headers=admin_h,
+            json={"status": "inactive"},
+        )
+        assert r.status_code == 200, r.text
         r = await c.post(
             f"/api/groups/{gid}/members",
             headers=alice_h,
-            json={"user_id": pending_id, "role": "member"},
+            json={"user_id": inactive_id, "role": "member"},
         )
         assert r.status_code == 400, r.text
-        _ok("비활성(pending) 사용자 초대 400")
+        _ok("비활성 사용자 초대 400")
 
         # 10. 역할 변경 — owner 가 bob(member) → admin 승격
         r = await c.put(

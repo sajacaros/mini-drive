@@ -43,9 +43,8 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://redis:6379/0"
 
-    # 첫 admin 부트스트랩 (PRD 3.6.2)
-    admin_email: str = "admin@example.com"
-    admin_initial_password: str = "change-me-in-production"
+    # 첫 admin 은 셋업 위저드(POST /api/setup)로 생성한다 (PRD 3.6.2).
+    # ADMIN_* 환경변수 시드는 제거됨 — 운영 중 비상 복구는 CLI `python -m app.cli create-admin`.
 
     # CORS: 프론트엔드 오리진 (게이트웨이 경유 시 동일 오리진이므로 로컬 개발용)
     cors_origins: list[str] = ["http://localhost", "http://localhost:5173"]

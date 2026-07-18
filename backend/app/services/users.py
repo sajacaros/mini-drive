@@ -1,6 +1,6 @@
-"""사용자 프로비저닝 로직 — 루트 폴더 생성, admin 부트스트랩, 상태 전이 규칙.
+"""사용자 프로비저닝 로직 — 루트 폴더 생성, 이메일 조회.
 
-가입 승인 시점(및 admin 부트스트랩)에 사용자별 루트 폴더 행을 생성한다
+가입(가입 코드 검증 통과) 및 admin 생성 시점에 사용자별 루트 폴더 행을 생성한다
 (files: is_folder=TRUE, parent_folder_id=NULL, name='root') — PRD 5.2 루트 폴더 규약.
 """
 
@@ -9,9 +9,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import hash_password
 from app.models import File, User
-from app.models.enums import UserRole, UserStatus
+from app.models.enums import UserStatus
 
 # 루트 폴더 행 규약 (PRD 5.2). parent_folder_id=NULL 은 루트 행에만 허용된다.
 ROOT_FOLDER_NAME = "root"
@@ -77,28 +76,3 @@ async def create_root_folder(session: AsyncSession, user: User) -> File:
     session.add(root)
     await session.flush()
     return root
-
-
-async def ensure_admin_bootstrap(
-    session: AsyncSession, email: str, password: str
-) -> User | None:
-    """ADMIN_EMAIL 계정이 없으면 active/admin 으로 생성하고 루트 폴더를 만든다.
-
-    생성한 경우 User 를, 이미 존재하면 None 을 반환한다 (PRD 3.6.2).
-    """
-    existing = await get_user_by_email(session, email)
-    if existing is not None:
-        return None
-
-    admin = User(
-        email=email,
-        password_hash=hash_password(password),
-        display_name="Administrator",
-        role=UserRole.ADMIN,
-        status=UserStatus.ACTIVE,
-    )
-    session.add(admin)
-    await session.flush()
-    await create_root_folder(session, admin)
-    await session.commit()
-    return admin

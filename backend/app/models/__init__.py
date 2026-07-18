@@ -5,6 +5,7 @@
 """
 
 from app.core.database import Base
+from app.models.app_setting import AppSetting
 from app.models.audit import AuditLog
 from app.models.enums import (
     GroupPermission,
@@ -17,6 +18,7 @@ from app.models.file import File, FileVersion
 from app.models.group import Group, GroupMember
 from app.models.permission import FileGroupPermission
 from app.models.share import Share
+from app.models.signup_code import SignupCode
 from app.models.upload_session import UploadSession
 from app.models.user import User
 
@@ -32,6 +34,8 @@ __all__ = [
     "FileGroupPermission",
     "AuditLog",
     "UploadSession",
+    "SignupCode",
+    "AppSetting",
     # 열거형
     "UserRole",
     "UserStatus",

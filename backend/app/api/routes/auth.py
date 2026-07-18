@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import (
     CurrentUser,
@@ -30,8 +31,10 @@ from app.schemas.auth import (
     UserResponse,
 )
 from app.services.auth import RefreshError, issue_token_pair, rotate_refresh_token
+from app.services.setup import get_default_max_storage
+from app.services.signup_codes import SignupCodeError, consume_signup_code
 from app.services.tokens import revoke_refresh_token
-from app.services.users import get_user_by_email
+from app.services.users import create_root_folder, get_user_by_email
 
 router = APIRouter()
 
@@ -43,26 +46,47 @@ router = APIRouter()
     dependencies=[Depends(rate_limit_ip("register", "rate_limit_register_per_min"))],
 )
 async def register(payload: RegisterRequest, session: DbSession) -> RegisterResponse:
-    """회원가입 — status='pending' 으로 생성. 관리자 승인 후 로그인 가능 (PRD 3.1)."""
+    """회원가입 — 가입 코드 검증 통과 시 즉시 status='active' (PRD 3.1, 5.11).
+
+    코드 소비(원자적 use_count 증가)와 사용자 생성을 한 트랜잭션으로 묶어, 가입이 실패하면
+    코드 소비도 함께 롤백된다. 이메일 경합은 unique 제약(IntegrityError)으로 최종 방어한다.
+    """
     try:
         validate_password_policy(payload.password)
     except PasswordPolicyError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
     if await get_user_by_email(session, payload.email) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="이미 등록된 이메일입니다."
         )
 
+    try:
+        await consume_signup_code(session, payload.signup_code)
+    except SignupCodeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    max_storage = await get_default_max_storage(session)
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
         display_name=payload.display_name,
         role=UserRole.USER,
-        status=UserStatus.PENDING,
+        status=UserStatus.ACTIVE,
+        max_storage=max_storage,
     )
     session.add(user)
-    await session.commit()
+    try:
+        await session.flush()
+        await create_root_folder(session, user)
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="이미 등록된 이메일입니다."
+        ) from exc
     await session.refresh(user)
     return RegisterResponse(id=user.id, email=user.email, status=user.status)
 
@@ -81,15 +105,10 @@ async def login(payload: LoginRequest, session: DbSession, redis: RedisClient) -
             detail="이메일 또는 비밀번호가 올바르지 않습니다.",
         )
 
-    if user.status == UserStatus.PENDING:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="관리자 승인 대기 중인 계정입니다. 승인 후 이용 가능합니다.",
-        )
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="비활성화되었거나 거절된 계정입니다.",
+            detail="비활성화된 계정입니다. 관리자에게 문의하세요.",
         )
 
     return await issue_token_pair(redis, user.id)

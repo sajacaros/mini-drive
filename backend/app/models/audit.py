@@ -22,8 +22,8 @@ class AuditLog(Base):
     actor_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id"), nullable=False
     )
-    # 예: user.approve, user.reject, user.deactivate, user.quota_update,
-    #     share.force_disable, permission.grant (PRD 5.9).
+    # 예: user.update, share.force_disable, permission.grant,
+    #     signup_code.create, signup_code.update (PRD 5.9).
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     target_type: Mapped[str] = mapped_column(String(30), nullable=False)
     target_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

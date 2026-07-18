@@ -20,9 +20,14 @@ from app.schemas.admin import (
     AdminUserResponse,
     UserUpdateRequest,
 )
+from app.schemas.signup_codes import (
+    SignupCodeCreateRequest,
+    SignupCodeListResponse,
+    SignupCodeResponse,
+    SignupCodeUpdateRequest,
+)
 from app.services.admin import (
     AdminActionError,
-    approve_user,
     force_disable_share,
     get_share_detail,
     get_stats,
@@ -30,8 +35,13 @@ from app.services.admin import (
     list_groups,
     list_shares,
     list_users,
-    reject_user,
     update_user,
+)
+from app.services.signup_codes import (
+    SignupCodeError,
+    create_signup_code,
+    list_signup_codes,
+    update_signup_code,
 )
 
 # 라우터 전체에 관리자 인가를 일괄 적용한다 (PRD 3.6.4).
@@ -41,7 +51,9 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 @router.get("/users", response_model=AdminUserListResponse)
 async def get_users(
     session: DbSession,
-    status: Annotated[str | None, Query(description="상태 필터 (예: pending)")] = None,
+    status: Annotated[
+        str | None, Query(description="상태 필터 (active/inactive)")
+    ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> AdminUserListResponse:
@@ -55,24 +67,64 @@ async def get_users(
     )
 
 
-@router.post("/users/{user_id}/approve", response_model=AdminUserResponse)
-async def approve(user_id: int, admin: AdminUser, session: DbSession) -> AdminUserResponse:
-    """가입 승인 (pending → active) + 루트 폴더 생성 (PRD 6.7)."""
-    try:
-        user = await approve_user(session, admin, user_id)
-    except AdminActionError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return AdminUserResponse.model_validate(user)
+# --- 가입 코드 관리 (PRD 6.7) ------------------------------------------------
 
 
-@router.post("/users/{user_id}/reject", response_model=AdminUserResponse)
-async def reject(user_id: int, admin: AdminUser, session: DbSession) -> AdminUserResponse:
-    """가입 거절 (pending → rejected) (PRD 6.7)."""
+@router.post(
+    "/signup-codes",
+    response_model=SignupCodeResponse,
+    status_code=201,
+)
+async def create_code(
+    payload: SignupCodeCreateRequest, admin: AdminUser, session: DbSession
+) -> SignupCodeResponse:
+    """가입 코드 발급 (memo/expires_at/max_uses, code 미지정 시 자동 생성) — PRD 6.7."""
+    code = await create_signup_code(
+        session,
+        admin.id,
+        memo=payload.memo,
+        expires_at=payload.expires_at,
+        max_uses=payload.max_uses,
+        code=payload.code,
+    )
+    await session.commit()
+    await session.refresh(code)
+    return SignupCodeResponse.model_validate(code)
+
+
+@router.get("/signup-codes", response_model=SignupCodeListResponse)
+async def get_codes(
+    session: DbSession,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> SignupCodeListResponse:
+    """가입 코드 목록·사용 현황 조회 (최신순) — PRD 6.7."""
+    items, total = await list_signup_codes(session, page, size)
+    return SignupCodeListResponse(
+        items=[SignupCodeResponse.model_validate(c) for c in items],
+        total=total,
+        page=page,
+        size=size,
+    )
+
+
+@router.patch("/signup-codes/{code_id}", response_model=SignupCodeResponse)
+async def patch_code(
+    code_id: int,
+    payload: SignupCodeUpdateRequest,
+    admin: AdminUser,
+    session: DbSession,
+) -> SignupCodeResponse:
+    """가입 코드 수정 (비활성화/재활성화, 만료·횟수·메모 조정) — PRD 6.7."""
     try:
-        user = await reject_user(session, admin, user_id)
-    except AdminActionError as exc:
+        code = await update_signup_code(
+            session, admin.id, code_id, payload.model_dump(exclude_unset=True)
+        )
+    except SignupCodeError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return AdminUserResponse.model_validate(user)
+    await session.commit()
+    await session.refresh(code)
+    return SignupCodeResponse.model_validate(code)
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserResponse)

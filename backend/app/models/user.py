@@ -34,8 +34,9 @@ class User(Base):
     role: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text(f"'{UserRole.USER}'")
     )
+    # 가입 코드제 — 코드 검증 통과 시 즉시 active (PRD 3.1, 5.1).
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, server_default=text(f"'{UserStatus.PENDING}'")
+        String(20), nullable=False, server_default=text(f"'{UserStatus.ACTIVE}'")
     )
 
     storage_used: Mapped[int] = mapped_column(

@@ -4,7 +4,7 @@ MinIO 없이 동작하도록 파일/공유 행은 DB 로 직접 심는다(내용
 admin 은 내용 접근 불가, PRD 3.6.4). httpx(ASGITransport)로 검증한다.
 
 시나리오:
-  admin 부트스트랩 → alice/bob 승인, carol pending → 그룹/파일/공유 DB 심기 →
+  admin 생성(CLI 경로) → alice/bob active, carol inactive → 그룹/파일/공유 DB 심기 →
   admin stats(사전 데이터 반영) → groups/shares 목록 → 강제 비활성화 후 공개 메타 410 +
   audit(share.force_disable) 기록 → audit-logs 필터 → lookup(정확 일치 200/부분 404/비활성 404)
   → 로그인 6회째 429(Retry-After) → 다른 IP 독립 카운트 → admin 파일 내용 엔드포인트 부재.
@@ -29,10 +29,12 @@ from app.core.redis import redis_client
 from app.main import app
 from app.models import AuditLog, File, Group, GroupMember, Share, User
 from app.models.enums import GroupRole, SharePermission, UserRole, UserStatus
-from app.services.users import create_root_folder, ensure_admin_bootstrap
+from app.services.setup import create_admin_account
+from app.services.users import create_root_folder
+from tests._bootstrap import ADMIN_EMAIL, ADMIN_PASSWORD
 from tests._dbreset import stamp_alembic_head
 
-ADMIN = {"email": settings.admin_email, "password": settings.admin_initial_password}
+ADMIN = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
 BOB = {"email": "bob@example.com", "password": "Passw0rd!", "display_name": "Bob"}
 CAROL = {"email": "carol@example.com", "password": "Passw0rd!", "display_name": "Carol"}
@@ -53,9 +55,8 @@ async def _reset() -> None:
 async def _seed() -> dict[str, int]:
     """DB 로 사용자/그룹/파일/공유를 직접 심는다. 반환: 주요 id 매핑."""
     async with SessionFactory() as s:
-        admin = await ensure_admin_bootstrap(
-            s, settings.admin_email, settings.admin_initial_password
-        )
+        admin = await create_admin_account(s, ADMIN_EMAIL, ADMIN_PASSWORD)
+        await s.commit()
     assert admin is not None
 
     from app.core.security import hash_password
@@ -73,7 +74,7 @@ async def _seed() -> dict[str, int]:
         )
         carol = User(
             email=CAROL["email"], password_hash=hash_password(CAROL["password"]),
-            display_name=CAROL["display_name"], role=UserRole.USER, status=UserStatus.PENDING,
+            display_name=CAROL["display_name"], role=UserRole.USER, status=UserStatus.INACTIVE,
         )
         s.add_all([alice, bob, carol])
         await s.flush()
@@ -150,7 +151,7 @@ async def scenario() -> None:
         assert r.status_code == 200, r.text
         st = r.json()
         assert st["users_by_status"]["active"] == 3  # admin, alice, bob
-        assert st["users_by_status"]["pending"] == 1  # carol
+        assert st["users_by_status"]["inactive"] == 1  # carol
         assert st["total_users"] == 4
         assert st["total_files"] == 2
         # 루트 폴더 3개(admin/alice/bob) 가 폴더로 집계된다.
@@ -238,13 +239,13 @@ async def scenario() -> None:
         # 부분 일치 금지.
         r = await c.get("/api/users/lookup", params={"email": "bob@example"}, headers=alice_h)
         assert r.status_code in (404, 422), r.text
-        # pending 사용자는 조회 불가.
+        # 비활성(inactive) 사용자는 조회 불가.
         r = await c.get("/api/users/lookup", params={"email": CAROL["email"]}, headers=alice_h)
         assert r.status_code == 404, r.text
         # 미인증 401.
         r = await c.get("/api/users/lookup", params={"email": BOB["email"]})
         assert r.status_code == 401, r.text
-        _ok("GET /users/lookup — 정확 일치 200 / 정규화 / 부분·pending·미인증 차단")
+        _ok("GET /users/lookup — 정확 일치 200 / 정규화 / 부분·inactive·미인증 차단")
 
         # 7. 로그인 rate limit — 6회째 429 (Retry-After), 다른 IP 독립.
         settings.rate_limit_login_per_min = 5
