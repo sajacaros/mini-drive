@@ -140,3 +140,98 @@ export interface AdminUserListResponse {
   page: number;
   size: number;
 }
+
+// --- 그룹 (PRD 6.4) --------------------------------------------------------
+
+export type GroupRole = "owner" | "admin" | "member";
+
+/** 그룹 기본 정보. */
+export interface Group {
+  id: number;
+  name: string;
+  description: string | null;
+  owner_user_id: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 그룹 목록 항목 — 멤버 수 + 내 역할 포함 (GET /api/groups). */
+export interface GroupSummary extends Group {
+  member_count: number;
+  my_role: GroupRole | null;
+}
+
+export interface GroupListResponse {
+  items: GroupSummary[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** 활성 그룹원. */
+export interface GroupMember {
+  user_id: number;
+  email: string;
+  display_name: string;
+  role: GroupRole;
+  joined_at: string;
+}
+
+/** 그룹 상세 — 기본 정보 + 멤버 목록 (GET /api/groups/{id}). */
+export interface GroupDetail extends GroupSummary {
+  members: GroupMember[];
+}
+
+// --- 권한 (PRD 6.5/6.6) ----------------------------------------------------
+
+export type GroupPermissionLevel = "read" | "write" | "manage";
+
+/** 파일에 직접 부여된 그룹 권한. */
+export interface DirectPermission {
+  group_id: number;
+  group_name: string;
+  permission: string;
+  inherit_to_children: boolean;
+  granted_at: string;
+  expires_at: string | null;
+  granted_by: number;
+}
+
+/** 조상 폴더에서 상속되어 유효한 그룹 권한. */
+export interface InheritedPermission {
+  group_id: number;
+  group_name: string;
+  permission: string;
+  source_file_id: number;
+  source_file_name: string;
+  depth: number;
+  expires_at: string | null;
+}
+
+/** 파일 권한 목록 — 직접 부여 + 유효 상속 (GET /api/files/{id}/permissions). */
+export interface FilePermissions {
+  file_id: number;
+  direct: DirectPermission[];
+  inherited: InheritedPermission[];
+}
+
+/** 내 유효 권한 (GET /api/permissions/check/{fileId}). */
+export interface PermissionCheck {
+  file_id: number;
+  permission: "read" | "write" | "manage" | "none";
+  via: "owner" | "group" | "admin" | "none";
+  source_file_id: number | null;
+}
+
+/** 공유된 항목(부여 지점) 하나 (GET /api/files/shared-with-me). */
+export interface SharedItem {
+  file: FileNode;
+  group_id: number;
+  group_name: string;
+  permission: string;
+}
+
+export interface SharedWithMeResponse {
+  items: SharedItem[];
+}

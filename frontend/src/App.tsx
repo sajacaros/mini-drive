@@ -6,10 +6,13 @@ import { Layout } from "@/components/Layout";
 import { Toaster } from "@/components/Toast";
 import { LoadingState } from "@/components/ui";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
-import { FileBrowserPage } from "@/pages/FileBrowserPage";
+import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPage";
+import { GroupDetailPage } from "@/pages/GroupDetailPage";
+import { GroupsPage } from "@/pages/GroupsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { PublicSharePage } from "@/pages/PublicSharePage";
 import { RegisterPage } from "@/pages/RegisterPage";
+import { SharedWithMePage } from "@/pages/SharedWithMePage";
 import { SharesPage } from "@/pages/SharesPage";
 import { TrashPage } from "@/pages/TrashPage";
 import { useAuthStore } from "@/store/auth";
@@ -44,6 +47,10 @@ function App() {
             <Route path="/" element={<FileBrowserPage />} />
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/shares" element={<SharesPage />} />
+            <Route path="/shared" element={<SharedWithMePage />} />
+            <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
+            <Route path="/groups" element={<GroupsPage />} />
+            <Route path="/groups/:id" element={<GroupDetailPage />} />
           </Route>
         </Route>
 

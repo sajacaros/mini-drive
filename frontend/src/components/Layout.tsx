@@ -6,6 +6,7 @@ import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
 import {
   DriveIcon,
+  InboxIcon,
   LinkIcon,
   LogoutIcon,
   TrashIcon,
@@ -37,6 +38,8 @@ export function Layout() {
 
         <nav className="flex flex-1 flex-col gap-1 px-3">
           <NavItem to="/" icon={<DriveIcon />} label="내 드라이브" end />
+          <NavItem to="/shared" icon={<InboxIcon />} label="공유됨" />
+          <NavItem to="/groups" icon={<UsersIcon />} label="그룹" />
           <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" />
           <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" />
           {user?.role === "admin" && (

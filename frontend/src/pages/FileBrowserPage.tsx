@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { errorStatus, extractErrorMessage } from "@/api/client";
 import {
   createFolder,
+  getFile,
   listFiles,
   renameFile,
   reuploadFile,
   softDeleteFile,
   uploadFile,
 } from "@/api/files";
+import { checkPermission } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { PermissionModal } from "@/components/PermissionModal";
 import { ShareModal } from "@/components/ShareModal";
 import { VersionHistoryModal } from "@/components/VersionHistoryModal";
 import { useToast } from "@/components/Toast";
@@ -23,11 +27,13 @@ import {
   PlusIcon,
   RenameIcon,
   ShareIcon,
+  ShieldIcon,
   TrashIcon,
   UploadIcon,
 } from "@/components/icons";
 import { downloadFile } from "@/lib/download";
 import { formatBytes, formatDateTime } from "@/lib/format";
+import { permissionCovers } from "@/lib/labels";
 import { useAuthStore } from "@/store/auth";
 
 const PAGE_SIZE = 50;
@@ -46,11 +52,24 @@ interface UploadTask {
 
 let uploadSeq = 0;
 
-export function FileBrowserPage() {
+interface FileBrowserPageProps {
+  /** 진입 루트 폴더 id. null 이면 내 드라이브 루트. */
+  rootId?: number | null;
+  /** 루트 breadcrumb 표시명. */
+  rootName?: string;
+  /** 공유 폴더 탐색 모드 — 내 유효 권한(check)에 따라 액션을 게이팅한다. */
+  shared?: boolean;
+}
+
+export function FileBrowserPage({
+  rootId = null,
+  rootName = "내 드라이브",
+  shared = false,
+}: FileBrowserPageProps) {
   const toast = useToast();
   const refreshUser = useAuthStore((s) => s.refreshUser);
 
-  const [path, setPath] = useState<Crumb[]>([{ id: null, name: "내 드라이브" }]);
+  const [path, setPath] = useState<Crumb[]>([{ id: rootId, name: rootName }]);
   const [items, setItems] = useState<FileNode[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -59,11 +78,15 @@ export function FileBrowserPage() {
   const [dragOver, setDragOver] = useState(false);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
 
+  // 현재 폴더에 대한 내 유효 권한 수준 (own 모드는 항상 manage=소유자).
+  const [perm, setPerm] = useState<string>(shared ? "none" : "manage");
+
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [renameTarget, setRenameTarget] = useState<FileNode | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [shareTarget, setShareTarget] = useState<FileNode | null>(null);
+  const [permTarget, setPermTarget] = useState<FileNode | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileNode | null>(null);
   const [versionsTarget, setVersionsTarget] = useState<FileNode | null>(null);
   // 새 버전 업로드: 파일 선택 대기 대상, 그리고 409 충돌 시 강제 덮어쓰기 후보.
@@ -74,6 +97,9 @@ export function FileBrowserPage() {
   const versionInputRef = useRef<HTMLInputElement>(null);
   const current = path[path.length - 1];
   const parentId = current.id;
+
+  const canWrite = permissionCovers(perm, "write");
+  const canManage = permissionCovers(perm, "manage");
 
   const load = useCallback(
     async (pid: number | null, pageNum: number) => {
@@ -95,6 +121,28 @@ export function FileBrowserPage() {
   useEffect(() => {
     void load(parentId, page);
   }, [parentId, page, load]);
+
+  // 공유 모드: 폴더가 바뀔 때마다 현재 폴더의 내 유효 권한을 재확인해 액션을 게이팅한다.
+  useEffect(() => {
+    if (!shared) {
+      setPerm("manage");
+      return;
+    }
+    if (parentId == null) return;
+    let cancelled = false;
+    setPerm("none");
+    void (async () => {
+      try {
+        const res = await checkPermission(parentId);
+        if (!cancelled) setPerm(res.permission);
+      } catch {
+        if (!cancelled) setPerm("none");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shared, parentId]);
 
   const reload = () => load(parentId, page);
 
@@ -138,7 +186,9 @@ export function FileBrowserPage() {
             ? "저장 용량 초과"
             : status === 409
               ? "같은 이름의 파일이 있습니다"
-              : extractErrorMessage(err, "업로드 실패");
+              : status === 403 || status === 404
+                ? "이 폴더에 업로드할 권한이 없습니다"
+                : extractErrorMessage(err, "업로드 실패");
         setUploads((u) => u.map((t) => (t.id === id ? { ...t, error: msg } : t)));
         toast.error(`${list[i].name}: ${msg}`);
       }
@@ -193,6 +243,7 @@ export function FileBrowserPage() {
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragOver(false);
+    if (!canWrite) return;
     if (e.dataTransfer.files.length > 0) void runUpload(e.dataTransfer.files);
   };
 
@@ -277,14 +328,18 @@ export function FileBrowserPage() {
         </nav>
 
         <div className="flex shrink-0 gap-2">
-          <button className="btn btn-secondary" onClick={() => setNewFolderOpen(true)}>
-            <PlusIcon width={16} height={16} />
-            새 폴더
-          </button>
-          <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
-            <UploadIcon width={16} height={16} />
-            업로드
-          </button>
+          {canWrite && (
+            <>
+              <button className="btn btn-secondary" onClick={() => setNewFolderOpen(true)}>
+                <PlusIcon width={16} height={16} />
+                새 폴더
+              </button>
+              <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
+                <UploadIcon width={16} height={16} />
+                업로드
+              </button>
+            </>
+          )}
           <input
             ref={fileInputRef}
             type="file"
@@ -311,13 +366,14 @@ export function FileBrowserPage() {
       <div
         className="relative flex-1 overflow-auto p-6"
         onDragOver={(e) => {
+          if (!canWrite) return;
           e.preventDefault();
           setDragOver(true);
         }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
       >
-        {dragOver && (
+        {dragOver && canWrite && (
           <div className="pointer-events-none absolute inset-4 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-[color:var(--accent)] bg-blue-50/70">
             <p className="font-medium text-[color:var(--accent)]">여기에 놓아 업로드</p>
           </div>
@@ -355,11 +411,18 @@ export function FileBrowserPage() {
           <EmptyState
             icon={<FolderIcon width={40} height={40} />}
             title="이 폴더가 비어 있습니다"
-            hint="파일을 끌어다 놓거나 업로드 버튼을 눌러 시작하세요."
+            hint={
+              canWrite
+                ? "파일을 끌어다 놓거나 업로드 버튼을 눌러 시작하세요."
+                : "표시할 항목이 없습니다."
+            }
           />
         ) : (
           <FileTable
             items={items}
+            shared={shared}
+            canWrite={canWrite}
+            canManage={canManage}
             onOpenFolder={openFolder}
             onDownload={onDownload}
             onRename={(f) => {
@@ -367,6 +430,7 @@ export function FileBrowserPage() {
               setRenameValue(f.name);
             }}
             onShare={(f) => setShareTarget(f)}
+            onPermissions={(f) => setPermTarget(f)}
             onDelete={(f) => setDeleteTarget(f)}
             onVersions={(f) => setVersionsTarget(f)}
             onNewVersion={startVersionUpload}
@@ -513,6 +577,12 @@ export function FileBrowserPage() {
         onCreated={() => toast.success("공유 링크를 만들었습니다.")}
       />
 
+      <PermissionModal
+        file={permTarget}
+        open={permTarget !== null}
+        onClose={() => setPermTarget(null)}
+      />
+
       <VersionHistoryModal
         file={versionsTarget}
         open={versionsTarget !== null}
@@ -526,21 +596,80 @@ export function FileBrowserPage() {
   );
 }
 
+/**
+ * 공유 폴더 진입 라우트 래퍼 (/shared/f/:fileId).
+ * 폴더명은 route state 로 전달받고, 없으면(직접 링크/새로고침) 메타데이터로 보강한다.
+ */
+export function SharedFolderBrowserPage() {
+  const { fileId } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const id = Number(fileId);
+  const stateName = (location.state as { name?: string } | null)?.name;
+  const [name, setName] = useState<string | null>(stateName ?? null);
+  const [notFound, setNotFound] = useState(false);
+
+  useEffect(() => {
+    if (name != null || Number.isNaN(id)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const meta = await getFile(id);
+        if (!cancelled) setName(meta.name);
+      } catch {
+        if (!cancelled) setNotFound(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, name]);
+
+  if (Number.isNaN(id) || notFound) {
+    return (
+      <div className="flex h-screen flex-col p-6">
+        <ErrorState
+          message="공유 폴더를 열 수 없습니다."
+          onRetry={() => navigate("/shared", { replace: true })}
+        />
+      </div>
+    );
+  }
+
+  if (name == null) {
+    return (
+      <div className="flex h-screen flex-col">
+        <LoadingState />
+      </div>
+    );
+  }
+
+  return <FileBrowserPage rootId={id} rootName={name} shared />;
+}
+
 function FileTable({
   items,
+  shared,
+  canWrite,
+  canManage,
   onOpenFolder,
   onDownload,
   onRename,
   onShare,
+  onPermissions,
   onDelete,
   onVersions,
   onNewVersion,
 }: {
   items: FileNode[];
+  shared: boolean;
+  canWrite: boolean;
+  canManage: boolean;
   onOpenFolder: (f: FileNode) => void;
   onDownload: (f: FileNode) => void;
   onRename: (f: FileNode) => void;
   onShare: (f: FileNode) => void;
+  onPermissions: (f: FileNode) => void;
   onDelete: (f: FileNode) => void;
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
@@ -553,7 +682,7 @@ function FileTable({
             <th className="px-4 py-2.5 font-medium">이름</th>
             <th className="w-28 px-4 py-2.5 font-medium">크기</th>
             <th className="w-40 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-56 px-4 py-2.5" />
+            <th className="w-64 px-4 py-2.5" />
           </tr>
         </thead>
         <tbody>
@@ -583,23 +712,37 @@ function FileTable({
                       <IconAction title="다운로드" onClick={() => onDownload(f)}>
                         <DownloadIcon width={16} height={16} />
                       </IconAction>
-                      <IconAction title="새 버전 업로드" onClick={() => onNewVersion(f)}>
-                        <UploadIcon width={16} height={16} />
-                      </IconAction>
+                      {canWrite && (
+                        <IconAction title="새 버전 업로드" onClick={() => onNewVersion(f)}>
+                          <UploadIcon width={16} height={16} />
+                        </IconAction>
+                      )}
                       <IconAction title="버전 기록" onClick={() => onVersions(f)}>
                         <HistoryIcon width={16} height={16} />
                       </IconAction>
-                      <IconAction title="공유" onClick={() => onShare(f)}>
-                        <ShareIcon width={16} height={16} />
+                      {/* 공유 링크 생성은 소유자 전용 — 공유 폴더 탐색 중에는 숨긴다. */}
+                      {!shared && (
+                        <IconAction title="공유" onClick={() => onShare(f)}>
+                          <ShareIcon width={16} height={16} />
+                        </IconAction>
+                      )}
+                    </>
+                  )}
+                  {canManage && (
+                    <IconAction title="권한 관리" onClick={() => onPermissions(f)}>
+                      <ShieldIcon width={16} height={16} />
+                    </IconAction>
+                  )}
+                  {canWrite && (
+                    <>
+                      <IconAction title="이름 변경" onClick={() => onRename(f)}>
+                        <RenameIcon width={16} height={16} />
+                      </IconAction>
+                      <IconAction title="삭제" onClick={() => onDelete(f)} danger>
+                        <TrashIcon width={16} height={16} />
                       </IconAction>
                     </>
                   )}
-                  <IconAction title="이름 변경" onClick={() => onRename(f)}>
-                    <RenameIcon width={16} height={16} />
-                  </IconAction>
-                  <IconAction title="삭제" onClick={() => onDelete(f)} danger>
-                    <TrashIcon width={16} height={16} />
-                  </IconAction>
                 </div>
               </td>
             </tr>
