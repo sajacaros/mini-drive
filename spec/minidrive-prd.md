@@ -3,7 +3,7 @@
 **작성일:** 2026-07-17  
 **저자:** (미정)  
 **검토자:** (미정)  
-**상태:** Phase 1~5 구현 완료, Phase 6(셋업 위저드 + 가입 코드제) 구현 중
+**상태:** Phase 1~5 구현 완료, Phase 6(셋업 위저드 + 가입 코드제) 구현 중, Phase 7(LLM 위키 & 챗봇) 설계 확정
 
 ---
 
@@ -284,6 +284,87 @@ interface ThemeContextType {
 - 모든 admin 행위(계정 비활성화, 할당량 변경, role 변경, 공유 링크 강제 차단)는 `audit_logs`에 기록한다.
 - 인가는 FastAPI `require_admin` dependency로 `/api/admin/*` 라우터 전체에 일괄 적용한다.
 
+### 3.7 LLM 위키 & 챗봇 (LLM Wiki, Phase 7)
+
+드라이브에 축적된 사내 문서를 지식원으로 하는 **LLM 위키 + 챗봇**. Karpathy의 LLM Wiki 패턴([gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), 2026-04)과 권한 인지 RAG(permission-aware RAG)를 결합한 하이브리드다. 대원칙은 하나 — **사용자는 자신의 접근 권한 안에 있는 데이터로부터 나온 답변만 받는다.**
+
+#### 3.7.1 설계 원칙 — Karpathy 패턴 × 권한 경계
+
+Karpathy 패턴의 요지는 "전통적 RAG는 매 질문마다 원문에서 지식을 처음부터 재발견하지만, LLM이 마크다운 위키를 점진적으로 유지·성장시키면 지식이 **컴파일된 산출물**로 축적된다"는 것이다. 3계층·3연산을 Mini Drive에 다음과 같이 매핑한다.
+
+| Karpathy 3계층 | Mini Drive 매핑 |
+|---|---|
+| **Raw sources** (불변 원문) | 드라이브 파일. LLM은 원문을 절대 수정하지 않으며, 버전은 `file_versions`가 보존 |
+| **The wiki** (LLM 생성 마크다운) | 위키 스페이스의 `.md` 페이지 — **일반 드라이브 파일로 저장**하여 기존 권한·버전·미리보기 체계를 그대로 재사용 (`index.md` 카탈로그, `log.md` append-only 기록 포함) |
+| **The schema** (구조·워크플로 정의) | 스페이스 설정(`wiki_spaces.settings`) + 컴파일 지침 페이지 |
+
+| 연산 | 동작 |
+|---|---|
+| **Ingest** | 소스 등록/버전 갱신 시: Upstage Document Parse로 텍스트 추출 → 청크 분할·임베딩(`file_chunks`, RAG 인덱스) → LLM이 관련 위키 페이지 생성/갱신 + 상호링크·`index.md`·`log.md` 갱신 |
+| **Query** | 챗봇 질문 → 권한 내 검색(위키 페이지 우선 + 원문 청크 보강) → 출처 인용 답변. 가치 있는 답변은 사용자가 위키 페이지로 승격 가능 |
+| **Lint** | 정기/트리거 헬스체크: 고아 페이지, 깨진 링크, 낡은 소스(버전 갱신·권한 회수) 탐지 → 재컴파일 또는 페이지 제거 |
+
+**핵심 불변식 — 권한 경계 = 컴파일 경계.** 위키 스페이스는 `personal`(개인) 또는 `group`(그룹) 스코프를 가지며, 컴파일에 투입되는 소스는 **해당 스코프가 read 가능한 파일만**이다. 컴파일된 페이지는 스코프 소유 폴더(개인 소유 또는 `group_id` 소유)에 저장되므로, 페이지를 읽을 수 있는 사람 = 그 소스들을 읽을 수 있는 사람이 구조적으로 보장된다. 스코프를 가로지르는 컴파일(예: A그룹 문서 + B그룹 문서를 한 페이지로 종합)은 금지한다.
+
+#### 3.7.2 기능 요구사항
+
+| 기능 | 설명 | 우선순위 |
+|---|---|---|
+| **위키 스페이스 생성** | personal/group 스코프 지정, 위키 페이지가 저장될 루트 폴더 자동 생성 | P0 |
+| **소스 등록** | 파일 또는 폴더(하위 재귀)를 스페이스 소스로 등록 → Ingest 잡 큐잉. 스코프가 read 불가한 파일은 등록 거부 | P0 |
+| **자동 재인덱싱** | 소스 파일 업로드/버전 갱신/삭제 훅 → 해당 청크·위키 페이지 stale 마킹 + 재인덱싱 잡 | P0 |
+| **챗봇 질의** | 자연어 질문 → 권한 인지 검색 → 출처 인용(파일 링크) 포함 답변, SSE 스트리밍 | P0 |
+| **대화 세션** | 세션 생성/목록/이어가기, 히스토리 저장 | P1 |
+| **위키 브라우징** | 위키 페이지 마크다운 렌더링(기존 미리보기 확장), 상호링크 탐색 | P1 |
+| **답변 → 위키 승격** | 챗봇 답변을 스페이스의 위키 페이지로 저장 (Karpathy Query 연산의 "가치 있는 답변은 위키가 된다") | P1 |
+| **Lint 실행** | 수동/스케줄 헬스체크, 결과 리포트 | P1 |
+| **근거성 검증** | Upstage Groundedness Check로 답변-컨텍스트 사실 일치 검증, 불일치 시 경고 표시 | P2 |
+| **인덱싱 제외 플래그** | 민감 폴더/파일을 외부 API 전송·인덱싱 대상에서 제외 | P2 |
+
+#### 3.7.3 권한 인지 검색 (Permission-aware Retrieval)
+
+RAG는 접근 제어를 기본 제공하지 않는다 — 벡터 DB에 데이터가 있으면 권한 없는 사용자의 질문에도 답이 나갈 수 있다. 이를 **2단계 필터**로 차단한다.
+
+| 단계 | 방식 |
+|---|---|
+| **① 사전 필터 (coarse)** | 벡터 검색 SQL에 후보 파일 집합 조건 결합: `소유 파일 ∪ 내 그룹에 부여된 서브트리` (PermissionService가 산출). pgvector 쿼리가 이 집합 밖의 청크를 아예 스캔하지 않음 |
+| **② 사후 검증 (exact)** | top-k 결과의 파일 각각을 기존 단일 관문 `get_access_level`로 재검증 — 상속 재정의·`expires_at` 만료·회수 직후 캐시 무효화까지 정확 반영. 통과한 청크만 LLM 컨텍스트에 투입 |
+
+- 검색·생성은 **항상 요청 사용자 본인 자격**으로 수행한다. 서비스 계정이 전체 인덱스를 대신 뒤지는 구조 금지.
+- 답변/검색 결과 캐시는 **사용자 단위로만** 허용 — 사용자 간 공유 캐시는 권한 우회 경로가 된다.
+- **admin도 예외 없음**: 3.6.4 접근 정책 그대로 — admin은 위키/챗봇을 통해서도 타인 파일 내용에 접근할 수 없으며, 운영 메트릭(잡 큐 상태, 인덱스 규모)만 조회한다.
+- 권한 회수 시: 기존 권한 캐시 무효화(세대 카운터)에 더해, 회수된 소스를 쓰는 위키 페이지를 stale 마킹 → Lint가 해당 소스 제외 재컴파일 또는 페이지 제거.
+
+#### 3.7.4 LLM 스택 & 모델 라우팅
+
+**LangChain 1.x + LangGraph**(오케스트레이션·체크포인터) 기반. 사용 가능한 자격: 사내 vLLM 서버(GLM 5.2, OpenAI 호환 엔드포인트), Upstage API key, OpenAI API key.
+
+| 역할 | 기본 | 대안 | 비고 |
+|---|---|---|---|
+| **챗 생성** | GLM 5.2 — 사내 vLLM, `ChatOpenAI(base_url=...)` 연결 | OpenAI / ChatUpstage(Solar) | 기본을 사내 vLLM으로 두어 문서 컨텍스트의 외부 전송 최소화 |
+| **문서 파싱** | Upstage Document Parse (`UpstageDocumentParseLoader`) — PDF/오피스/스캔 OCR, 표 보존 | 텍스트·마크다운·코드는 직접 추출 | |
+| **임베딩** | Upstage `solar-embedding-1-large` (4096차원, 한국어 강점) | OpenAI `text-embedding-3-small` (1536차원) | 임베딩 모델은 배포 시 고정 — 교체 시 전체 재임베딩 필요 |
+| **근거성 검증** | `UpstageGroundednessCheck` | 생략 가능 (P2) | |
+
+- 벡터 스토어: `langchain-postgres`의 `PGVector` — 기존 PostgreSQL에 pgvector 확장만 추가, SQL 조인으로 권한 사전 필터를 벡터 검색에 직접 결합.
+- Ingest/컴파일은 비동기 워커(arq + 기존 Redis 큐, 별도 `worker` 컨테이너)가 수행 — 업로드 경로의 응답 시간에 영향 없음.
+- **egress 주의**: 파싱·임베딩에 외부 API를 쓰면 문서 내용이 사외로 전송된다. 인덱싱 제외 플래그(3.7.2)로 통제하고, 완전 폐쇄가 필요해지면 vLLM에 임베딩 모델을 추가 배포해 대체한다.
+
+#### 3.7.5 챗봇 파이프라인
+
+```
+질문 (SSE 연결)
+  → 쿼리 임베딩 (Upstage)
+  → 후보 파일 집합 산출 (PermissionService, SQL)
+  → pgvector top-k: 위키 페이지 우선 + 원문 청크 보강 (하이브리드)
+  → 사후 권한 검증 (get_access_level, 탈락 청크 폐기)
+  → GLM 5.2 생성 — 출처 인용 [파일명](링크) 강제
+  → (P2) Groundedness Check
+  → SSE 스트리밍 응답 + citations 저장
+```
+
+컨텍스트로 투입되는 파일 내용은 **데이터로만 취급**한다(프롬프트 인젝션 방어): 시스템 프롬프트와 구분자 분리, 답변 체인에는 도구 호출 권한을 부여하지 않는다.
+
 ---
 
 ## 4. 기술 스택
@@ -306,8 +387,13 @@ interface ThemeContextType {
 | | PyJWT | 최신 |
 | **Object Storage** | MinIO | 최신 (Docker 이미지) |
 | **Database** | PostgreSQL | 16+ |
-| | pgvector (선택) | 최신 |
+| | pgvector (Phase 7부터 필수 — RAG 벡터 인덱스) | 최신 |
 | **Cache / Token Store** | Redis | 7.x |
+| **LLM / RAG (Phase 7)** | LangChain / LangGraph | 1.x |
+| | langchain-upstage (Document Parse, Solar Embedding, Groundedness Check) | 최신 |
+| | langchain-postgres (`PGVector`) | 최신 |
+| | vLLM — 사내 GPU 서버의 GLM 5.2, OpenAI 호환 엔드포인트 | 외부 시스템 |
+| | arq (Redis 기반 비동기 워커) | 최신 |
 | **Reverse Proxy** | nginx | 1.27+ |
 | **Auth** | JWT (access + refresh) | — |
 | | argon2 (비밀번호 해싱) | 최신 |
@@ -526,6 +612,103 @@ CREATE TABLE app_settings (
 
 ---
 
+### 5.13 file_chunks 테이블 (RAG 인덱스, Phase 7)
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE file_chunks (
+    id              BIGSERIAL PRIMARY KEY,
+    file_id         BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    version         INT NOT NULL,               -- 인덱싱된 파일 버전 (버전 갱신 시 stale 판정 기준)
+    chunk_index     INT NOT NULL,
+    content         TEXT NOT NULL,
+    embedding       vector(4096),               -- solar-embedding-1-large 기준. OpenAI 사용 시 1536
+    token_count     INT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (file_id, version, chunk_index)
+);
+```
+
+- 청크에는 **권한 정보를 비정규화하지 않는다** — 권한은 조회 시 `files` 조인 + `get_access_level`로 판정 (5.7과 동일 철학: 조회 시 판정이라 권한 변경이 즉시 반영).
+- 인덱스: pgvector HNSW는 2,000차원(halfvec 4,000) 제한이 있어 4096차원은 인덱스 없이 정확 검색한다. 사내 규모(수십만 청크 이하)에서는 사전 필터로 후보가 좁혀져 충분하며, 초과 시 1536차원 모델로 전환 + HNSW 추가.
+- 위키 페이지(`.md` 드라이브 파일)도 동일하게 청크·임베딩되어 검색 대상이 된다.
+
+### 5.14 wiki_spaces / wiki_sources 테이블 (Phase 7)
+
+```sql
+CREATE TABLE wiki_spaces (
+    id              BIGSERIAL PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL,
+    scope           VARCHAR(20) NOT NULL,       -- personal / group
+    user_id         BIGINT REFERENCES users(id),   -- personal 스코프의 소유자
+    group_id        BIGINT REFERENCES groups(id),  -- group 스코프의 소유 그룹
+    root_folder_id  BIGINT NOT NULL REFERENCES files(id),  -- 위키 페이지가 저장되는 드라이브 폴더
+    settings        JSONB NOT NULL DEFAULT '{}',   -- 컴파일 지침, 자동 ingest 여부, 제외 패턴
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((scope = 'personal' AND user_id IS NOT NULL AND group_id IS NULL)
+        OR (scope = 'group'    AND group_id IS NOT NULL AND user_id IS NULL))
+);
+
+CREATE TABLE wiki_sources (
+    space_id        BIGINT NOT NULL REFERENCES wiki_spaces(id) ON DELETE CASCADE,
+    file_id         BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,  -- 파일 또는 폴더(재귀)
+    recursive       BOOLEAN NOT NULL DEFAULT TRUE,  -- 폴더일 때 하위 포함
+    status          VARCHAR(20) NOT NULL DEFAULT 'queued',  -- queued / indexed / stale / failed
+    last_ingested_version INT,
+    added_by        BIGINT NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (space_id, file_id)
+);
+```
+
+- 소스 등록 시 **스코프의 read 권한을 검증**한다(권한 경계 = 컴파일 경계, 3.7.1). group 스코프면 그룹이 해당 파일에 read 이상을 가져야 등록 가능.
+- 위키 페이지는 별도 테이블이 아니라 `root_folder_id` 하위의 일반 드라이브 파일 — 권한·버전·휴지통 모두 기존 체계.
+
+### 5.15 wiki_jobs 테이블 (비동기 워커 큐, Phase 7)
+
+```sql
+CREATE TABLE wiki_jobs (
+    id              BIGSERIAL PRIMARY KEY,
+    space_id        BIGINT NOT NULL REFERENCES wiki_spaces(id) ON DELETE CASCADE,
+    file_id         BIGINT REFERENCES files(id) ON DELETE SET NULL,
+    kind            VARCHAR(20) NOT NULL,       -- ingest / compile / lint
+    status          VARCHAR(20) NOT NULL DEFAULT 'queued',  -- queued / running / done / failed
+    retries         INT NOT NULL DEFAULT 0,     -- 최대 3회 재시도 후 failed
+    error           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+실행 큐 자체는 arq(Redis)가 담당하고, 이 테이블은 이력·상태 조회·재시도 판단의 진실 소스다.
+
+### 5.16 chat_sessions / chat_messages 테이블 (Phase 7)
+
+```sql
+CREATE TABLE chat_sessions (
+    id              BIGSERIAL PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    space_id        BIGINT REFERENCES wiki_spaces(id) ON DELETE SET NULL,  -- NULL = 전체 접근 범위 대상
+    title           VARCHAR(200) NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE chat_messages (
+    id              BIGSERIAL PRIMARY KEY,
+    session_id      BIGINT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role            VARCHAR(20) NOT NULL,       -- user / assistant
+    content         TEXT NOT NULL,
+    citations       JSONB,                      -- [{file_id, chunk_id, version, snippet}]
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+세션·메시지는 소유 사용자만 조회 가능(공유 불가). `citations`의 파일 링크는 클릭 시점에 다시 `ensure_file_access`를 통과한다 — 대화 이후 권한이 회수된 파일은 열리지 않는다.
+
+---
+
 ## 6. API 설계
 
 ### 6.1 인증
@@ -619,6 +802,34 @@ CREATE TABLE app_settings (
 | `GET`  | `/api/admin/audit-logs` | 감사 로그 조회 (query: `actorId`, `targetType`, `from`, `to`) |
 
 > **주의**: admin API는 파일 **메타데이터만** 다룬다. 파일 내용 다운로드 엔드포인트는 admin 네임스페이스에 존재하지 않는다 (3.6.4 접근 정책).
+
+### 6.8 LLM 위키 (Phase 7)
+
+| Method | Endpoint | 설명 |
+|---|---|---|
+| `POST` | `/api/wiki/spaces` | 스페이스 생성 (name, scope, group_id — group 스코프는 그룹 admin 이상만) |
+| `GET`  | `/api/wiki/spaces` | 내가 접근 가능한 스페이스 목록 (personal 소유 + 소속 그룹) |
+| `GET`  | `/api/wiki/spaces/{id}` | 상세 — `index.md` 요약, 소스 목록·상태, 최근 `log.md` 항목 |
+| `POST` | `/api/wiki/spaces/{id}/sources` | 소스 등록 (file_id, recursive) → 스코프 read 검증 후 Ingest 잡 큐잉 |
+| `DELETE` | `/api/wiki/spaces/{id}/sources/{fileId}` | 소스 제거 → 관련 청크 삭제 + 위키 페이지 stale 마킹 |
+| `POST` | `/api/wiki/spaces/{id}/lint` | Lint 실행 (수동 트리거) |
+| `GET`  | `/api/wiki/spaces/{id}/jobs` | Ingest/컴파일/Lint 잡 상태 조회 |
+| `DELETE` | `/api/wiki/spaces/{id}` | 스페이스 삭제 (청크·잡 삭제; 위키 페이지 폴더는 드라이브에 잔존, 소유자 선택 삭제) |
+
+> 위키 **페이지** 자체는 드라이브 파일이므로 조회/버전/이름 변경은 기존 6.2 파일 API를 그대로 쓴다.
+
+### 6.9 챗봇 (Phase 7)
+
+| Method | Endpoint | 설명 |
+|---|---|---|
+| `POST` | `/api/chat/sessions` | 세션 생성 (space_id 옵션 — 미지정 시 내 전체 접근 범위 대상) |
+| `GET`  | `/api/chat/sessions` | 내 세션 목록 |
+| `GET`  | `/api/chat/sessions/{id}` | 세션 메시지 히스토리 (citations 포함) |
+| `POST` | `/api/chat/sessions/{id}/messages` | 질문 전송 → **SSE 스트리밍** 답변 (권한 인지 검색 3.7.3 파이프라인) |
+| `POST` | `/api/chat/messages/{id}/promote` | 답변을 스페이스 위키 페이지로 승격 (space_id 필수, 스코프 쓰기 권한 검증) |
+| `DELETE` | `/api/chat/sessions/{id}` | 세션 삭제 |
+
+> 챗봇·위키 API 전체가 `get_current_user` 인가를 통과하며, 검색·생성은 항상 요청 사용자 자격으로 실행된다. admin 전용 운영 조회(잡 큐 적체, 인덱스 규모)는 `/api/admin/stats`에 필드로 추가한다 — 내용 접근 엔드포인트는 두지 않는다.
 
 ---
 
@@ -809,7 +1020,7 @@ server {
 
 ## 9. 개발 마일스톤
 
-각 페이즈 완료 시 검토·컨펌 후 다음 페이즈로 진행한다. **현재 상태: Phase 1~5 완료(각 페이즈 게이트웨이 E2E 통과), Phase 6 구현 중(백엔드 진행 중, 프론트 예정).**
+각 페이즈 완료 시 검토·컨펌 후 다음 페이즈로 진행한다. **현재 상태: Phase 1~5 완료(각 페이즈 게이트웨이 E2E 통과), Phase 6 구현 중(백엔드 진행 중, 프론트 예정), Phase 7 설계 확정(미착수).**
 
 > Phase 1~5의 범위 기술은 당시 구현 기준의 기록이다. 가입 승인제와 admin 환경변수 시드는 Phase 6에서 가입 코드제·셋업 위저드로 대체된다(3.1, 3.6.2).
 
@@ -861,6 +1072,15 @@ server {
 | **완료 조건** | 빈 DB 부팅→셋업 위저드→admin 생성→코드 발급→코드 가입→즉시 로그인 E2E 통과, 셋업 재진입 차단 확인 |
 | **상태** | 백엔드(마이그레이션·setup API·코드 가입·admin 코드 관리·승인제 제거) 구현 중, 프론트(셋업 위저드 페이지·가입 폼·코드 관리 UI) 예정 |
 
+### Phase 7: LLM 위키 & 챗봇 (3-4주) 📋 설계 확정
+
+| 항목 | 내용 |
+|---|---|
+| **목표** | 권한 인지 RAG + Karpathy LLM Wiki 패턴의 사내 지식 위키·챗봇 (3.7) |
+| **범위** | **7-1 인덱싱 기반**: pgvector 확장·`file_chunks`(5.13), arq `worker` 컨테이너(compose 추가), Upstage Document Parse 파싱→청크→임베딩 파이프라인, 업로드/버전/삭제 훅 재인덱싱, 인덱싱 제외 플래그 · **7-2 챗봇**: 권한 인지 검색(사전 SQL 필터 + `get_access_level` 사후 검증), LangGraph 파이프라인, GLM 5.2(vLLM) 연결, SSE 스트리밍, 세션/히스토리(5.16), 챗 UI · **7-3 위키**: `wiki_spaces`/`wiki_sources`/`wiki_jobs`(5.14~5.15), Ingest 컴파일(위키 페이지=드라이브 파일), 답변 승격, Lint, 위키 브라우징 UI |
+| **완료 조건** | ① A그룹 문서로 컴파일된 위키에 B그룹 사용자가 질문 → 해당 내용 검색·인용 불가 E2E ② 권한 회수 직후 동일 질문에서 해당 소스 즉시 제외 ③ 소스 버전 갱신 → 재인덱싱 → 새 내용으로 답변 ④ 출처 인용 링크가 `ensure_file_access` 통과 후에만 열림 ⑤ admin 계정으로 타인 파일 내용이 챗봇 경유로도 조회 불가 |
+| **제외** | 실시간 협업 편집, 외부 공개 위키(공유 링크로 위키 페이지 공유는 기존 3.4로 가능), 멀티모달(이미지 내용 이해), 에이전틱 도구 호출 |
+
 ---
 
 ## 10. 보안 설계
@@ -881,7 +1101,10 @@ server {
 | **MinIO 포트** | 9000(API) 호스트 비노출, 9001(콘솔)만 내부 네트워크 |
 | **CORS** | 프론트엔드 오리진만 허용, 자격 증명 포함 |
 | **데이터 암호화** | 서버측 암호화(MinIO SSE-S3 또는 SSE-KMS), 전송 구간 TLS |
-| **속도 제한** | Redis 기반 rate limiting (로그인 5회/분, 업로드 10회/분) |
+| **속도 제한** | Redis 기반 rate limiting (로그인 5회/분, 업로드 10회/분, 챗봇 질의 제한은 Phase 7에서 추가) |
+| **LLM 검색 인가 (Phase 7)** | 벡터 검색은 사전 SQL 필터 + `get_access_level` 사후 검증 2중 방어. 검색·생성은 항상 요청 사용자 자격, 사용자 간 캐시 공유 금지, admin도 내용 접근 불가 (3.7.3) |
+| **LLM 데이터 egress (Phase 7)** | 챗 생성 기본은 사내 vLLM(GLM 5.2). 외부 API(Upstage 파싱·임베딩, OpenAI)로 전송되는 범위는 인덱싱 제외 플래그로 통제 |
+| **프롬프트 인젝션 (Phase 7)** | 파일 내용은 데이터로만 취급 — 시스템 프롬프트 분리, 답변 체인에 도구 호출 미부여, 출처 인용 강제 (3.7.5) |
 
 ---
 
@@ -910,6 +1133,11 @@ server {
 | **PostgreSQL 단일 장애점(SPOF)** | 서비스 중단 | Phase 2 이후 replication 도입, 정기 백업 (pg_dump + WAL archive) |
 | **MinIO 디스크 부족** | 업로드 실패 | 모니터링 + 알림, 자동 확장 스크립트, 사용자별 할당량 강제 |
 | **nginx 설정 반영 안 됨 (inode 교체)** | 설정 변경 무효 | `--force-recreate` 또는 디렉터리 마운트 권장 |
+| **벡터 인덱스에 권한 없는 데이터 노출 (Phase 7)** | 권한 우회 정보 유출 | 청크에 권한 비정규화 ❌ → 조회 시 사전 SQL 필터 + `get_access_level` 사후 검증 (3.7.3). 완료 조건에 교차 그룹 차단 E2E 포함 |
+| **소스 권한 회수 후 컴파일된 위키 페이지에 지식 잔존 (Phase 7)** | 회수 이전 지식의 간접 노출 | 권한 회수 이벤트 → 해당 페이지 stale 마킹 → Lint가 소스 제외 재컴파일/제거. 잔존 창은 Lint 주기로 상한 |
+| **외부 API로 문서 내용 전송 (Phase 7)** | 기밀 유출 | 챗 생성 기본 사내 vLLM, 민감 폴더 인덱싱 제외 플래그, 필요 시 vLLM 임베딩 모델 배포로 완전 사내화 |
+| **임베딩 인덱스 낡음 — 버전 갱신 미반영 (Phase 7)** | 낡은 답변 | 업로드/버전/삭제 훅에서 stale 마킹 + 재인덱싱 잡 자동 큐잉, `version` 컬럼으로 판정 |
+| **LLM 응답의 사실 불일치(할루시네이션) (Phase 7)** | 잘못된 사내 정보 확산 | 출처 인용 강제 + Upstage Groundedness Check(P2), 위키 승격은 사용자 검토 후 수동 |
 
 ---
 
@@ -936,6 +1164,25 @@ server {
 | 앱 레벨 버저닝 vs 네이티브 | ✅ 앱 레벨 채택 (DB가 진실 소스) |
 | S3 추상화 계층 | ✅ `StorageService` 인터페이스로 MinIO→S3 전환 가능성 확보 |
 
+### 13.3 Karpathy LLM Wiki 패턴 적용 (Phase 7)
+
+Karpathy가 2026-04 공개한 [LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)의 패턴을 채용하되, 단일 사용자 개인 지식 도구인 원안을 **다중 사용자·권한 경계** 환경에 맞게 변형했다.
+
+| 원안 (Karpathy gist) | Mini Drive 적용 |
+|---|---|
+| Raw sources = 로컬 파일, 인간이 큐레이션 | ✅ 드라이브 파일 + `wiki_sources` 등록. "인간은 소스 큐레이션·질문, LLM은 부기·유지보수" 철학 유지 |
+| Wiki = 로컬 마크다운 + Obsidian 브라우징 | 변형 — 위키 페이지를 **드라이브 파일**로 저장해 권한·버전·미리보기 재사용. 브라우징은 자체 마크다운 렌더 |
+| 단일 사용자 — 권한 개념 없음 | **변형 (핵심)** — 스페이스 스코프(personal/group)로 "권한 경계 = 컴파일 경계" 불변식 추가 (3.7.1) |
+| 순수 위키 (RAG 대체) | 하이브리드 — 위키 페이지 우선 + 원문 청크 RAG 보강. 파생 구현체들(nashsu/llm_wiki, lucasastorian/llmwiki)도 원문 인덱스를 인용용으로 유지하는 동일 결론 |
+| Ingest / Query / Lint 3연산 | ✅ 동일 채택. Lint에 권한 회수 감지(stale 마킹) 역할 추가 |
+| CLI/에이전트가 수동 실행 | 변형 — arq 워커가 업로드/버전 훅으로 자동 실행 |
+
+**조사 참고 자료** (2026-07 기준):
+- 원 출처: [Karpathy llm-wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+- 파생 구현체: [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) (~14.8k★, 그래프 연관도 모델·증분 캐싱), [lucasastorian/llmwiki](https://github.com/lucasastorian/llmwiki) (VaultFS 저장 추상화·MCP), [Astro-Han/karpathy-llm-wiki](https://github.com/Astro-Han/karpathy-llm-wiki) (gist를 Agent Skill로 코드화)
+- 권한 인지 RAG: [Oso — Authorization in RAG](https://www.osohq.com/post/right-approach-to-authorization-in-rag), [Cerbos — RAG Access Control](https://cerbos.dev/blog/access-control-for-rag-llms), [AWS Security Blog — Authorizing access to data with RAG](https://aws.amazon.com/blogs/security/authorizing-access-to-data-with-rag-implementations/)
+- LangChain 통합: [vLLM(OpenAI 호환) 연결](https://docs.langchain.com/oss/python/integrations/chat/vllm), [Upstage 통합(langchain-upstage)](https://docs.langchain.com/oss/python/integrations/providers/upstage)
+
 ---
 
 ## 14. 비고
@@ -944,6 +1191,7 @@ server {
 - 모든 secret(JWT, MinIO 암호, DB 패스워드)은 `.env` 파일 또는 Docker Secrets로 관리, 버전 관리에 포함 금지
 - Phase 1~4까지 완료 시 사내 시범 운영, Phase 5는 사용 피드백 수집 후 추진
 - 사내 폐쇄망 시스템 전제로 SSO 연동은 범위에서 제외 (가입 코드제로 접근 통제)
+- Phase 7의 외부 LLM API(Upstage, OpenAI) 사용은 폐쇄망 전제의 **승인된 예외**다 — 전송 범위는 인덱싱 제외 플래그로 통제하며, 완전 사내화가 필요해지면 vLLM에 임베딩 모델을 추가 배포한다 (3.7.4)
 - 문서화: OpenAPI(Swagger) 자동 생성, README에 Docker Compose 기동 가이드 포함
 
 ---
