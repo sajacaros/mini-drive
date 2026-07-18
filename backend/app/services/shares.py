@@ -25,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password, verify_password
 from app.models import File, Share, User
 from app.models.enums import SharePermission
+from app.services import previews as previews_service
+from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
 
 # Phase 1 허용 권한. WRITE(편집)는 PRD Phase 5.
@@ -138,6 +140,14 @@ async def list_shares(session: AsyncSession, user: User) -> list[tuple[Share, st
     return [(share, name) for share, name in rows]
 
 
+async def get_owned_share(session: AsyncSession, user: User, share_id: int) -> Share:
+    """소유자 본인의 공유 링크를 반환한다(통계 조회 등). 없거나 미소유면 404."""
+    share = await session.get(Share, share_id)
+    if share is None or share.created_by != user.id:
+        raise ShareServiceError(404, "공유 링크를 찾을 수 없습니다.")
+    return share
+
+
 async def disable_share(session: AsyncSession, user: User, share_id: int) -> None:
     """공유 링크 비활성화 (PRD 3.4, 6.3). is_active=FALSE — 행 삭제가 아니라 이력 보존.
 
@@ -161,6 +171,13 @@ async def _get_by_url(session: AsyncSession, share_url: str) -> Share:
     if share is None:
         raise ShareServiceError(404, "공유 링크를 찾을 수 없습니다.")
     return share
+
+
+async def get_share_by_url(session: AsyncSession, share_url: str) -> Share | None:
+    """share_url 로 Share 를 찾는다(상태 검사 없음). 접근 통계 기록 등 부수 용도. 없으면 None."""
+    return (
+        await session.execute(select(Share).where(Share.share_url == share_url))
+    ).scalar_one_or_none()
 
 
 def _ensure_accessible(share: Share) -> None:
@@ -249,6 +266,42 @@ async def prepare_share_download(
     mime = file.mime_type or "application/octet-stream"
     # permission=read 여도 Phase 1 은 다운로드와 동일 취급하되, 구분은 응답에 담아 전달한다.
     return internal, file.name, mime, permission
+
+
+async def authorize_share_view(
+    session: AsyncSession,
+    share_url: str,
+    password: str | None,
+) -> tuple[Share, File]:
+    """공개 미리보기 인가 (PRD 3.2, 3.4). 활성/만료/파일/비밀번호를 검증하되 download_count 는
+    소모하지 않는다 — 미리보기는 다운로드 횟수 제한과 무관하다. 폴더는 400. (share, file) 반환.
+    """
+    share = await _get_by_url(session, share_url)
+    _ensure_accessible(share)
+    file = await session.get(File, share.file_id)
+    if file is None or file.is_deleted:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    if file.is_folder:
+        raise ShareServiceError(400, "폴더는 미리볼 수 없습니다.")
+    if share.password_hash is not None:
+        if not password or not verify_password(password, share.password_hash):
+            raise ShareServiceError(401, "비밀번호가 필요하거나 올바르지 않습니다.")
+    return share, file
+
+
+async def prepare_share_preview(
+    session: AsyncSession,
+    storage: StorageService,
+    share_url: str,
+    password: str | None,
+) -> tuple[PreviewPlan, str, int]:
+    """공개 미리보기 준비 (PRD 3.2). 인가(횟수 미소모) 후 (plan, filename, share_id) 반환.
+
+    지원 타입은 게이트웨이 인라인(image/pdf) 또는 텍스트 head, 미지원은 plan.kind=="unsupported".
+    """
+    share, file = await authorize_share_view(session, share_url, password)
+    plan = await previews_service.build_preview_plan(storage, file)
+    return plan, file.name, share.id
 
 
 async def prepare_ticketed_share_download(

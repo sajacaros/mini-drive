@@ -14,6 +14,7 @@ dependencies = [
     "alembic>=1.14.0",
     "python-multipart>=0.0.12",
     "minio>=7.2.10",
+    "pillow>=11.0.0",
     "pyjwt>=2.10.0",
     "argon2-cffi>=23.1.0",
     "redis>=5.2.0",

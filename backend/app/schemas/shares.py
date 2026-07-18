@@ -30,7 +30,11 @@ class ShareCreateRequest(BaseModel):
 
 
 class ShareResponse(BaseModel):
-    """소유자용 공유 링크 응답 (파일명·다운로드 수·활성 상태 포함) — PRD 3.4, 6.3."""
+    """소유자용 공유 링크 응답 (파일명·다운로드 수·접근 통계·활성 상태 포함) — PRD 3.4, 6.3.
+
+    view_count / last_access_at 는 Redis 근사 집계(share_stats)라 소실 가능하며(재시작/flush),
+    다운로드 횟수 제한과 직결되는 download_count(DB 정확값)와 구분된다.
+    """
 
     id: int
     file_id: int
@@ -42,11 +46,23 @@ class ShareResponse(BaseModel):
     expires_at: datetime | None
     max_downloads: int | None
     download_count: int
+    view_count: int = 0
+    last_access_at: datetime | None = None
     created_at: datetime
 
     @classmethod
-    def from_share(cls, share: Share, file_name: str) -> ShareResponse:
-        """Share ORM + 파일명으로 응답을 구성한다(password_required 는 해시 존재로 파생)."""
+    def from_share(
+        cls,
+        share: Share,
+        file_name: str,
+        *,
+        view_count: int = 0,
+        last_access_at: datetime | None = None,
+    ) -> ShareResponse:
+        """Share ORM + 파일명으로 응답을 구성한다(password_required 는 해시 존재로 파생).
+
+        접근 통계(view_count/last_access_at)는 Redis 에서 읽어 호출자가 넘긴다(없으면 0/None).
+        """
         return cls(
             id=share.id,
             file_id=share.file_id,
@@ -58,8 +74,19 @@ class ShareResponse(BaseModel):
             expires_at=share.expires_at,
             max_downloads=share.max_downloads,
             download_count=share.download_count,
+            view_count=view_count,
+            last_access_at=last_access_at,
             created_at=share.created_at,
         )
+
+
+class ShareStatsResponse(BaseModel):
+    """공유 링크 접근 통계 (PRD 3.4). download_count 는 DB 정확값, view/last_access 는 근사치."""
+
+    share_id: int
+    view_count: int
+    last_access_at: datetime | None = None
+    download_count: int
 
 
 class SharePublicMeta(BaseModel):

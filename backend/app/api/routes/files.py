@@ -23,7 +23,8 @@ from fastapi import File as FileParam
 
 from app.api.deps import CurrentUser, DbSession, RedisClient, rate_limit_user
 from app.api.download import content_disposition as _content_disposition
-from app.api.download import gateway_download_response
+from app.api.download import gateway_download_response, gateway_inline_response
+from app.api.preview import render_preview
 from app.models.enums import UserStatus
 from app.schemas.files import (
     DownloadTicketResponse,
@@ -211,6 +212,38 @@ async def download(file_id: int, user: CurrentUser, session: DbSession) -> Respo
         raise _http_error(exc) from exc
 
     return gateway_download_response(internal, filename, mime)
+
+
+@router.get("/{file_id}/thumbnail")
+async def thumbnail(file_id: int, user: CurrentUser, session: DbSession) -> Response:
+    """썸네일 조회 (PRD 3.2). read 권한 필요, 게이트웨이 인라인(image/png) 스트리밍.
+
+    이미지가 아니거나 아직 생성되지 않았으면 404 — 프론트는 기본 아이콘으로 폴백한다.
+    다운로드와 동일한 접근 검사를 거치며 admin 우회 경로는 없다(파일 내용이므로).
+    """
+    try:
+        internal = await files_service.prepare_thumbnail(
+            session, get_storage(), user, file_id
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return gateway_inline_response(internal, f"thumb-{file_id}.png", "image/png")
+
+
+@router.get("/{file_id}/preview")
+async def preview(file_id: int, user: CurrentUser, session: DbSession) -> Response:
+    """파일 미리보기 (PRD 3.2). read 권한 필요.
+
+    이미지/PDF 는 게이트웨이 인라인 스트리밍, 텍스트는 앞부분(최대 1MiB) 인라인 본문,
+    미지원 형식은 415(구조화 detail)로 프론트가 다운로드로 폴백하게 한다. 폴더 400.
+    """
+    try:
+        plan, filename = await files_service.prepare_preview(
+            session, get_storage(), user, file_id
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return render_preview(plan, filename)
 
 
 @router.post(

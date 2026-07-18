@@ -84,6 +84,32 @@ class StorageService:
         """오브젝트 스트림(urllib3 응답)을 반환한다. 호출자가 close/release 해야 한다."""
         return self._client.get_object(self.bucket, key)
 
+    def get_bytes(self, key: str) -> bytes:
+        """오브젝트 전체를 바이트로 내려받는다. 썸네일 생성 등 backend 가 내용을 직접 다뤄야 할 때만
+        사용한다(다운로드/미리보기 스트리밍은 게이트웨이 모델을 쓴다). 호출자가 크기를 제한한다.
+        """
+        resp = self._client.get_object(self.bucket, key)
+        try:
+            return resp.read()
+        finally:
+            resp.close()
+            resp.release_conn()
+
+    def get_head_bytes(self, key: str, length: int) -> bytes:
+        """오브젝트 앞부분 length 바이트만 범위 요청(GET Range)으로 내려받는다.
+
+        큰 텍스트 미리보기에서 전체를 backend 로 적재하지 않도록 앞부분만 읽는다.
+        length<=0 이면 빈 바이트를 반환한다.
+        """
+        if length <= 0:
+            return b""
+        resp = self._client.get_object(self.bucket, key, offset=0, length=length)
+        try:
+            return resp.read()
+        finally:
+            resp.close()
+            resp.release_conn()
+
     def stat(self, key: str):
         """오브젝트 메타데이터. 없으면 minio.error.S3Error(NoSuchKey)."""
         return self._client.stat_object(self.bucket, key)
@@ -126,6 +152,12 @@ class StorageService:
         content_type: str | None = None,
     ) -> None:
         await asyncio.to_thread(self.put, key, data, length, content_type)
+
+    async def get_bytes_async(self, key: str) -> bytes:
+        return await asyncio.to_thread(self.get_bytes, key)
+
+    async def get_head_bytes_async(self, key: str, length: int) -> bytes:
+        return await asyncio.to_thread(self.get_head_bytes, key, length)
 
     async def stat_async(self, key: str):
         return await asyncio.to_thread(self.stat, key)

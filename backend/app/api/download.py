@@ -15,10 +15,14 @@ from urllib.parse import quote
 from fastapi import Response, status
 
 
-def content_disposition(filename: str) -> str:
-    """RFC 5987 filename* (UTF-8) + ASCII fallback 로 첨부 헤더를 만든다."""
+def content_disposition(filename: str, *, inline: bool = False) -> str:
+    """RFC 5987 filename* (UTF-8) + ASCII fallback 로 Content-Disposition 헤더를 만든다.
+
+    inline=True 면 브라우저가 렌더(미리보기)하도록 `inline`, 기본은 다운로드용 `attachment`.
+    """
+    disposition = "inline" if inline else "attachment"
     ascii_fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "")
-    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
+    return f"{disposition}; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
 
 
 def gateway_download_response(internal_redirect: str, filename: str, mime: str) -> Response:
@@ -32,5 +36,37 @@ def gateway_download_response(internal_redirect: str, filename: str, mime: str) 
             "X-Accel-Redirect": internal_redirect,
             "Content-Type": mime,
             "Content-Disposition": content_disposition(filename),
+        },
+    )
+
+
+def gateway_inline_response(internal_redirect: str, filename: str, mime: str) -> Response:
+    """X-Accel-Redirect 인라인 미리보기 응답 (PRD 3.2).
+
+    다운로드와 같은 게이트웨이 스트리밍이지만 Content-Disposition 을 inline 으로 두어 브라우저가
+    렌더(이미지/PDF 미리보기)하도록 한다.
+    """
+    return Response(
+        status_code=status.HTTP_200_OK,
+        headers={
+            "X-Accel-Redirect": internal_redirect,
+            "Content-Type": mime,
+            "Content-Disposition": content_disposition(filename, inline=True),
+        },
+    )
+
+
+def preview_text_response(content: bytes, filename: str, *, truncated: bool) -> Response:
+    """텍스트 미리보기 인라인 본문 응답 (PRD 3.2).
+
+    앞부분만 잘린 경우 X-Preview-Truncated: true 헤더로 프론트에 알린다. 본문은 UTF-8 text/plain.
+    """
+    return Response(
+        content=content,
+        status_code=status.HTTP_200_OK,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": content_disposition(filename, inline=True),
+            "X-Preview-Truncated": "true" if truncated else "false",
         },
     )

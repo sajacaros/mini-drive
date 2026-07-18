@@ -26,6 +26,9 @@ from starlette.datastructures import UploadFile
 from app.core.metrics import observe_download_bytes
 from app.models import File, FileVersion, User
 from app.services import permissions as permissions_service
+from app.services import previews as previews_service
+from app.services import thumbnails as thumbnails_service
+from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
 
 AccessNeed = Literal["read", "write", "manage"]
@@ -334,6 +337,8 @@ async def upload_file(
         raise FileServiceError(409, "같은 이름의 파일이 이미 있습니다.") from exc
 
     await session.refresh(file)
+    # 이미지면 썸네일 생성 (best-effort, 실패해도 업로드는 성공 상태 유지) — PRD 3.2.
+    await thumbnails_service.maybe_generate(session, storage, file)
     return file
 
 
@@ -367,6 +372,40 @@ async def prepare_download(
     # 게이트웨이 모델상 실제 스트리밍은 nginx 가 하므로, 인가된 파일 크기를 계측한다 (PRD 11장).
     observe_download_bytes(file.size)
     return internal, file.name, mime
+
+
+# --- 썸네일 / 미리보기 (PRD 3.2) --------------------------------------------
+
+
+async def prepare_thumbnail(
+    session: AsyncSession, storage: StorageService, user: User, file_id: int
+) -> str:
+    """썸네일 게이트웨이 스트리밍 준비 (PRD 3.2). read 권한 검사 후 internal redirect 반환.
+
+    썸네일이 아직 없으면(비이미지이거나 생성 실패) 404. 인라인(image/png)으로 렌더된다.
+    """
+    file = await ensure_file_access(session, user, await get_file(session, file_id))
+    if file.is_deleted or not file.thumbnail_key:
+        raise FileServiceError(404, "썸네일을 찾을 수 없습니다.")
+    presigned = await storage.presign_get_async(file.thumbnail_key)
+    return storage.to_internal_redirect(presigned)
+
+
+async def prepare_preview(
+    session: AsyncSession, storage: StorageService, user: User, file_id: int
+) -> tuple[PreviewPlan, str]:
+    """미리보기 계획 준비 (PRD 3.2). read 권한 검사 후 (plan, filename) 반환.
+
+    폴더/삭제 파일은 배제하고, 미지원 타입은 plan.kind == "unsupported" 로 표시해 라우트가 415 로
+    응답하게 한다. 지원 타입은 게이트웨이 인라인(image/pdf) 또는 텍스트 head(text)로 계획된다.
+    """
+    file = await ensure_file_access(session, user, await get_file(session, file_id))
+    if file.is_folder:
+        raise FileServiceError(400, "폴더는 미리볼 수 없습니다.")
+    if file.is_deleted:
+        raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+    plan = await previews_service.build_preview_plan(storage, file)
+    return plan, file.name
 
 
 # --- 버전 관리 (PRD 3.3, 5.3, 6.2) ------------------------------------------
@@ -478,6 +517,8 @@ async def _commit_new_version(
         raise FileServiceError(500, "버전 저장에 실패했습니다.") from exc
 
     await session.refresh(file)
+    # 새 버전 내용으로 썸네일 갱신 (재업로드/복구 공통, best-effort) — PRD 3.2.
+    await thumbnails_service.maybe_generate(session, storage, file)
     return file
 
 
@@ -770,13 +811,15 @@ async def permanent_delete(
         await session.execute(
             text(
                 _SUBTREE_CTE
-                + " SELECT f.file_key FROM files f "
+                + " SELECT f.file_key, f.thumbnail_key FROM files f "
                 "WHERE f.id IN (SELECT id FROM sub) AND f.is_folder = FALSE"
             ),
             {"root": file.id},
         )
     ).all()
     keys: set[str] = {r.file_key for r in file_rows if r.file_key}
+    # 썸네일 오브젝트도 함께 제거한다 (thumbnails/{fileId}.png). 할당량에는 포함하지 않는다.
+    keys.update(r.thumbnail_key for r in file_rows if r.thumbnail_key)
 
     version_rows = (
         await session.execute(
