@@ -35,7 +35,7 @@
 ### 1.2 타겟 사용자
 
 - 사내 임직원(모든 부서)
-- **시스템 관리자(Admin)**: 인스턴스 운영자. 가입 신청 승인/거절, 사용자 계정 관리(활성/비활성, 할당량), 전체 공유 링크 통제, 스토리지 모니터링 (→ [3.6 시스템 관리자](#36-시스템-관리자-admin))
+- **시스템 관리자(Admin)**: 인스턴스 운영자. 가입 코드 관리(발급/만료/비활성화), 사용자 계정 관리(활성/비활성, 할당량), 전체 공유 링크 통제, 스토리지 모니터링 (→ [3.6 시스템 관리자](#36-시스템-관리자-admin))
 - **그룹 관리자**: 소속 그룹의 멤버·파일/폴더 권한 관리 (그룹 역할 `owner`/`admin`, 시스템 관리자와 별개 축)
 
 ### 1.3 그룹 기반 접근 제어 (Group-based Access Control)
@@ -125,8 +125,8 @@ nginx (Reverse Proxy / Gateway)
 
 | 기능 | 설명 | 우선순위 |
 |---|---|---|
-| **회원가입 (승인제)** | 사내 이메일로 가입 신청 → 관리자 승인 후 사용 가능 (`pending` → `active`). 승인 전에는 로그인 불가 | P0 |
-| **로그인/로그아웃** | JWT 인증, 리프레시 토큰 갱신. 로그아웃 시 Redis에 저장된 refresh 토큰 폐기. 비활성/거절 계정은 즉시 차단 — access 토큰 유효 기간 내 요청도 인가 시 `status = 'active'` 확인으로 차단 | P0 |
+| **회원가입 (가입 코드제)** | 사내 이메일 + **관리자가 발급한 가입 코드** 입력으로 가입, 코드 검증 통과 시 **즉시 `active`** (승인 대기 없음 — 2026-07-19 승인제에서 전환). 코드는 만료일·최대 사용 횟수 제한 가능 | P0 |
+| **로그인/로그아웃** | JWT 인증, 리프레시 토큰 갱신. 로그아웃 시 Redis에 저장된 refresh 토큰 폐기. 비활성 계정은 즉시 차단 — access 토큰 유효 기간 내 요청도 인가 시 `status = 'active'` 확인으로 차단 | P0 |
 | **프로필 관리** | 아바타, 표시 이름, 비밀번호 변경 | P1 |
 | **관리자 대시보드** | → [3.6 시스템 관리자](#36-시스템-관리자-admin) 참조 | P1 |
 
@@ -261,20 +261,22 @@ interface ThemeContextType {
 
 시스템 전역 역할은 `users.role` 컬럼(`user` | `admin`) 하나로 관리한다. **그룹 역할(`group_members.role`)과는 별개 축**이며, 팀 단위 관리는 그룹 역할이 담당하므로 중간 등급은 두지 않는다 (필요 시 추후 확장).
 
-#### 3.6.2 첫 관리자 부트스트랩
+#### 3.6.2 첫 관리자 부트스트랩 — 셋업 위저드 (2026-07-19 개정)
 
-"첫 가입자가 admin" 방식은 배포 직후 레이스 위험이 있으므로 사용하지 않는다.
+"첫 가입자가 admin" 방식은 배포 직후 레이스 위험이 있으므로 사용하지 않는다. 환경변수 시드(`ADMIN_EMAIL`/`ADMIN_INITIAL_PASSWORD`) 방식은 기본 비밀번호 방치 위험이 있어 **셋업 위저드로 대체**한다.
 
 | 방식 | 설명 |
 |---|---|
-| **환경변수 시드** | 기동 시 `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`를 읽어 admin 계정이 없으면 생성 (기본 부트스트랩 경로). 승인 절차 없이 `status = 'active'`로 생성 |
-| **CLI 커맨드** | `python -m app.cli create-admin` — 운영 중 기존 사용자 승격에도 재사용 |
+| **셋업 위저드 (기본)** | admin이 0명이면 프론트가 `/setup`으로 유도. 첫 admin 계정(이메일/비밀번호) + 초기 가입 코드 + 기본 할당량을 한 번에 설정하고 셋업을 영구 잠금. 백엔드는 admin 존재 시 셋업 API를 403으로 차단(동시 요청 레이스는 DB 제약/트랜잭션으로 방어) |
+| **CLI 커맨드** | `python -m app.cli create-admin` — 운영 중 기존 사용자 승격·비상 복구용으로 유지 |
+
+셋업에서 결정하는 값은 **애플리케이션 설정**(DB `app_settings`)뿐이다. 인프라 시크릿(PostgreSQL/MinIO/JWT)은 컨테이너 기동 전에 필요하므로 `.env`에 남는다.
 
 #### 3.6.3 관리자 기능
 
 | 기능 | 설명 | 우선순위 |
 |---|---|---|
-| **가입 승인** | 가입 신청(`pending`) 목록 조회, 승인(`active`)/거절(`rejected`) 처리 | P0 |
+| **가입 코드 관리** | 가입 코드 발급(메모·만료일·최대 사용 횟수)/목록·사용 현황 조회/비활성화. 모든 변경은 `audit_logs` 기록 | P0 |
 | **사용자 관리** | 사용자 목록·사용량 조회, 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 | P0 |
 | **전체 그룹 조회** | 그룹 owner가 아니어도 전체 그룹/멤버 현황 조회 | P1 |
 | **공유 링크 통제** | 전체 공유 링크 조회, 강제 비활성화 | P1 |
@@ -332,7 +334,7 @@ CREATE TABLE users (
     display_name    VARCHAR(100) NOT NULL DEFAULT '',
     avatar_url      VARCHAR(500),
     role            VARCHAR(20) NOT NULL DEFAULT 'user',  -- user / admin (시스템 전역 역할)
-    status          VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending / active / inactive / rejected (가입 승인제)
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',  -- active / inactive (가입 코드제 — 코드 검증 시 즉시 active)
     storage_used    BIGINT NOT NULL DEFAULT 0,
     max_storage     BIGINT NOT NULL DEFAULT 10737418240,  -- 10GB
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -496,6 +498,38 @@ WHERE id = :user_id AND storage_used + :size <= max_storage
 RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
 ```
 
+### 5.11 signup_codes 테이블 (가입 코드제 — 2026-07-19)
+
+```sql
+CREATE TABLE signup_codes (
+    id              BIGSERIAL PRIMARY KEY,
+    code            VARCHAR(64) UNIQUE NOT NULL,      -- 추측 불가 랜덤 토큰
+    memo            VARCHAR(200) NOT NULL DEFAULT '', -- 용도 메모 (예: "개발팀 온보딩")
+    expires_at      TIMESTAMPTZ,                      -- NULL = 무기한
+    max_uses        INTEGER,                          -- NULL = 무제한
+    use_count       INTEGER NOT NULL DEFAULT 0,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by      BIGINT NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+가입 시 검증(활성 → 만료 → 사용 횟수)과 `use_count` 증가는 원자적으로 처리한다
+(조건부 UPDATE ... RETURNING — 5.10과 동일 패턴으로 동시 가입 레이스 방어).
+
+### 5.12 app_settings 테이블 (셋업 위저드 — 2026-07-19)
+
+```sql
+CREATE TABLE app_settings (
+    key         VARCHAR(64) PRIMARY KEY,   -- 예: 'setup_completed', 'default_max_storage'
+    value       JSONB NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+셋업 위저드가 기록하는 애플리케이션 설정 저장소. `default_max_storage`는 신규 가입자의
+`users.max_storage` 기본값으로 사용한다. 인프라 시크릿은 저장하지 않는다(3.6.2).
+
 ---
 
 ## 6. API 설계
@@ -504,7 +538,9 @@ RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `POST` | `/api/auth/register` | 회원가입 |
+| `POST` | `/api/auth/register` | 회원가입 (body에 가입 코드 `signup_code` 필수 — 검증 통과 시 즉시 `active`) |
+| `GET`  | `/api/setup/status` | 셋업 필요 여부 (admin 존재 여부, 무인증) |
+| `POST` | `/api/setup` | 첫 부팅 셋업: 첫 admin + 초기 가입 코드 + 기본 할당량 (admin 존재 시 403) |
 | `POST` | `/api/auth/login` | 로그인 (access + refresh JWT 반환) |
 | `POST` | `/api/auth/refresh` | 리프레시 토큰으로 access 갱신 |
 | `POST` | `/api/auth/logout` | 로그아웃 (Redis의 refresh 토큰 폐기) |
@@ -577,9 +613,10 @@ RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
 
 | Method | Endpoint | 설명 |
 |---|---|---|
-| `GET`  | `/api/admin/users` | 사용자 목록 (query: `status` — 가입 신청 대기 목록은 `?status=pending`) |
-| `POST` | `/api/admin/users/{id}/approve` | 가입 신청 승인 (`pending` → `active`) |
-| `POST` | `/api/admin/users/{id}/reject` | 가입 신청 거절 (`pending` → `rejected`) |
+| `GET`  | `/api/admin/users` | 사용자 목록 (query: `status` — `active`/`inactive`) |
+| `POST` | `/api/admin/signup-codes` | 가입 코드 발급 (memo, expires_at, max_uses) |
+| `GET`  | `/api/admin/signup-codes` | 가입 코드 목록·사용 현황 조회 |
+| `PATCH`| `/api/admin/signup-codes/{id}` | 가입 코드 수정 (비활성화/재활성화, 만료·횟수 조정) |
 | `PATCH`| `/api/admin/users/{id}` | 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 |
 | `GET`  | `/api/admin/groups` | 전체 그룹 목록 (멤버 수, 소유 파일 수 포함) |
 | `GET`  | `/api/admin/shares` | 전체 공유 링크 목록 (query: `active`, `userId`) |
@@ -623,8 +660,7 @@ services:
       - JWT_SECRET=change-me-in-production
       - JWT_ALGORITHM=HS256
       - REDIS_URL=redis://redis:6379/0
-      - ADMIN_EMAIL=admin@example.com            # 첫 admin 부트스트랩 (3.6.2)
-      - ADMIN_INITIAL_PASSWORD=change-me-in-production
+      # 첫 admin 은 셋업 위저드로 생성 (3.6.2) — ADMIN_* 환경변수 시드는 제거됨
     depends_on:
       db:
         condition: service_healthy
@@ -820,6 +856,14 @@ server {
 | **목표** | 재개 가능 업로드, 썸네일, 미리보기, 접근 통계, UI 테마(4종) — 델타 동기화는 범위 제외(3.5) |
 | **완료 조건** | 청크 재개 업로드, 이미지/PDF/텍스트 미리보기, 공유 링크 통계, 테마 선택(3.1.4) |
 
+### Phase 6: 셋업 위저드 + 가입 코드제 (2026-07-19 결정)
+
+| 항목 | 내용 |
+|---|---|
+| **목표** | 첫 부팅 셋업 위저드(3.6.2)로 admin 부트스트랩 대체, 가입 승인제 → 가입 코드제(3.1) 전환 |
+| **범위** | `app_settings`(5.12)·`signup_codes`(5.11) 테이블, `/api/setup/*`, 가입 코드 검증 가입, admin 코드 관리 API/UI(6.7), 승인 API·UI 및 `pending`/`rejected` 상태·`ADMIN_*` 환경변수 시드 제거 |
+| **완료 조건** | 빈 DB 부팅→셋업 위저드→admin 생성→코드 발급→코드 가입→즉시 로그인 E2E 통과, 셋업 재진입 차단 확인 |
+
 ---
 
 ## 10. 보안 설계
@@ -828,7 +872,7 @@ server {
 |---|---|
 | **인증** | JWT (access 15분 + refresh 7일), argon2 비밀번호 해싱 |
 | **토큰 폐기** | refresh 토큰은 Redis에 저장·회전(rotation), 로그아웃/비활성화 시 즉시 폐기. 인가 시 매 요청 `status = 'active'` 확인으로 access 토큰 유효 기간 내 우회 차단 |
-| **가입 승인제** | 신규 가입은 `pending` 상태로 생성, 관리자 승인 전 로그인 불가. 사내 시스템 무단 가입 차단 |
+| **가입 코드제** | 가입에는 관리자 발급 코드가 필수(만료·사용 횟수 제한, 원자적 소모). 코드 없이는 계정 생성 불가 — 사내 시스템 무단 가입 차단 |
 | **인가** | FastAPI Dependency Injection 기반 소유자/공유자/관리자/그룹 멤버 검증. admin API는 `require_admin` 일괄 적용 |
 | **admin 접근 정책** | admin은 메타데이터만 조회 가능, 파일 내용 접근 불가. 모든 admin 행위는 `audit_logs` 기록 (3.6.4) |
 | **그룹 권한** | 파일/폴더 단위 그룹 읽기·쓰기·관리 권한, 하위 폴더 상속, 권한 재정의 지원 |
@@ -902,7 +946,7 @@ server {
 - 본 PRD는 **사내 자가 호스팅** 전제이므로, AWS S3/object storage는 추후 마이그레이션 타겟으로 간주
 - 모든 secret(JWT, MinIO 암호, DB 패스워드)은 `.env` 파일 또는 Docker Secrets로 관리, 버전 관리에 포함 금지
 - Phase 1~4까지 완료 시 사내 시범 운영, Phase 5는 사용 피드백 수집 후 추진
-- 사내 폐쇄망 시스템 전제로 SSO 연동은 범위에서 제외 (가입 승인제로 접근 통제)
+- 사내 폐쇄망 시스템 전제로 SSO 연동은 범위에서 제외 (가입 코드제로 접근 통제)
 - 문서화: OpenAPI(Swagger) 자동 생성, README에 Docker Compose 기동 가이드 포함
 
 ---
