@@ -35,10 +35,10 @@
 ### 1.2 타겟 사용자
 
 - 사내 임직원(모든 부서)
-- 관리자(공유 링크 관리, 사용자 권한 통제, 그룹/팀 관리)
-- 그룹 관리자(소속 그룹의 파일/폴더 권한 관리)
+- **시스템 관리자(Admin)**: 인스턴스 운영자. 사용자 계정 관리(활성/비활성, 할당량), 전체 공유 링크 통제, 스토리지 모니터링 (→ [3.6 시스템 관리자](#36-시스템-관리자-admin))
+- **그룹 관리자**: 소속 그룹의 멤버·파일/폴더 권한 관리 (그룹 역할 `owner`/`admin`, 시스템 관리자와 별개 축)
 
-### 1.4 그룹 기반 접근 제어 (Group-based Access Control)
+### 1.3 그룹 기반 접근 제어 (Group-based Access Control)
 
 GitHub의 Team 구조와 유사하게 **그룹(Group) → 그룹원(Member) → 리소스 권한** 계층으로 접근 권한을 통제한다. Mini Drive 인스턴스 자체가 단일 조직 역할을 하므로, 별도의 조직(Organization) 테이블은 두지 않고 인스턴스 내 그룹으로 관리한다.
 
@@ -48,7 +48,7 @@ GitHub의 Team 구조와 유사하게 **그룹(Group) → 그룹원(Member) → 
 | **그룹원(Member)** | 사용자를 그룹에 소속. 역할(`owner`, `admin`, `member`) 부여 |
 | **리소스 권한** | 파일/폴더 단위로 그룹에 읽기·쓰기·관리 권한 부여. 하위 폴더로 상속 가능 |
 
-### 1.3 비기능 요구사항
+### 1.4 비기능 요구사항
 
 | 항목 | 기준 |
 |---|---|
@@ -79,7 +79,8 @@ FastAPI (Backend)
   ├─ PermissionService: 리소스별 그룹 권한 검사·상속·재정의
   ├─ StorageService: MinIO S3 추상화 계층
   ├─ FileService: 메타데이터 CRUD
-  └─ VersionService: 버전 히스토리 관리
+  ├─ VersionService: 버전 히스토리 관리
+  └─ AdminService: 사용자/공유 링크 운영 관리, 감사 로그
   ▼
 MinIO (Object Storage)
   └─ Bucket: minidrive
@@ -88,10 +89,16 @@ MinIO (Object Storage)
        └── thumbnails/{fileId}.png     ← 썸네일
   ▼
 PostgreSQL (Metadata DB)
-  ├─ users 테이블
-  ├─ files 테이블
-  ├─ file_versions 테이블
-  └─ shares 테이블 (공유 링크 정보)
+  ├─ users / groups / group_members 테이블
+  ├─ files / file_versions 테이블
+  ├─ shares 테이블 (공유 링크 정보)
+  ├─ file_group_permissions 테이블
+  └─ audit_logs 테이블 (관리자 행위 감사)
+  ▼
+Redis (Cache / Token Store)
+  ├─ refresh 토큰 저장·회전 (로그아웃 시 폐기)
+  ├─ 권한 판정 결과 캐시 (변경 시 무효화)
+  └─ rate limiting 카운터
   ▼
 nginx (Reverse Proxy / Gateway)
   ├─ 정적 파일 서빙 (React SPA)
@@ -106,7 +113,9 @@ nginx (Reverse Proxy / Gateway)
 | **S3 추상화 계층** | `StorageService` 인터페이스(`put/get/presignGet/delete`)로 MinIO 접근을 감싸, 추후 AWS S3 전환 시 코드 변경 최소화 |
 | **게이트웨이 다운로드 모델** | 브라우저에 presigned URL 직접 발급 ❌ → FastAPI 매 요청 인가 후 `X-Accel-Redirect`로 nginx→MinIO 스트리밍 ✅. 공유 링크 비활성화 시 **즉시 차단** 보장 |
 | **앱 레벨 버전 관리** | MinIO 네이티브 버저닝 ❌, PostgreSQL `file_versions` 테이블이 진실 소스 ✅ |
-| **Internal presign (60s TTL)** | nginx↔MinIO 간 presign은 브라우저 비노출, 60초 TTL, nginx만 접근 가능 |
+| **Internal presign (60s TTL)** | nginx↔MinIO 간 presign은 브라우저 비노출, 60초 TTL, nginx만 접근 가능. MinIO 버킷은 익명 접근 완전 차단(`mc anonymous set none`) |
+| **권한 상속 = 조회 시 판정** | 상속 권한을 행으로 물질화하지 않음. 명시적 부여만 저장하고, 조회 시 조상 경로를 recursive CTE로 판정 + Redis 캐시. 권한 변경 시 쓰기 폭증 없이 "즉시 반영" 요구 충족 |
+| **시스템 admin / 그룹 admin 분리** | `users.role`(전역)과 `group_members.role`(그룹 내)은 별개 축. 시스템 admin은 운영 통제만, 파일 내용 접근 불가 |
 
 ---
 
@@ -116,10 +125,10 @@ nginx (Reverse Proxy / Gateway)
 
 | 기능 | 설명 | 우선순위 |
 |---|---|---|
-| **회원가입** | 사내 이메일 또는 SSO 기반 가입. 비활성화된 계정은 즉시 로그인 차단 | P0 |
-| **로그인/로그아웃** | JWT 인증, 리프레시 토큰 갱신 | P0 |
+| **회원가입** | 사내 이메일 기반 가입 (SSO 연동은 Phase 4). 비활성화된 계정은 즉시 로그인 차단 — access 토큰 유효 기간 내 요청도 인가 시 `is_active` 확인으로 차단 | P0 |
+| **로그인/로그아웃** | JWT 인증, 리프레시 토큰 갱신. 로그아웃 시 Redis에 저장된 refresh 토큰 폐기 | P0 |
 | **프로필 관리** | 아바타, 표시 이름, 비밀번호 변경 | P1 |
-| **관리자 대시보드** | 사용자 목록, 활성/비활성 상태, 저장소 사용량 조회 | P1 |
+| **관리자 대시보드** | → [3.6 시스템 관리자](#36-시스템-관리자-admin) 참조 | P1 |
 
 ### 3.1.1 그룹 관리 (Group Management)
 
@@ -208,7 +217,8 @@ interface ThemeContextType {
 
 | 기능 | 설명 | 우선순위 |
 |---|---|---|
-| **파일 업로드** | 드래그 앤 드롭, multipart 업로드, 최대 10 GB | P0 |
+| **파일 업로드** | 드래그 앤 드롭, multipart 스트리밍 업로드, 최대 10 GB | P0 |
+| **재개 가능 업로드** | 1 GB 초과 파일은 청크 분할 + S3 Multipart Upload 기반 재개 가능 업로드 (중단 시 이어올리기) | P1 |
 | **폴더 생성/구조** | `/users/{userId}/` 루트 기반 디렉터리 구조 | P0 |
 | **파일 목록 조회** | 페이지네이션, 정렬, 필터링 | P0 |
 | **파일 다운로드** | 게이트웨이 스트리밍 (인가+실시간 검증) | P0 |
@@ -243,6 +253,38 @@ interface ThemeContextType {
 | **수정 블록만 동기화** | 델타 동기화 전략 (블록 해시 비교) | P2 |
 | **롱폴링 알림** | 파일 변경 실시간 알림 (WebSocket 또는 Long-Polling) | P2 |
 
+### 3.6 시스템 관리자 (Admin)
+
+#### 3.6.1 역할 모델
+
+시스템 전역 역할은 `users.role` 컬럼(`user` | `admin`) 하나로 관리한다. **그룹 역할(`group_members.role`)과는 별개 축**이며, 팀 단위 관리는 그룹 역할이 담당하므로 중간 등급은 두지 않는다 (필요 시 추후 확장).
+
+#### 3.6.2 첫 관리자 부트스트랩
+
+"첫 가입자가 admin" 방식은 배포 직후 레이스 위험이 있으므로 사용하지 않는다.
+
+| 방식 | 설명 |
+|---|---|
+| **환경변수 시드** | 기동 시 `ADMIN_EMAIL` / `ADMIN_INITIAL_PASSWORD`를 읽어 admin 계정이 없으면 생성 (기본 부트스트랩 경로) |
+| **CLI 커맨드** | `python -m app.cli create-admin` — 운영 중 기존 사용자 승격에도 재사용 |
+
+#### 3.6.3 관리자 기능
+
+| 기능 | 설명 | 우선순위 |
+|---|---|---|
+| **사용자 관리** | 사용자 목록·사용량 조회, 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 | P1 |
+| **전체 그룹 조회** | 그룹 owner가 아니어도 전체 그룹/멤버 현황 조회 | P1 |
+| **공유 링크 통제** | 전체 공유 링크 조회, 강제 비활성화 | P1 |
+| **스토리지 통계** | 인스턴스 총 사용량, 사용자별 사용량, 파일 수 | P1 |
+| **감사 로그 조회** | 관리자 행위 이력 조회 (→ 5.9 `audit_logs`) | P1 |
+
+#### 3.6.4 접근 정책
+
+- **admin은 사용자 파일의 메타데이터(파일명, 크기, 공유 현황)만 조회 가능하며, 파일 내용 다운로드는 불가**하다. 사내 서비스라도 프라이버시 기대를 보장한다.
+- 퇴사자 파일 인수인계는 admin의 내용 접근이 아니라 **그룹 소유권 이전**(3.1.3)으로 해결한다.
+- 모든 admin 행위(계정 비활성화, 할당량 변경, role 변경, 공유 링크 강제 차단)는 `audit_logs`에 기록한다.
+- 인가는 FastAPI `require_admin` dependency로 `/api/admin/*` 라우터 전체에 일괄 적용한다.
+
 ---
 
 ## 4. 기술 스택
@@ -266,6 +308,7 @@ interface ThemeContextType {
 | **Object Storage** | MinIO | 최신 (Docker 이미지) |
 | **Database** | PostgreSQL | 16+ |
 | | pgvector (선택) | 최신 |
+| **Cache / Token Store** | Redis | 7.x |
 | **Reverse Proxy** | nginx | 1.27+ |
 | **Auth** | JWT (access + refresh) | — |
 | | argon2 (비밀번호 해싱) | 최신 |
@@ -285,6 +328,7 @@ CREATE TABLE users (
     password_hash   VARCHAR(255) NOT NULL,
     display_name    VARCHAR(100) NOT NULL DEFAULT '',
     avatar_url      VARCHAR(500),
+    role            VARCHAR(20) NOT NULL DEFAULT 'user',  -- user / admin (시스템 전역 역할)
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     storage_used    BIGINT NOT NULL DEFAULT 0,
     max_storage     BIGINT NOT NULL DEFAULT 10737418240,  -- 10GB
@@ -298,7 +342,8 @@ CREATE TABLE users (
 ```sql
 CREATE TABLE files (
     id              BIGSERIAL PRIMARY KEY,
-    user_id         BIGINT NOT NULL REFERENCES users(id),
+    user_id         BIGINT NOT NULL REFERENCES users(id),   -- 생성자(업로더)
+    group_id        BIGINT REFERENCES groups(id),           -- 그룹 소유 파일 (NULL = 개인 소유)
     parent_folder_id BIGINT REFERENCES files(id),
     name            VARCHAR(255) NOT NULL,
     file_key        VARCHAR(500) NOT NULL,
@@ -313,7 +358,15 @@ CREATE TABLE files (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at      TIMESTAMPTZ
 );
+
+-- 같은 폴더 내 이름 중복 방지 (휴지통 파일은 제외)
+CREATE UNIQUE INDEX uq_files_sibling_name
+    ON files (parent_folder_id, name) WHERE is_deleted = FALSE;
+CREATE INDEX idx_files_parent ON files (parent_folder_id);
+CREATE INDEX idx_files_user   ON files (user_id);
 ```
+
+> **루트 폴더**: 가입 시 사용자별 루트 폴더 행을 자동 생성하여 일반 파일/폴더의 `parent_folder_id`가 항상 NOT NULL이 되도록 한다 (루트 행만 `parent_folder_id IS NULL`). 이로써 위 unique 인덱스가 루트 레벨에서도 사용자 간 간섭 없이 동작한다.
 
 ### 5.3 file_versions 테이블
 
@@ -374,10 +427,13 @@ CREATE TABLE group_members (
     user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role            VARCHAR(20) NOT NULL DEFAULT 'member',  -- owner / admin / member
     joined_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    removed_at      TIMESTAMPTZ,
+    removed_at      TIMESTAMPTZ,  -- soft delete (NULL = 활성 멤버)
     UNIQUE (group_id, user_id)
 );
 ```
+
+> **재초대 처리**: soft delete(`removed_at`)와 `UNIQUE (group_id, user_id)`를 함께 쓰므로, 제거된 멤버 재초대는 새 행 INSERT가 아니라 기존 행 재활성화로 처리한다:
+> `INSERT ... ON CONFLICT (group_id, user_id) DO UPDATE SET removed_at = NULL, role = EXCLUDED.role, joined_at = NOW()`
 
 ### 5.7 file_group_permissions 테이블
 
@@ -387,8 +443,7 @@ CREATE TABLE file_group_permissions (
     file_id         BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     group_id        BIGINT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     permission      VARCHAR(20) NOT NULL DEFAULT 'read',  -- read / write / manage
-    inherited_from  BIGINT REFERENCES file_group_permissions(id),  -- 상위 폴더 권한 상속 추적
-    inherited_at    TIMESTAMPTZ,
+    inherit_to_children BOOLEAN NOT NULL DEFAULT TRUE,    -- 하위 폴더/파일로 상속 여부
     granted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at      TIMESTAMPTZ,  -- 만료 시각 (NULL = 영구)
     granted_by      BIGINT NOT NULL REFERENCES users(id),
@@ -396,9 +451,47 @@ CREATE TABLE file_group_permissions (
 );
 ```
 
+> **상속 설계 결정 — 물질화하지 않고 조회 시 판정**
+>
+> 상속된 권한을 하위 파일마다 행으로 복사(물질화)하면 깊은 트리에서 폴더 권한 변경 한 번에 하위 전체 쓰기 폭증이 발생하여, "권한 변경 즉시 반영"(1.4) 요구와 충돌한다. 따라서:
+> - 이 테이블에는 **명시적으로 부여한 권한만** 저장한다.
+> - 권한 판정 시 대상 파일의 조상 경로를 recursive CTE로 따라가며 `inherit_to_children = TRUE`인 가장 가까운 권한을 적용한다.
+> - **권한 재정의**(3.1.3)는 하위 폴더에 명시적 행을 추가하는 것으로 표현한다 (가까운 조상 우선이므로 자연스럽게 상위 권한을 덮어씀).
+> - 판정 결과는 Redis에 캐시하고, 권한 변경·그룹 멤버 변경 시 관련 캐시를 무효화한다.
+
 ### 5.8 파일 소유자 변경 고려사항
 
 `files.user_id`는 파일의 **생성자(업로더)**를 의미하며, **소유권(그룹 귀속 여부)**은 `files.group_id` 컬럼으로 구분한다. 그룹 소유 파일은 `group_id`가 지정되고, 개인 소유 파일은 `group_id IS NULL`이다. 권한 검사 시 그룹 소유권을 우선 확인한다.
+
+### 5.9 audit_logs 테이블
+
+관리자 행위(계정 비활성화, 할당량·role 변경, 공유 링크 강제 차단)와 권한 변경을 기록한다. "누가 이 링크를 껐나"에 답하기 위한 테이블이다.
+
+```sql
+CREATE TABLE audit_logs (
+    id              BIGSERIAL PRIMARY KEY,
+    actor_id        BIGINT NOT NULL REFERENCES users(id),
+    action          VARCHAR(50) NOT NULL,   -- 예: user.deactivate, user.quota_update, share.force_disable, permission.grant
+    target_type     VARCHAR(30) NOT NULL,   -- user / group / file / share
+    target_id       BIGINT,
+    detail          JSONB,                  -- 변경 전/후 값 등
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_logs_target ON audit_logs (target_type, target_id);
+CREATE INDEX idx_audit_logs_actor  ON audit_logs (actor_id, created_at);
+```
+
+### 5.10 저장 용량 할당량의 원자적 갱신
+
+`users.storage_used` 할당량 검사는 동시 업로드 시 레이스가 발생할 수 있으므로, 애플리케이션에서 읽고 비교하는 방식이 아니라 DB 레벨 원자적 갱신으로 강제한다:
+
+```sql
+UPDATE users
+SET storage_used = storage_used + :size
+WHERE id = :user_id AND storage_used + :size <= max_storage
+RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
+```
 
 ---
 
@@ -411,7 +504,7 @@ CREATE TABLE file_group_permissions (
 | `POST` | `/api/auth/register` | 회원가입 |
 | `POST` | `/api/auth/login` | 로그인 (access + refresh JWT 반환) |
 | `POST` | `/api/auth/refresh` | 리프레시 토큰으로 access 갱신 |
-| `POST` | `/api/auth/logout` | 로그아웃 |
+| `POST` | `/api/auth/logout` | 로그아웃 (Redis의 refresh 토큰 폐기) |
 | `GET`  | `/api/auth/me` | 현재 사용자 정보 |
 
 ### 6.2 파일
@@ -471,13 +564,27 @@ CREATE TABLE file_group_permissions (
 | `GET`  | `/api/permissions/check/{fileId}` | 현재 사용자가 해당 파일에 대해 가진 권한 조회 (read/write/manage) |
 | `GET`  | `/api/permissions/inherited/{fileId}` | 파일의 상속된 권한 트리 조회 (디버깅/관리용) |
 
+### 6.7 관리자 (Admin)
+
+`require_admin` dependency로 라우터 전체에 인가를 일괄 적용한다. 모든 상태 변경 행위는 `audit_logs`에 기록된다.
+
+| Method | Endpoint | 설명 |
+|---|---|---|
+| `GET`  | `/api/admin/users` | 사용자 목록 (사용량·활성 상태 포함, 페이지네이션) |
+| `PATCH`| `/api/admin/users/{id}` | 활성/비활성 전환, 할당량(`max_storage`) 조정, role 변경 |
+| `GET`  | `/api/admin/groups` | 전체 그룹 목록 (멤버 수, 소유 파일 수 포함) |
+| `GET`  | `/api/admin/shares` | 전체 공유 링크 목록 (query: `active`, `userId`) |
+| `POST` | `/api/admin/shares/{id}/disable` | 공유 링크 강제 비활성화 |
+| `GET`  | `/api/admin/stats` | 인스턴스 총 사용량, 사용자 수, 파일 수 |
+| `GET`  | `/api/admin/audit-logs` | 감사 로그 조회 (query: `actorId`, `targetType`, `from`, `to`) |
+
+> **주의**: admin API는 파일 **메타데이터만** 다룬다. 파일 내용 다운로드 엔드포인트는 admin 네임스페이스에 존재하지 않는다 (3.6.4 접근 정책).
+
 ---
 
 ## 7. Docker Compose 구성
 
 ```yaml
-version: "3.9"
-
 services:
   nginx:
     image: nginx:1.27-alpine
@@ -496,8 +603,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    # 호스트 포트 미노출 — 모든 트래픽은 nginx 게이트웨이 경유 (rate limiting/TLS 우회 방지)
+    expose:
+      - "8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/minidrive
       - MINIO_ENDPOINT=minio:9000
@@ -506,6 +614,8 @@ services:
       - JWT_SECRET=change-me-in-production
       - JWT_ALGORITHM=HS256
       - REDIS_URL=redis://redis:6379/0
+      - ADMIN_EMAIL=admin@example.com            # 첫 admin 부트스트랩 (3.6.2)
+      - ADMIN_INITIAL_PASSWORD=change-me-in-production
     depends_on:
       db:
         condition: service_healthy
@@ -579,8 +689,11 @@ services:
       sleep 5;
       mc alias set local http://minio:9000 minioadmin change-me-...;
       mc mb --ignore-existing local/minidrive;
-      mc anonymous set download local/minidrive;
+      mc anonymous set none local/minidrive;
       "
+    # 주의: 익명 접근은 반드시 none — download로 열면 내부 네트워크에서 인가 없이
+    # 객체를 읽을 수 있어 게이트웨이 모델(매 요청 인가)이 무력화됨.
+    # nginx→MinIO 접근은 내부 전용 presigned URL(60초 TTL)로만 수행.
     networks:
       - minidrive
 
@@ -607,15 +720,13 @@ location /_minio/ {
     proxy_set_header Host minio:9000;
     proxy_set_header Authorization "";
     proxy_set_header X-Real-IP $remote_addr;
-}
 
-location /api/shares/ {
-    proxy_pass http://backend:8000;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    # 대용량 다운로드: 디스크 버퍼링 없이 스트리밍
+    proxy_buffering off;
 }
 ```
+
+> 공유 링크(`/api/shares/`)는 8.2의 `/api/` location이 포괄하므로 별도 location을 두지 않는다.
 
 ### 8.2 정적 서빙 (프론트엔드)
 
@@ -624,10 +735,19 @@ server {
     listen 80;
     server_name _;
 
+    # 최대 파일 크기 10 GB (1.4 비기능 요구사항)
+    client_max_body_size 10g;
+
     location /api/ {
         proxy_pass http://backend:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # 대용량 업로드: nginx 디스크 버퍼링 없이 backend로 스트리밍
+        proxy_request_buffering off;
+        proxy_read_timeout  300s;
+        proxy_send_timeout  300s;
     }
 
     location / {
@@ -656,7 +776,8 @@ server {
 |---|---|
 | **목표** | 인증 + 파일 업로드/다운로드 + 목록 조회 + 공유 링크 생성/비활성화 |
 | **완료 조건** | 회원가입→로그인→파일 업로드→다운로드→공유 링크 생성/비활성화 E2E 통과 |
-| **제외** | 버전 관리, 델타 동기화, 썸네일, 미리보기 |
+| **포함(스캐폴딩)** | `users.role` 컬럼 + `require_admin` dependency + admin 부트스트랩(환경변수 시드) — 나중에 넣으면 마이그레이션·인가 코드 소급 비용이 크므로 Phase 1에 포함 |
+| **제외** | 버전 관리, 델타 동기화, 썸네일, 미리보기, admin 대시보드 UI |
 
 ### Phase 2: 버전 관리 (1-2주)
 
@@ -669,8 +790,8 @@ server {
 
 | 항목 | 내용 |
 |---|---|
-| **목표** | 프로덕션 준비 |
-| **완료 조건** | Nginx 게이트웨이 정제, 건강 체크, 로깅, 메트릭, 백업 스크립트, Docker Compose 프로덕션 프로파일 |
+| **목표** | 프로덕션 준비 + 운영 관리 도구 |
+| **완료 조건** | Nginx 게이트웨이 정제, 건강 체크, 로깅, 메트릭, 백업 스크립트, Docker Compose 프로덕션 프로파일, **admin 대시보드 UI + admin API + 감사 로그** |
 
 ### Phase 4: 고도화 (선택, 2-3주)
 
@@ -686,12 +807,15 @@ server {
 | 항목 | 방안 |
 |---|---|
 | **인증** | JWT (access 15분 + refresh 7일), argon2 비밀번호 해싱 |
-| **인가** | FastAPI Dependency Injection 기반 소유자/공유자/관리자/그룹 멤버 검증 |
+| **토큰 폐기** | refresh 토큰은 Redis에 저장·회전(rotation), 로그아웃/비활성화 시 즉시 폐기. 인가 시 매 요청 `is_active` 확인으로 access 토큰 유효 기간 내 우회 차단 |
+| **인가** | FastAPI Dependency Injection 기반 소유자/공유자/관리자/그룹 멤버 검증. admin API는 `require_admin` 일괄 적용 |
+| **admin 접근 정책** | admin은 메타데이터만 조회 가능, 파일 내용 접근 불가. 모든 admin 행위는 `audit_logs` 기록 (3.6.4) |
 | **그룹 권한** | 파일/폴더 단위 그룹 읽기·쓰기·관리 권한, 하위 폴더 상속, 권한 재정의 지원 |
 | **그룹 소유권** | 그룹 소유 파일/폴더는 생성자 퇴사 시에도 그룹 권한 유지, 소유권 이전 가능 |
 | **비밀번호** | SCrypt 또는 argon2id, 최소 8자 영숫자+특수문자 |
 | **공유 링크** | 비밀번호 옵션, 만료일 설정, 비활성화 즉시 410 반환, 다운로드 횟수 제한 |
 | **presigned URL** | 브라우저 발급 ❌, nginx 내부 전용 60초 TTL ✅ |
+| **MinIO 버킷 정책** | 익명 접근 완전 차단 (`mc anonymous set none`) — 게이트웨이 모델의 전제 조건 |
 | **MinIO 포트** | 9000(API) 호스트 비노출, 9001(콘솔)만 내부 네트워크 |
 | **CORS** | 프론트엔드 오리진만 허용, 자격 증명 포함 |
 | **데이터 암호화** | 서버측 암호화(MinIO SSE-S3 또는 SSE-KMS), 전송 구간 TLS |
@@ -718,7 +842,9 @@ server {
 | **공유 링크 비활성화 후에도 기존 presigned URL이 TTL 동안 우회** | 보안 사고 | ✅ 게이트웨이 모델 채택 (매 요청 인가), presign은 nginx 내부 전용 60초 TTL |
 | **MinIO의 SigV4 서명과 Host 헤더 불일치** | 다운로드 실패 | `proxy_set_header Host minio:9000;` 강제 |
 | **Authorization 헤더 MinIO 누수** | 401 multiple auth types 오류 | `proxy_set_header Authorization "";` 덮어쓰기 |
-| **대용량 파일 업로드 메모리 과부하** | OOM, 서버 다운 | multipart 스트리밍 업로드, 최대 10 GB 제한, 타임아웃 설정 |
+| **대용량 파일 업로드 메모리 과부하** | OOM, 서버 다운 | multipart 스트리밍 업로드(nginx `proxy_request_buffering off`), 최대 10 GB 제한, 타임아웃 설정 |
+| **10 GB 업로드 중간 실패 시 전체 재전송** | 사용자 경험 저하, 대역폭 낭비 | 청크 분할 + S3 Multipart Upload 기반 재개 가능 업로드 (3.2, P1) |
+| **동시 업로드 시 할당량 검사 레이스** | 할당량 초과 저장 | DB 레벨 원자적 갱신으로 강제 (5.10) |
 | **PostgreSQL 단일 장애점(SPOF)** | 서비스 중단 | Phase 2 이후 replication 도입, 정기 백업 (pg_dump + WAL archive) |
 | **MinIO 디스크 부족** | 업로드 실패 | 모니터링 + 알림, 자동 확장 스크립트, 사용자별 할당량 강제 |
 | **nginx 설정 반영 안 됨 (inode 교체)** | 설정 변경 무효 | `--force-recreate` 또는 디렉터리 마운트 권장 |
@@ -764,3 +890,4 @@ server {
 | 날짜 | 내용 |
 |---|---|
 | 2026-07-17 | 초안 작성 |
+| 2026-07-18 | 검토 반영: 시스템 admin 설계 추가(3.6, 5.9, 6.7), MinIO 익명 접근 차단, backend 포트 비노출, `files.group_id` DDL 반영, 권한 상속 조회 시 판정으로 변경, 토큰 폐기 전략, 재개 가능 업로드, 할당량 원자적 갱신, 섹션 순서·스택 표 정리 |
