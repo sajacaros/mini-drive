@@ -8,7 +8,6 @@ nginx→MinIO 스트리밍을 유도한다.
 from __future__ import annotations
 
 from typing import Annotated
-from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -22,6 +21,8 @@ from fastapi import (
 from fastapi import File as FileParam
 
 from app.api.deps import CurrentUser, DbSession
+from app.api.download import content_disposition as _content_disposition
+from app.api.download import gateway_download_response
 from app.schemas.files import (
     FileListResponse,
     FileRenameRequest,
@@ -32,17 +33,15 @@ from app.services import files as files_service
 from app.services.files import FileServiceError
 from app.services.storage import get_storage
 
+# _content_disposition 은 app.api.download.content_disposition 로 승격되어 공유 라우트와
+# 공용으로 쓰인다. 기존 임포트 경로 호환을 위해 이 모듈에서도 별칭으로 노출한다.
+__all__ = ["router", "_content_disposition"]
+
 router = APIRouter()
 
 
 def _http_error(exc: FileServiceError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.detail)
-
-
-def _content_disposition(filename: str) -> str:
-    """RFC 5987 filename* (UTF-8) + ASCII fallback 로 첨부 헤더를 만든다."""
-    ascii_fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "")
-    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(filename)}"
 
 
 # --- 고정 경로 (/{file_id} 보다 먼저) ---------------------------------------
@@ -134,14 +133,7 @@ async def download(file_id: int, user: CurrentUser, session: DbSession) -> Respo
     except FileServiceError as exc:
         raise _http_error(exc) from exc
 
-    return Response(
-        status_code=status.HTTP_200_OK,
-        headers={
-            "X-Accel-Redirect": internal,
-            "Content-Type": mime,
-            "Content-Disposition": _content_disposition(filename),
-        },
-    )
+    return gateway_download_response(internal, filename, mime)
 
 
 @router.put("/{file_id}", response_model=FileResponse)

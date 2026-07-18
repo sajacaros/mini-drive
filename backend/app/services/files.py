@@ -497,6 +497,13 @@ async def permanent_delete(
     keys.update(k for k in version_keys if k)
 
     # 2) DB 확정 — 행 삭제(versions CASCADE) + storage_used 감소.
+    #    shares.file_id 는 ON DELETE CASCADE 가 없어(모델/마이그레이션 변경 회피), 영구 삭제
+    #    대상(하위 포함)에 걸린 공유 링크 행을 앱 레벨에서 먼저 지워 FK 위반을 방지한다.
+    #    공유 링크는 이력 보존 대상이지만 원본 파일 자체가 사라지는 영구 삭제에서는 함께 소멸한다.
+    await session.execute(
+        text(_SUBTREE_CTE + " DELETE FROM shares WHERE file_id IN (SELECT id FROM sub)"),
+        {"root": file.id},
+    )
     await session.execute(
         text(_SUBTREE_CTE + " DELETE FROM files WHERE id IN (SELECT id FROM sub)"),
         {"root": file.id},
