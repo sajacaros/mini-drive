@@ -1,0 +1,55 @@
+# ── Secrets / Environment ─────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ── Python (backend) ──────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+
+# ── Node / React (frontend) ───────────────────────────
+node_modules/
+frontend/dist/
+frontend/build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Docker / Runtime data ─────────────────────────────
+# 볼륨을 bind mount로 쓸 경우의 로컬 데이터 디렉터리
+data/
+minio_data/
+pg_data/
+redis_data/
+*.log
+logs/
+
+# ── IDE / Editor ──────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Claude Code ───────────────────────────────────────
+.claude/settings.local.json
