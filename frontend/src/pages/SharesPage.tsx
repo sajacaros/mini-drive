@@ -112,7 +112,7 @@ export function SharesPage() {
                           복사
                         </button>
                         {s.is_active && (
-                          <button className="btn btn-ghost text-red-600" onClick={() => onDisable(s)}>
+                          <button className="btn btn-ghost text-danger" onClick={() => onDisable(s)}>
                             비활성화
                           </button>
                         )}

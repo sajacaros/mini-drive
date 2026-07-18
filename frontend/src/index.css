@@ -1,14 +1,50 @@
 @import "tailwindcss";
 
 /*
- * 테마 토큰 (PRD 3.1.4). Phase 5 에서 다크/라이트 × 모던/게임보이 4종으로 확장한다.
- * 지금은 "라이트 모던"(PRD 3.1.4.2: slate 계열 + blue-500 accent, Inter) 단일 테마이며,
- * body 클래스(theme-modern-light 등) + CSS 변수 구조를 미리 잡아 확장 여지만 남긴다.
+ * 테마 토큰 (PRD 3.1.4.2). 다크/라이트 × 모던/게임보이 4종.
+ * <html> 에 theme-modern-dark / theme-modern-light / theme-gameboy-dark / theme-gameboy-light
+ * 클래스를 토글하면(=ThemeContext) 아래 CSS 변수가 바뀌고 컴포넌트는 변수만 참조한다.
+ * 6개 핵심 토큰(bg-primary/secondary/accent, text-primary/secondary, border-color)은
+ * PRD 3.1.4.2 표 값을 그대로 사용하고, 파생 토큰(muted/hover/fg/danger/…)만 보강한다.
  */
+
+/* 게임보이 픽셀 폰트 — 사내망(CDN 금지)을 위해 woff2 를 번들. 라이선스: assets/fonts/OFL.txt */
+@font-face {
+  font-family: "Press Start 2P";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  /* latin subset (U+0000-00FF). 한글 글리프 없음 → 게임보이 본문은 모노스페이스로 폴백 */
+  src: url("./assets/fonts/PressStart2P-Regular.woff2") format("woff2");
+}
+
+/* ── 모던 다크 (기본 폴백) ───────────────────────────── */
 :root,
+.theme-modern-dark {
+  --bg-primary: #0f172a; /* slate-900 */
+  --bg-secondary: #1e293b; /* slate-800 */
+  --bg-muted: #334155; /* slate-700 */
+  --accent: #3b82f6; /* blue-500 */
+  --accent-hover: #2563eb; /* blue-600 */
+  --accent-fg: #ffffff;
+  --text-primary: #f1f5f9; /* slate-100 */
+  --text-secondary: #94a3b8; /* slate-400 */
+  --border-color: #334155; /* slate-700 */
+  --danger: #f87171; /* red-400 (다크 배경 가독) */
+  --success: #4ade80; /* green-400 */
+  --warning: #fbbf24; /* amber-400 */
+  --radius: 10px;
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --transition-base: 150ms;
+  --font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-family);
+  color-scheme: dark;
+}
+
+/* ── 모던 라이트 ─────────────────────────────────────── */
 .theme-modern-light {
   --bg-primary: #f8fafc; /* slate-50 */
-  --bg-secondary: #ffffff;
+  --bg-secondary: #e2e8f0; /* slate-200 (PRD 표 값) */
   --bg-muted: #f1f5f9; /* slate-100 */
   --accent: #3b82f6; /* blue-500 */
   --accent-hover: #2563eb; /* blue-600 */
@@ -18,18 +54,101 @@
   --border-color: #e2e8f0; /* slate-200 */
   --danger: #dc2626; /* red-600 */
   --success: #16a34a; /* green-600 */
+  --warning: #d97706; /* amber-600 */
   --radius: 10px;
   --shadow-soft: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --transition-base: 150ms;
+  --font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-family);
+  color-scheme: light;
+}
+
+/* ── 게임보이 다크 (초록/검정 8비트) ─────────────────── */
+.theme-gameboy-dark {
+  --bg-primary: #0a0a0a; /* near-black */
+  --bg-secondary: #1a1a1a;
+  --bg-muted: #262626;
+  --accent: #00ff41; /* green */
+  --accent-hover: #00cc34;
+  --accent-fg: #0a0a0a;
+  --text-primary: #00ff41;
+  --text-secondary: #8bac0f;
+  --border-color: #333333;
+  --danger: #ff5555;
+  --success: #00ff41;
+  --warning: #f4d738;
+  --radius: 0px;
+  --shadow-soft: none;
+  --transition-base: 0ms;
+  --font-family: "DungGeunMo", "Galmuri11", ui-monospace, "D2Coding", Menlo, Consolas, monospace;
+  --font-display: "Press Start 2P", "DungGeunMo", "Galmuri11", ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+/* ── 게임보이 라이트 (크림/올리브 8비트) ─────────────── */
+.theme-gameboy-light {
+  --bg-primary: #f0ead6; /* cream */
+  --bg-secondary: #d4c9a8;
+  --bg-muted: #c4b896;
+  --accent: #8bac0f; /* olive green */
+  --accent-hover: #6d8709;
+  --accent-fg: #0f380f; /* darkest gameboy green */
+  --text-primary: #303030;
+  --text-secondary: #5a5a3a;
+  --border-color: #c4b896;
+  --danger: #9b2226;
+  --success: #556b0f;
+  --warning: #ae7b18;
+  --radius: 0px;
+  --shadow-soft: none;
+  --transition-base: 0ms;
+  --font-family: "DungGeunMo", "Galmuri11", ui-monospace, "D2Coding", Menlo, Consolas, monospace;
+  --font-display: "Press Start 2P", "DungGeunMo", "Galmuri11", ui-monospace, monospace;
   color-scheme: light;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-family);
   background: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  /* 테마 전환 애니메이션(PRD P2). 게임보이는 아래 오버라이드로 0ms */
+  transition:
+    background-color var(--transition-base) ease,
+    color var(--transition-base) ease;
+}
+
+/* ── 게임보이 공통: 각진 8비트 룩(라운드 0 · 그림자 제거 · 전환 0ms) ── */
+.theme-gameboy-dark,
+.theme-gameboy-light {
+  /* Tailwind 하드코딩 rounded-* / transition 유틸을 테마 토큰으로 강제 */
+}
+.theme-gameboy-dark [class*="rounded"],
+.theme-gameboy-light [class*="rounded"] {
+  border-radius: 0 !important;
+}
+.theme-gameboy-dark *,
+.theme-gameboy-light * {
+  /* 전환 즉시(0ms). 스피너 등 animation 은 유지 */
+  transition-duration: 0ms !important;
+}
+.theme-gameboy-dark [class*="shadow"],
+.theme-gameboy-light [class*="shadow"] {
+  box-shadow: none !important;
+}
+/* 아이콘(SVG) 각지게 — 안티에일리어싱 완화로 8비트 느낌 */
+.theme-gameboy-dark svg,
+.theme-gameboy-light svg {
+  shape-rendering: crispEdges;
+}
+/* 픽셀 폰트: 짧은 라틴 UI 텍스트(브랜드·제목·버튼)에만 적용. 한글은 폴백 모노스페이스 */
+.theme-gameboy-dark .font-pixel,
+.theme-gameboy-light .font-pixel,
+.theme-gameboy-dark .btn,
+.theme-gameboy-light .btn {
+  font-family: var(--font-display);
 }
 
 @layer components {
@@ -76,7 +195,7 @@ body {
   }
   .input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
   }
 
   .label {
@@ -93,13 +212,25 @@ body {
   }
 }
 
-/* 유틸: 토큰 색상 */
+/* ── 유틸: 토큰 색상 ─────────────────────────────────── */
 .text-muted {
   color: var(--text-secondary);
+}
+.text-danger {
+  color: var(--danger);
 }
 .border-token {
   border-color: var(--border-color);
 }
 .bg-muted-token {
   background: var(--bg-muted);
+}
+/* 인라인 경고/성공 배너 (하드코딩 red-50/green-100 대체) */
+.alert-danger {
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-secondary));
+  color: var(--danger);
+}
+.alert-success-soft {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
 }

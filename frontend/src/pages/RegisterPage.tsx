@@ -37,7 +37,7 @@ export function RegisterPage() {
     return (
       <AuthShell subtitle="가입 신청 완료">
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-green-100 text-2xl text-green-600">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full alert-success-soft text-2xl">
             ✓
           </div>
           <h2 className="text-lg font-semibold">가입 신청이 접수되었습니다</h2>
@@ -101,7 +101,7 @@ export function RegisterPage() {
         </div>
 
         {error && (
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          <p className="rounded-lg alert-danger px-3 py-2 text-sm">{error}</p>
         )}
 
         <button type="submit" className="btn btn-primary" disabled={submitting}>

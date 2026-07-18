@@ -136,7 +136,7 @@ export function AdminSharesPage() {
                       <div className="flex justify-end">
                         {s.is_active && (
                           <button
-                            className="btn btn-ghost text-red-600"
+                            className="btn btn-ghost text-danger"
                             onClick={() => setDisableTarget(s)}
                           >
                             강제 차단

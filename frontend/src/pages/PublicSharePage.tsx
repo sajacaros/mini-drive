@@ -122,7 +122,7 @@ export function PublicSharePage() {
               )}
 
               {downloadError && (
-                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{downloadError}</p>
+                <p className="rounded-lg alert-danger px-3 py-2 text-sm">{downloadError}</p>
               )}
 
               <button className="btn btn-primary" onClick={onDownload} disabled={downloading}>

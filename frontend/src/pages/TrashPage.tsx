@@ -106,7 +106,7 @@ export function TrashPage() {
                           <RestoreIcon width={16} height={16} />
                           복구
                         </button>
-                        <button className="btn btn-ghost text-red-600" onClick={() => setPurgeTarget(f)}>
+                        <button className="btn btn-ghost text-danger" onClick={() => setPurgeTarget(f)}>
                           영구 삭제
                         </button>
                       </div>

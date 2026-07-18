@@ -4,6 +4,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
+import { ThemePicker } from "./ThemePicker";
 import {
   DriveIcon,
   HistoryIcon,
@@ -35,7 +36,7 @@ export function Layout() {
           <span className="text-[color:var(--accent)]">
             <DriveIcon width={22} height={22} />
           </span>
-          <span className="text-lg font-semibold">Mini Drive</span>
+          <span className="font-pixel text-lg font-semibold">Mini Drive</span>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 px-3">
@@ -81,6 +82,9 @@ export function Layout() {
         </div>
 
         <div className="border-t border-token px-4 py-3">
+          <div className="mb-3">
+            <ThemePicker />
+          </div>
           <div className="mb-2 px-1">
             <p className="truncate text-sm font-medium">{user?.display_name || user?.email}</p>
             <p className="truncate text-xs text-muted">{user?.email}</p>

@@ -170,7 +170,7 @@ export function GroupDetailPage() {
               </button>
             )}
             {isOwner && (
-              <button className="btn btn-ghost text-red-600" onClick={() => setDeleteOpen(true)}>
+              <button className="btn btn-ghost text-danger" onClick={() => setDeleteOpen(true)}>
                 그룹 삭제
               </button>
             )}
@@ -243,7 +243,7 @@ export function GroupDetailPage() {
                       )}
                       {canRemove(m) && (
                         <button
-                          className="btn btn-ghost text-red-600"
+                          className="btn btn-ghost text-danger"
                           disabled={busy}
                           onClick={() => setRemoveTarget(m)}
                           title="제거"

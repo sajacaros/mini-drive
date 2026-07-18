@@ -177,7 +177,7 @@ export function PermissionModal({
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-medium">{d.group_name}</span>
                         <button
-                          className="btn btn-ghost px-2 py-1 text-red-600"
+                          className="btn btn-ghost px-2 py-1 text-danger"
                           disabled={busyGroup === d.group_id}
                           onClick={() => onRevoke(d)}
                         >

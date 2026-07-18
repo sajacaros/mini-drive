@@ -170,7 +170,7 @@ export function AdminUsersPage() {
                             <button className="btn btn-primary" onClick={() => onApprove(u)}>
                               승인
                             </button>
-                            <button className="btn btn-ghost text-red-600" onClick={() => onReject(u)}>
+                            <button className="btn btn-ghost text-danger" onClick={() => onReject(u)}>
                               거절
                             </button>
                           </>
@@ -187,7 +187,7 @@ export function AdminUsersPage() {
                             </button>
                             {(u.status === "active" || u.status === "inactive") && (
                               <button
-                                className={u.status === "active" ? "btn btn-ghost text-red-600" : "btn btn-secondary"}
+                                className={u.status === "active" ? "btn btn-ghost text-danger" : "btn btn-secondary"}
                                 onClick={() => onToggleActive(u)}
                               >
                                 {u.status === "active" ? "비활성화" : "활성화"}

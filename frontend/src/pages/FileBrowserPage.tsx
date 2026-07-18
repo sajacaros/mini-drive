@@ -374,7 +374,10 @@ export function FileBrowserPage({
         onDrop={onDrop}
       >
         {dragOver && canWrite && (
-          <div className="pointer-events-none absolute inset-4 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-[color:var(--accent)] bg-blue-50/70">
+          <div
+            className="pointer-events-none absolute inset-4 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-[color:var(--accent)]"
+            style={{ background: "color-mix(in srgb, var(--accent) 12%, var(--bg-primary))" }}
+          >
             <p className="font-medium text-[color:var(--accent)]">여기에 놓아 업로드</p>
           </div>
         )}
@@ -386,7 +389,7 @@ export function FileBrowserPage({
               <div key={i} className="card px-4 py-2.5">
                 <div className="mb-1 flex items-center justify-between text-sm">
                   <span className="truncate">{t.name}</span>
-                  <span className={t.error ? "text-red-600" : "text-muted"}>
+                  <span className={t.error ? "text-danger" : "text-muted"}>
                     {t.error ?? `${t.percent}%`}
                   </span>
                 </div>
@@ -770,7 +773,7 @@ function IconAction({
       aria-label={title}
       onClick={onClick}
       className={`rounded-md p-1.5 transition-colors hover:bg-[color:var(--bg-secondary)] ${
-        danger ? "text-muted hover:text-red-600" : "text-muted hover:text-[color:var(--text-primary)]"
+        danger ? "text-muted hover:text-danger" : "text-muted hover:text-[color:var(--text-primary)]"
       }`}
     >
       {children}

@@ -90,15 +90,23 @@ export function Badge({
   children: ReactNode;
   tone?: "neutral" | "success" | "warning" | "danger" | "accent";
 }) {
-  const tones: Record<string, string> = {
-    neutral: "bg-slate-100 text-slate-600",
-    success: "bg-green-100 text-green-700",
-    warning: "bg-amber-100 text-amber-700",
-    danger: "bg-red-100 text-red-700",
-    accent: "bg-blue-100 text-blue-700",
+  // 테마 토큰 기반 — 4테마 모두에서 배경/텍스트가 일관되게 대비되도록 color-mix 로 옅은 배경을 만든다.
+  const base: Record<string, string> = {
+    neutral: "var(--text-secondary)",
+    success: "var(--success)",
+    warning: "var(--warning)",
+    danger: "var(--danger)",
+    accent: "var(--accent)",
   };
+  const color = base[tone];
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`}>
+    <span
+      className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+      style={{
+        color,
+        background: `color-mix(in srgb, ${color} 16%, transparent)`,
+      }}
+    >
       {children}
     </span>
   );
