@@ -531,7 +531,10 @@ RETURNING id;  -- 0 rows → 할당량 초과, 업로드 거부
 | `POST` | `/api/shares` | 공유 링크 생성 |
 | `GET`  | `/api/shares` | 내 공유 링크 목록 |
 | `DELETE`| `/api/shares/{id}` | 공유 링크 비활성화 |
-| `GET`  | `/api/shares/{shareUrl}/preview` | 공유 링크로 파일 미리보기/다운로드 |
+| `GET`  | `/api/public/shares/{shareUrl}` | 공유 메타 조회 (무인증. 없음 404 / 비활성·만료·삭제 410) |
+| `POST` | `/api/public/shares/{shareUrl}/download` | 공유 다운로드 (무인증, body: password 옵션) |
+
+> 공개 접근은 `/api/public/` prefix로 분리한다 — `/api/shares/{id}`(정수, 인증)와 `/{shareUrl}`(문자열, 무인증)의 라우팅 모호성을 제거하고 인증/무인증 경계를 명확히 하기 위함.
 
 ### 6.4 그룹 관리
 
