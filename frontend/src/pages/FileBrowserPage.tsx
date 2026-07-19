@@ -4,9 +4,12 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { errorStatus, extractErrorMessage } from "@/api/client";
 import {
   abortResumableUpload,
+  addFavorite,
   createFolder,
   getFile,
   listFiles,
+  listRecent,
+  removeFavorite,
   renameFile,
   reuploadFile,
   softDeleteFile,
@@ -14,6 +17,7 @@ import {
 } from "@/api/files";
 import { checkPermission } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
+import { FavoriteStar } from "@/components/FavoriteStar";
 import { Modal } from "@/components/Modal";
 import { PermissionModal } from "@/components/PermissionModal";
 import { PreviewModal } from "@/components/PreviewModal";
@@ -41,6 +45,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { downloadFile } from "@/lib/download";
+import { subscribeFileEvents } from "@/lib/fileEvents";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionCovers } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
@@ -108,6 +113,8 @@ export function FileBrowserPage({
     () => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list",
   );
   const [previewTarget, setPreviewTarget] = useState<FileNode | null>(null);
+  // 드라이브 홈(루트)에서만 노출하는 "최근 항목" 스트립 데이터 (Phase 8-3).
+  const [recent, setRecent] = useState<FileNode[]>([]);
   // 중단된 재개 세션(새로고침 포함) — 파일 재선택으로 이어올릴 수 있다.
   const [pending, setPending] = useState<PendingSession[]>([]);
   // 이어올리기용으로 재선택을 기다리는 세션.
@@ -162,6 +169,79 @@ export function FileBrowserPage({
   useEffect(() => {
     void load(parentId, page);
   }, [parentId, page, load]);
+
+  // --- 실시간 반영 (SSE, Phase 8-1) -----------------------------------------
+  // 구독은 마운트~언마운트 1회만 유지하고, 현재 폴더/페이지는 ref 로 읽어 재구독을 피한다.
+  const parentIdRef = useRef(parentId);
+  const pageRef = useRef(page);
+  parentIdRef.current = parentId;
+  pageRef.current = page;
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 연속 이벤트를 300ms 로 병합해 현재 폴더를 재조회한다.
+  const scheduleReload = useCallback(() => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    reloadTimer.current = setTimeout(() => {
+      void load(parentIdRef.current, pageRef.current);
+    }, 300);
+  }, [load]);
+
+  useEffect(() => {
+    const unsub = subscribeFileEvents({
+      onEvent: (e) => {
+        // 현재 보고 있는 폴더의 변경만 반영(다른 폴더 이벤트는 무시). 내 액션 에코도 함께
+        // 재조회한다(설계상 v1 단순화 허용).
+        if (e.parent_folder_id === parentIdRef.current) scheduleReload();
+      },
+      // 재연결 성공 시 끊긴 동안의 변경을 보정하기 위해 1회 재조회.
+      onReconnect: scheduleReload,
+    });
+    return () => {
+      unsub();
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    };
+  }, [scheduleReload]);
+
+  // --- 최근 항목 스트립 (Phase 8-3) — 내 드라이브 루트에서만 노출 -------------
+  const showRecentStrip = !shared && parentId == null;
+  useEffect(() => {
+    if (!showRecentStrip) {
+      setRecent([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await listRecent(6);
+        if (!cancelled) setRecent(rows);
+      } catch {
+        if (!cancelled) setRecent([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // 루트로 돌아오거나 목록이 갱신될 때 최근도 함께 새로고친다.
+  }, [showRecentStrip, items]);
+
+  // --- 즐겨찾기 토글 (Phase 8-2) — 낙관적 갱신, 실패 시 롤백 ------------------
+  const onToggleFavorite = useCallback(
+    async (f: FileNode) => {
+      const next = !f.is_favorite;
+      setItems((list) =>
+        list.map((it) => (it.id === f.id ? { ...it, is_favorite: next } : it)),
+      );
+      try {
+        await (next ? addFavorite(f.id) : removeFavorite(f.id));
+      } catch (err) {
+        setItems((list) =>
+          list.map((it) => (it.id === f.id ? { ...it, is_favorite: f.is_favorite } : it)),
+        );
+        toast.error(extractErrorMessage(err, "즐겨찾기 변경에 실패했습니다."));
+      }
+    },
+    [toast],
+  );
 
   // 현재 폴더에서 시작됐다가 중단된 재개 세션을 노출한다(새로고침 후 이어올리기).
   useEffect(() => {
@@ -688,6 +768,34 @@ export function FileBrowserPage({
           </div>
         )}
 
+        {/* 최근 항목 스트립 — 내 드라이브 루트에서만, 항목이 있을 때만 (Phase 8-3) */}
+        {showRecentStrip && recent.length > 0 && (
+          <div className="mb-5">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              최근 항목
+            </h2>
+            <div className="flex gap-3 overflow-x-auto pb-1">
+              {recent.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => openPreview(f)}
+                  title={f.name}
+                  className="card flex w-32 shrink-0 flex-col items-center gap-2 p-3 text-center transition-colors hover:bg-[color:var(--bg-muted)]"
+                >
+                  <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded text-muted">
+                    <Thumbnail
+                      file={f}
+                      className="h-12 w-12 rounded object-cover"
+                      fallback={<FileIcon width={28} height={28} />}
+                    />
+                  </span>
+                  <span className="w-full truncate text-xs">{f.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -720,6 +828,7 @@ export function FileBrowserPage({
               onDelete: (f: FileNode) => setDeleteTarget(f),
               onVersions: (f: FileNode) => setVersionsTarget(f),
               onNewVersion: startVersionUpload,
+              onToggleFavorite,
             };
             return view === "grid" ? (
               <FileGrid items={items} {...rowProps} />
@@ -961,6 +1070,7 @@ interface FileRowProps {
   onDelete: (f: FileNode) => void;
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
+  onToggleFavorite: (f: FileNode) => void;
 }
 
 /** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용). */
@@ -1026,27 +1136,30 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           {items.map((f) => (
             <tr key={f.id} className="group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)]">
               <td className="px-4 py-2.5">
-                <button
-                  className="flex items-center gap-2.5 text-left"
-                  onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
-                >
-                  {/* 이미지면 미니 썸네일, 아니면 유형 아이콘 */}
-                  <span
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
-                      f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
-                    }`}
+                <div className="flex items-center gap-2">
+                  <button
+                    className="flex min-w-0 items-center gap-2.5 text-left"
+                    onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
                   >
-                    <Thumbnail
-                      file={f}
-                      className="h-8 w-8 rounded object-cover"
-                      fallback={f.is_folder ? <FolderIcon /> : <FileIcon />}
-                    />
-                  </span>
-                  <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
-                  {!f.is_folder && f.current_version >= 2 && (
-                    <Badge tone="neutral">v{f.current_version}</Badge>
-                  )}
-                </button>
+                    {/* 이미지면 미니 썸네일, 아니면 유형 아이콘 */}
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
+                        f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+                      }`}
+                    >
+                      <Thumbnail
+                        file={f}
+                        className="h-8 w-8 rounded object-cover"
+                        fallback={f.is_folder ? <FolderIcon /> : <FileIcon />}
+                      />
+                    </span>
+                    <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
+                    {!f.is_folder && f.current_version >= 2 && (
+                      <Badge tone="neutral">v{f.current_version}</Badge>
+                    )}
+                  </button>
+                  <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
+                </div>
               </td>
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
@@ -1068,7 +1181,11 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {items.map((f) => (
-        <div key={f.id} className="group card flex flex-col overflow-hidden p-0">
+        <div key={f.id} className="group card relative flex flex-col overflow-hidden p-0">
+          {/* 즐겨찾기 별 — 활성이면 항상, 아니면 hover 시 노출 */}
+          <span className="absolute right-1.5 top-1.5 z-10">
+            <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
+          </span>
           {/* 썸네일/아이콘 영역 (정사각형) */}
           <button
             className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-muted-token"

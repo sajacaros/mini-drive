@@ -116,6 +116,36 @@ export async function softDeleteFile(id: number): Promise<void> {
   await apiClient.post(`/files/${id}/delete`);
 }
 
+// --- 즐겨찾기 (Phase 8-2) --------------------------------------------------
+
+/** 즐겨찾기 등록 (멱등). read 이상 접근 가능한 파일만 허용된다. */
+export async function addFavorite(id: number): Promise<void> {
+  await apiClient.put(`/files/${id}/favorite`);
+}
+
+/** 즐겨찾기 해제 (멱등). */
+export async function removeFavorite(id: number): Promise<void> {
+  await apiClient.delete(`/files/${id}/favorite`);
+}
+
+/** 내 즐겨찾기 목록 (페이지네이션). 삭제·접근불가 항목은 서버가 숨긴다. */
+export async function listFavorites(page = 1, size = 50): Promise<FileListResponse> {
+  const { data } = await apiClient.get<FileListResponse>("/files/favorites", {
+    params: { page, size },
+  });
+  return data;
+}
+
+// --- 최근 이용 항목 (Phase 8-3) --------------------------------------------
+
+/** 최근 이용 항목(최신순, 최대 50). 미리보기·다운로드 시 기록된다. */
+export async function listRecent(limit = 20): Promise<FileNode[]> {
+  const { data } = await apiClient.get<FileNode[]>("/files/recent", {
+    params: { limit },
+  });
+  return data;
+}
+
 export async function listTrash(): Promise<FileNode[]> {
   const { data } = await apiClient.get<FileNode[]>("/files/trash");
   return data;

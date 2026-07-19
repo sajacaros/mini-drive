@@ -51,6 +51,8 @@ export interface FileNode {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /** 내 즐겨찾기 여부 (Phase 8-2). 목록/단건 응답의 파생 필드, 없으면 false. */
+  is_favorite: boolean;
 }
 
 /** GET /api/files (페이지네이션). */

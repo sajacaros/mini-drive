@@ -11,11 +11,13 @@ import { AdminGroupsPage } from "@/pages/AdminGroupsPage";
 import { AdminSharesPage } from "@/pages/AdminSharesPage";
 import { AdminSignupCodesPage } from "@/pages/AdminSignupCodesPage";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
+import { FavoritesPage } from "@/pages/FavoritesPage";
 import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPage";
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
 import { GroupsPage } from "@/pages/GroupsPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { PublicSharePage } from "@/pages/PublicSharePage";
+import { RecentPage } from "@/pages/RecentPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { SetupPage } from "@/pages/SetupPage";
 import { SharedWithMePage } from "@/pages/SharedWithMePage";
@@ -66,6 +68,8 @@ function App() {
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
             <Route path="/" element={<FileBrowserPage />} />
+            <Route path="/favorites" element={<FavoritesPage />} />
+            <Route path="/recent" element={<RecentPage />} />
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/shares" element={<SharesPage />} />
             <Route path="/shared" element={<SharedWithMePage />} />

@@ -13,6 +13,7 @@ import {
   LockIcon,
   LogoutIcon,
   ShieldIcon,
+  StarIcon,
   TrashIcon,
   UsersIcon,
 } from "./icons";
@@ -42,6 +43,8 @@ export function Layout() {
 
         <nav className="flex flex-1 flex-col gap-1 px-3">
           <NavItem to="/" icon={<DriveIcon />} label="내 드라이브" end />
+          <NavItem to="/favorites" icon={<StarIcon />} label="즐겨찾기" />
+          <NavItem to="/recent" icon={<HistoryIcon />} label="최근" />
           <NavItem to="/shared" icon={<InboxIcon />} label="공유됨" />
           <NavItem to="/groups" icon={<UsersIcon />} label="그룹" />
           <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" />
