@@ -24,16 +24,6 @@ export async function listUsers(
   return data;
 }
 
-export async function approveUser(id: number): Promise<AdminUser> {
-  const { data } = await apiClient.post<AdminUser>(`/admin/users/${id}/approve`);
-  return data;
-}
-
-export async function rejectUser(id: number): Promise<AdminUser> {
-  const { data } = await apiClient.post<AdminUser>(`/admin/users/${id}/reject`);
-  return data;
-}
-
 export interface UserUpdatePayload {
   status?: UserStatus;
   role?: UserRole;

@@ -1,34 +1,27 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { approveUser, listUsers, rejectUser, updateUser } from "@/api/admin";
+import { listUsers, updateUser } from "@/api/admin";
 import { extractErrorMessage } from "@/api/client";
-import type { AdminUser } from "@/api/types";
+import type { AdminUser, UserStatus } from "@/api/types";
 import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
-import { Badge, EmptyState, ErrorState, LoadingState } from "@/components/ui";
+import { Badge, EmptyState, ErrorState, LoadingState, Pagination } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/format";
+import { userStatusLabel, userStatusTone } from "@/lib/labels";
 
-type Tab = "pending" | "all";
+type Filter = "all" | "active" | "inactive";
+const FILTER_TO_STATUS: Record<Filter, UserStatus | undefined> = {
+  all: undefined,
+  active: "active",
+  inactive: "inactive",
+};
+
 const PAGE_SIZE = 20;
 const GB = 1024 * 1024 * 1024;
 
-const STATUS_LABEL: Record<string, string> = {
-  pending: "승인 대기",
-  active: "활성",
-  inactive: "비활성",
-  rejected: "거절됨",
-};
-
-function statusTone(status: string): "success" | "warning" | "danger" | "neutral" {
-  if (status === "active") return "success";
-  if (status === "pending") return "warning";
-  if (status === "rejected") return "danger";
-  return "neutral";
-}
-
 export function AdminUsersPage() {
   const toast = useToast();
-  const [tab, setTab] = useState<Tab>("pending");
+  const [filter, setFilter] = useState<Filter>("all");
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -41,7 +34,7 @@ export function AdminUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await listUsers(tab === "pending" ? "pending" : undefined, page, PAGE_SIZE);
+      const res = await listUsers(FILTER_TO_STATUS[filter], page, PAGE_SIZE);
       setUsers(res.items);
       setTotal(res.total);
     } catch (err) {
@@ -49,39 +42,19 @@ export function AdminUsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page]);
+  }, [filter, page]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const switchTab = (next: Tab) => {
-    setTab(next);
+  const switchFilter = (next: Filter) => {
+    setFilter(next);
     setPage(1);
   };
 
-  const onApprove = async (u: AdminUser) => {
-    try {
-      await approveUser(u.id);
-      toast.success(`${u.email} 승인 완료`);
-      await load();
-    } catch (err) {
-      toast.error(extractErrorMessage(err, "승인에 실패했습니다."));
-    }
-  };
-
-  const onReject = async (u: AdminUser) => {
-    try {
-      await rejectUser(u.id);
-      toast.success(`${u.email} 거절 처리`);
-      await load();
-    } catch (err) {
-      toast.error(extractErrorMessage(err, "거절에 실패했습니다."));
-    }
-  };
-
   const onToggleActive = async (u: AdminUser) => {
-    const next = u.status === "active" ? "inactive" : "active";
+    const next: UserStatus = u.status === "active" ? "inactive" : "active";
     try {
       await updateUser(u.id, { status: next });
       toast.success(next === "active" ? "활성화했습니다." : "비활성화했습니다.");
@@ -115,12 +88,15 @@ export function AdminUsersPage() {
       <div className="border-b border-token px-6 pt-4">
         <h1 className="text-lg font-semibold">사용자 관리</h1>
         <div className="mt-3 flex gap-1">
-          <TabButton active={tab === "pending"} onClick={() => switchTab("pending")}>
-            승인 대기
-          </TabButton>
-          <TabButton active={tab === "all"} onClick={() => switchTab("all")}>
+          <FilterTab active={filter === "all"} onClick={() => switchFilter("all")}>
             전체
-          </TabButton>
+          </FilterTab>
+          <FilterTab active={filter === "active"} onClick={() => switchFilter("active")}>
+            활성
+          </FilterTab>
+          <FilterTab active={filter === "inactive"} onClick={() => switchFilter("inactive")}>
+            비활성
+          </FilterTab>
         </div>
       </div>
 
@@ -130,7 +106,7 @@ export function AdminUsersPage() {
         ) : error ? (
           <ErrorState message={error} onRetry={load} />
         ) : users.length === 0 ? (
-          <EmptyState title={tab === "pending" ? "승인 대기 중인 사용자가 없습니다" : "사용자가 없습니다"} />
+          <EmptyState title="사용자가 없습니다" />
         ) : (
           <div className="card overflow-hidden">
             <table className="w-full text-sm">
@@ -157,7 +133,7 @@ export function AdminUsersPage() {
                       {u.role === "admin" ? <Badge tone="accent">admin</Badge> : <span className="text-muted">user</span>}
                     </td>
                     <td className="px-4 py-2.5">
-                      <Badge tone={statusTone(u.status)}>{STATUS_LABEL[u.status] ?? u.status}</Badge>
+                      <Badge tone={userStatusTone(u.status)}>{userStatusLabel(u.status)}</Badge>
                     </td>
                     <td className="px-4 py-2.5 text-muted">
                       {formatBytes(u.storage_used)} / {formatBytes(u.max_storage)}
@@ -165,36 +141,21 @@ export function AdminUsersPage() {
                     <td className="px-4 py-2.5 text-muted">{formatDateTime(u.created_at)}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex flex-wrap justify-end gap-2">
-                        {u.status === "pending" ? (
-                          <>
-                            <button className="btn btn-primary" onClick={() => onApprove(u)}>
-                              승인
-                            </button>
-                            <button className="btn btn-ghost text-danger" onClick={() => onReject(u)}>
-                              거절
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              className="btn btn-secondary"
-                              onClick={() => {
-                                setQuotaTarget(u);
-                                setQuotaGb((u.max_storage / GB).toFixed(1));
-                              }}
-                            >
-                              할당량
-                            </button>
-                            {(u.status === "active" || u.status === "inactive") && (
-                              <button
-                                className={u.status === "active" ? "btn btn-ghost text-danger" : "btn btn-secondary"}
-                                onClick={() => onToggleActive(u)}
-                              >
-                                {u.status === "active" ? "비활성화" : "활성화"}
-                              </button>
-                            )}
-                          </>
-                        )}
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => {
+                            setQuotaTarget(u);
+                            setQuotaGb((u.max_storage / GB).toFixed(1));
+                          }}
+                        >
+                          할당량
+                        </button>
+                        <button
+                          className={u.status === "active" ? "btn btn-ghost text-danger" : "btn btn-secondary"}
+                          onClick={() => onToggleActive(u)}
+                        >
+                          {u.status === "active" ? "비활성화" : "활성화"}
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -204,23 +165,7 @@ export function AdminUsersPage() {
           </div>
         )}
 
-        {totalPages > 1 && (
-          <div className="mt-4 flex items-center justify-center gap-3 text-sm">
-            <button className="btn btn-secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-              이전
-            </button>
-            <span className="text-muted">
-              {page} / {totalPages}
-            </span>
-            <button
-              className="btn btn-secondary"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              다음
-            </button>
-          </div>
-        )}
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
 
       <Modal
@@ -258,7 +203,7 @@ export function AdminUsersPage() {
   );
 }
 
-function TabButton({
+function FilterTab({
   active,
   onClick,
   children,

@@ -26,7 +26,7 @@ export function LoginPage() {
       await login(email.trim(), password);
       navigate(from, { replace: true });
     } catch (err) {
-      // 403: 승인 대기/비활성·거절 메시지가 detail 로 구분되어 온다 (auth 라우터).
+      // 403: 비활성 계정 등 메시지가 detail 로 구분되어 온다 (auth 라우터).
       setError(extractErrorMessage(err, "로그인에 실패했습니다."));
     } finally {
       setSubmitting(false);
@@ -77,7 +77,7 @@ export function LoginPage() {
       <p className="mt-5 text-center text-sm text-muted">
         아직 계정이 없으신가요?{" "}
         <Link to="/register" className="font-medium text-[color:var(--accent)]">
-          가입 신청
+          가입
         </Link>
       </p>
     </AuthShell>

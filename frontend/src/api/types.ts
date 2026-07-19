@@ -3,7 +3,8 @@
  * 진실 소스는 backend 스키마이며, 여기서는 프론트 소비에 필요한 형태만 미러링한다.
  */
 
-export type UserStatus = "pending" | "active" | "inactive" | "rejected";
+// 가입 코드제 전환(Phase 6) 이후 사용자 상태는 active/inactive 뿐 (승인제 pending/rejected 제거).
+export type UserStatus = "active" | "inactive";
 export type UserRole = "user" | "admin";
 
 /** GET /api/auth/me, 그리고 login/register 이후 사용자 정보. */
@@ -368,4 +369,70 @@ export interface SharedItem {
 
 export interface SharedWithMeResponse {
   items: SharedItem[];
+}
+
+// --- 셋업 위저드 (PRD 3.6.2, 6.1) ------------------------------------------
+
+/** GET /api/setup/status (무인증). admin 0명이면 setup_required=true. */
+export interface SetupStatusResponse {
+  setup_required: boolean;
+  admin_exists: boolean;
+}
+
+/** POST /api/setup 요청 — 첫 admin + 초기 가입 코드 + 기본 할당량. */
+export interface SetupRequest {
+  admin_email: string;
+  admin_password: string;
+  /** 미지정(null/생략) 시 서버가 자동 생성. */
+  signup_code?: string | null;
+  default_max_storage?: number;
+}
+
+/** POST /api/setup 응답 — 발급된 가입 코드 포함. */
+export interface SetupResponse {
+  admin_email: string;
+  signup_code: string;
+  default_max_storage: number;
+  message: string;
+}
+
+// --- 가입 코드 관리 (PRD 6.7) ----------------------------------------------
+
+/** 가입 코드 (GET/POST/PATCH /api/admin/signup-codes). */
+export interface SignupCode {
+  id: number;
+  code: string;
+  memo: string;
+  expires_at: string | null;
+  max_uses: number | null;
+  use_count: number;
+  is_active: boolean;
+  created_by: number;
+  created_at: string;
+}
+
+export interface SignupCodeListResponse {
+  items: SignupCode[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+/** 발급 요청 — code 미지정 시 서버 자동 생성. */
+export interface SignupCodeCreateRequest {
+  memo?: string;
+  expires_at?: string | null;
+  max_uses?: number | null;
+  code?: string | null;
+}
+
+/**
+ * 수정 요청 (부분 갱신). 백엔드는 exclude_unset 이므로 JSON 에 포함한 키만 반영된다.
+ * expires_at/max_uses 에 명시적 null 을 보내면 무기한/무제한으로 초기화된다.
+ */
+export interface SignupCodeUpdateRequest {
+  is_active?: boolean;
+  memo?: string;
+  expires_at?: string | null;
+  max_uses?: number | null;
 }

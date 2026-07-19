@@ -20,8 +20,10 @@ const ACTION_OPTIONS = [
   "share.force_disable",
   "permission.grant",
   "permission.revoke",
+  "signup_code.create",
+  "signup_code.update",
 ];
-const TARGET_OPTIONS = ["user", "group", "file", "share"];
+const TARGET_OPTIONS = ["user", "group", "file", "share", "signup_code"];
 
 /** admin — 감사 로그 조회 (PRD 3.6.3 / 5.9). */
 export function AdminAuditPage() {

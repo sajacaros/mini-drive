@@ -10,6 +10,7 @@ export function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [signupCode, setSignupCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -23,11 +24,12 @@ export function RegisterPage() {
         email: email.trim(),
         password,
         display_name: displayName.trim(),
+        signup_code: signupCode.trim(),
       });
       setDone(true);
     } catch (err) {
-      // 409(중복 이메일) / 422(비밀번호 정책) 등 detail 로 구분되어 온다.
-      setError(extractErrorMessage(err, "가입 신청에 실패했습니다."));
+      // 400(가입 코드 거부) / 409(중복 이메일) / 422(비밀번호 정책) 등 detail 로 구분되어 온다.
+      setError(extractErrorMessage(err, "가입에 실패했습니다."));
     } finally {
       setSubmitting(false);
     }
@@ -35,14 +37,14 @@ export function RegisterPage() {
 
   if (done) {
     return (
-      <AuthShell subtitle="가입 신청 완료">
+      <AuthShell subtitle="가입 완료">
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-full alert-success-soft text-2xl">
             ✓
           </div>
-          <h2 className="text-lg font-semibold">가입 신청이 접수되었습니다</h2>
+          <h2 className="text-lg font-semibold">가입이 완료되었습니다</h2>
           <p className="text-sm text-muted">
-            관리자 승인 후 이용 가능합니다. 승인이 완료되면 로그인해 주세요.
+            바로 로그인해 이용할 수 있습니다.
           </p>
           <Link to="/login" className="btn btn-primary mt-2 w-full">
             로그인 화면으로
@@ -53,7 +55,7 @@ export function RegisterPage() {
   }
 
   return (
-    <AuthShell subtitle="가입 신청 (승인제)">
+    <AuthShell subtitle="가입 (가입 코드 필요)">
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <div>
           <label className="label" htmlFor="email">
@@ -99,13 +101,29 @@ export function RegisterPage() {
             최소 8자, 영문·숫자·특수문자를 포함해야 합니다.
           </p>
         </div>
+        <div>
+          <label className="label" htmlFor="signupCode">
+            가입 코드
+          </label>
+          <input
+            id="signupCode"
+            type="text"
+            className="input"
+            value={signupCode}
+            onChange={(e) => setSignupCode(e.target.value)}
+            required
+          />
+          <p className="mt-1.5 text-xs text-muted">
+            관리자에게 발급받은 가입 코드를 입력하세요.
+          </p>
+        </div>
 
         {error && (
           <p className="rounded-lg alert-danger px-3 py-2 text-sm">{error}</p>
         )}
 
         <button type="submit" className="btn btn-primary" disabled={submitting}>
-          {submitting ? <Spinner className="h-4 w-4" /> : "가입 신청"}
+          {submitting ? <Spinner className="h-4 w-4" /> : "가입"}
         </button>
       </form>
 

@@ -10,6 +10,7 @@ import {
   HistoryIcon,
   InboxIcon,
   LinkIcon,
+  LockIcon,
   LogoutIcon,
   ShieldIcon,
   TrashIcon,
@@ -54,6 +55,7 @@ export function Layout() {
               </div>
               <NavItem to="/admin" icon={<DriveIcon />} label="대시보드" end />
               <NavItem to="/admin/users" icon={<UsersIcon />} label="사용자" />
+              <NavItem to="/admin/signup-codes" icon={<LockIcon />} label="가입 코드" />
               <NavItem to="/admin/groups" icon={<UsersIcon />} label="그룹" />
               <NavItem to="/admin/shares" icon={<LinkIcon />} label="공유 링크" />
               <NavItem to="/admin/audit" icon={<HistoryIcon />} label="감사 로그" />

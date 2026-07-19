@@ -7,6 +7,8 @@ export interface RegisterPayload {
   email: string;
   password: string;
   display_name: string;
+  /** 관리자 발급 가입 코드 (필수, PRD 3.1). */
+  signup_code: string;
 }
 
 export async function register(payload: RegisterPayload): Promise<RegisterResponse> {

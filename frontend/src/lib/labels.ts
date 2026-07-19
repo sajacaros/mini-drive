@@ -62,17 +62,13 @@ export function permissionCovers(level: string, need: GroupPermissionLevel): boo
 // --- 사용자 상태 (admin UI 공용) -------------------------------------------
 
 const USER_STATUS_LABELS: Record<string, string> = {
-  pending: "승인 대기",
   active: "활성",
   inactive: "비활성",
-  rejected: "거절됨",
 };
 
 const USER_STATUS_TONES: Record<string, Tone> = {
-  pending: "warning",
   active: "success",
   inactive: "neutral",
-  rejected: "danger",
 };
 
 export function userStatusLabel(status: string): string {
@@ -106,6 +102,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "share.force_disable": "공유 강제 차단",
   "permission.grant": "권한 부여",
   "permission.revoke": "권한 회수",
+  "signup_code.create": "가입 코드 발급",
+  "signup_code.update": "가입 코드 수정",
 };
 
 export function auditActionLabel(action: string): string {
@@ -122,6 +120,8 @@ const AUDIT_ACTION_TONES: Record<string, Tone> = {
   revoke: "danger",
   quota_update: "accent",
   role_update: "accent",
+  create: "success",
+  update: "accent",
 };
 
 export function auditActionTone(action: string): Tone {
@@ -134,6 +134,7 @@ const TARGET_TYPE_LABELS: Record<string, string> = {
   group: "그룹",
   file: "파일",
   share: "공유",
+  signup_code: "가입 코드",
 };
 
 export function targetTypeLabel(targetType: string): string {
