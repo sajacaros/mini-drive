@@ -318,6 +318,45 @@ async def index_file(
     return IndexResult("indexed", "ok", len(chunks))
 
 
+@dataclass(frozen=True)
+class ExtractedText:
+    """소스 텍스트 추출 결과 (위키 Ingest 재사용). eligible=False 면 text 는 빈 문자열."""
+
+    eligible: bool
+    reason: str
+    text: str
+    version: int
+
+
+async def extract_text(
+    session: AsyncSession,
+    storage: StorageService,
+    file: File,
+    settings: Settings,
+) -> ExtractedText:
+    """단일 파일의 현재 버전 전체 텍스트를 추출한다(위키 컴파일 Ingest 진입점, PRD 3.7.1).
+
+    인덱싱과 동일한 적격성 판정·추출 경로(text 직접 디코드 / Upstage Document Parse)를 재사용한다.
+    부적격이면 eligible=False 로 사유를 담아 반환한다(예외를 던지지 않아 폴더 팬아웃이 계속된다).
+    """
+    decision = await check_eligibility(session, file, settings)
+    if not decision.eligible:
+        return ExtractedText(False, decision.reason, "", file.current_version)
+    data = await storage.get_bytes_async(file.file_key)
+    if decision.method == "parse":
+        content = _extract_text_document_parse(data, settings)
+    else:
+        content = _extract_text_direct(data)
+    return ExtractedText(True, "ok", content, file.current_version)
+
+
+async def eligible_descendant_files(
+    session: AsyncSession, root_id: int
+) -> list[int]:
+    """대상 폴더 하위(재귀)의 비폴더·미삭제 파일 id 목록(위키 소스 팬아웃 재사용)."""
+    return await _descendant_file_ids(session, root_id)
+
+
 async def _descendant_file_ids(session: AsyncSession, root_id: int) -> list[int]:
     """대상 폴더 하위(재귀)의 비폴더·미삭제 파일 id 목록."""
     rows = await session.execute(

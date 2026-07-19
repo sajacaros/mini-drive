@@ -47,3 +47,8 @@ async def enqueue_index_file(file_id: int) -> None:
 async def enqueue_drop_file_index(file_id: int) -> None:
     """파일(또는 폴더) 청크 삭제 잡을 큐잉한다 (휴지통 이동/인덱싱 제외 설정)."""
     await _enqueue("drop_file_index", file_id)
+
+
+async def enqueue_wiki_ingest(space_id: int, file_id: int) -> None:
+    """위키 소스 Ingest(컴파일) 잡을 큐잉한다 (소스 등록/버전 갱신, PRD 3.7.1, Phase 7-3)."""
+    await _enqueue("wiki_ingest", space_id, file_id)

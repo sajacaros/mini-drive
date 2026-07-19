@@ -59,6 +59,9 @@ class ChatState(TypedDict, total=False):
     chat_provider: ChatProvider
     question: str
     history: list[tuple[str, str]]
+    # 위키 스페이스 범위(선택). space_ids = 후보 교집합, wiki_page_ids = 위키 우선 배치(PRD 3.7.5).
+    space_ids: set[int] | None
+    wiki_page_ids: set[int] | None
     chunks: list[RetrievedChunk]
     context_blocks: list[ContextBlock]
     citations: list[dict[str, Any]]
@@ -111,7 +114,12 @@ async def _retrieve_node(state: ChatState) -> dict[str, Any]:
     settings = state["settings"]
     query_vec = await embedding_provider.embed_query(state["question"])
     chunks = await retrieval_service.retrieve(
-        state["session"], state["user"], query_vec, k=settings.chat_retrieval_k
+        state["session"],
+        state["user"],
+        query_vec,
+        k=settings.chat_retrieval_k,
+        space_ids=state.get("space_ids"),
+        wiki_page_ids=state.get("wiki_page_ids"),
     )
     return {
         "chunks": chunks,
@@ -164,11 +172,14 @@ async def stream_answer(
     embedding_provider: EmbeddingProvider,
     chat_provider: ChatProvider,
     settings: Settings,
+    space_ids: set[int] | None = None,
+    wiki_page_ids: set[int] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """챗 답변을 스트리밍한다 — token → citations → done 이벤트를 순서대로 yield 한다.
 
     done 이벤트는 answer(전체 답변)와 citations 를 담아 라우터가 DB 저장에 사용한다.
-    검색·생성은 항상 요청 사용자(user) 자격으로 수행한다.
+    검색·생성은 항상 요청 사용자(user) 자격으로 수행한다. space_ids/wiki_page_ids 가 주어지면
+    검색을 그 위키 스페이스 범위로 제한하고 위키 페이지를 우선 배치한다(PRD 3.7.5).
     """
     initial: ChatState = {
         "session": session,
@@ -178,6 +189,8 @@ async def stream_answer(
         "chat_provider": chat_provider,
         "question": question,
         "history": history,
+        "space_ids": space_ids,
+        "wiki_page_ids": wiki_page_ids,
     }
     async for event in _GRAPH.astream(initial, stream_mode="custom"):
         yield event

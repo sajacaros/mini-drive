@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,42 +47,79 @@ class RetrievedChunk:
     distance: float
 
 
-# ① 사전 필터 + pgvector 검색을 한 쿼리로 결합한다.
-#   - granted: 내 활성 그룹에 부여된(미만료) grant 대상 파일 + inherit_to_children 서브트리.
-#     grant 지점 파일은 항상 후보, 하위는 grant 가 상속될 때만(inherit=TRUE) 재귀로 포함한다.
-#   - candidates: 내 소유 파일 ∪ granted.
-#   - 후보에 속한 미삭제 파일의 청크만 코사인 거리로 정렬해 상위 k 를 뽑는다(후보 밖은 스캔 안 됨).
-#   qvec 는 텍스트 벡터 리터럴로 넘겨 CAST(:qvec AS vector) 로 캐스팅한다(asyncpg 타입 등록 불요).
-_CANDIDATE_SEARCH_SQL = text(
+# 스페이스 범위 제한(선택). 챗 세션이 위키 스페이스로 범위 지정되면 후보를 그 스페이스 파일
+# 집합(루트 서브트리 + 등록 소스 서브트리)으로 **추가 교집합**한다(PRD 3.7.5). 권한 사전 필터는
+# 그대로 유지되므로 범위 지정이 권한을 넓히지 않는다(교집합일 뿐).
+_SPACE_RESTRICT = "AND c.file_id IN :space_ids"
+
+
+def _candidate_search_sql(scoped: bool) -> Any:
+    """① 사전 필터 + pgvector 검색을 한 쿼리로 결합한다(scoped 면 스페이스 교집합 추가).
+
+    - granted: 내 활성 그룹에 부여된(미만료) grant 대상 파일 + inherit_to_children 서브트리.
+      grant 지점 파일은 항상 후보, 하위는 grant 가 상속될 때만(inherit=TRUE) 재귀로 포함한다.
+    - candidates: 내 소유 파일 ∪ granted. 후보 밖 청크는 스캔되지 않는다.
+    - qvec 는 텍스트 벡터 리터럴로 넘겨 CAST(:qvec AS vector) 로 캐스팅한다(타입 등록 불요).
     """
-    WITH RECURSIVE granted AS (
-        SELECT p.file_id AS id, p.inherit_to_children AS inherit
-        FROM file_group_permissions p
-        WHERE p.group_id IN :group_ids
-          AND (p.expires_at IS NULL OR p.expires_at > :now)
-        UNION
-        SELECT f.id, g.inherit
-        FROM files f
-        JOIN granted g ON f.parent_folder_id = g.id
-        WHERE g.inherit = TRUE
-    ),
-    candidates AS (
-        SELECT id FROM files WHERE user_id = :user_id
-        UNION
-        SELECT id FROM granted
+    return text(
+        f"""
+        WITH RECURSIVE granted AS (
+            SELECT p.file_id AS id, p.inherit_to_children AS inherit
+            FROM file_group_permissions p
+            WHERE p.group_id IN :group_ids
+              AND (p.expires_at IS NULL OR p.expires_at > :now)
+            UNION
+            SELECT f.id, g.inherit
+            FROM files f
+            JOIN granted g ON f.parent_folder_id = g.id
+            WHERE g.inherit = TRUE
+        ),
+        candidates AS (
+            SELECT id FROM files WHERE user_id = :user_id
+            UNION
+            SELECT id FROM granted
+        )
+        SELECT c.id AS chunk_id, c.file_id AS file_id, f.name AS file_name,
+               c.version AS version, c.content AS content,
+               (c.embedding <=> CAST(:qvec AS vector)) AS distance
+        FROM file_chunks c
+        JOIN files f ON f.id = c.file_id
+        WHERE f.is_deleted = FALSE
+          AND c.embedding IS NOT NULL
+          AND c.file_id IN (SELECT id FROM candidates)
+          {_SPACE_RESTRICT if scoped else ""}
+        ORDER BY c.embedding <=> CAST(:qvec AS vector)
+        LIMIT :limit
+        """
+    ).bindparams(
+        bindparam("group_ids", expanding=True),
+        *([bindparam("space_ids", expanding=True)] if scoped else []),
     )
-    SELECT c.id AS chunk_id, c.file_id AS file_id, f.name AS file_name,
-           c.version AS version, c.content AS content,
-           (c.embedding <=> CAST(:qvec AS vector)) AS distance
-    FROM file_chunks c
-    JOIN files f ON f.id = c.file_id
-    WHERE f.is_deleted = FALSE
-      AND c.embedding IS NOT NULL
-      AND c.file_id IN (SELECT id FROM candidates)
-    ORDER BY c.embedding <=> CAST(:qvec AS vector)
-    LIMIT :limit
+
+
+_CANDIDATE_SEARCH_SQL = _candidate_search_sql(scoped=False)
+_CANDIDATE_SEARCH_SQL_SCOPED = _candidate_search_sql(scoped=True)
+
+
+def prioritize_wiki(
+    chunks: list[RetrievedChunk], wiki_page_ids: set[int], k: int
+) -> list[RetrievedChunk]:
+    """위키 페이지 청크를 우선 배치한다(PRD 3.7.5 하이브리드 — 위키 우선 + 원문 보강).
+
+    k 의 절반을 위키 페이지 청크에 우선 할당하고, 나머지는 원문 청크로 채운다. 부족분은 남은
+    위키 청크로 보충한다. 각 그룹은 이미 거리순이며 최종 결과도 거리순으로 정렬해 반환한다.
+    wiki_page_ids 가 비면 단순히 상위 k 를 반환한다(범위 지정 없음).
     """
-).bindparams(bindparam("group_ids", expanding=True))
+    if not wiki_page_ids or k <= 0:
+        return chunks[:k]
+    wiki = [c for c in chunks if c.file_id in wiki_page_ids]
+    rest = [c for c in chunks if c.file_id not in wiki_page_ids]
+    half = k // 2
+    picked = wiki[:half]
+    picked += rest[: k - len(picked)]
+    if len(picked) < k:
+        picked += wiki[half : half + (k - len(picked))]
+    return sorted(picked, key=lambda c: c.distance)[:k]
 
 
 def _vector_literal(vec: list[float]) -> str:
@@ -94,20 +132,30 @@ async def _coarse_search(
     user: User,
     query_embedding: list[float],
     limit: int,
+    space_ids: set[int] | None = None,
 ) -> list[RetrievedChunk]:
-    """사전 필터(후보 집합) 를 결합한 pgvector 검색. 후보 밖 청크는 스캔되지 않는다."""
+    """사전 필터(후보 집합) 를 결합한 pgvector 검색. 후보 밖 청크는 스캔되지 않는다.
+
+    space_ids 가 주어지면 후보를 그 스페이스 파일 집합으로 추가 교집합한다(범위는 권한을 넓히지
+    않는다). 빈 집합이면 후보가 없으므로 즉시 [] 를 반환한다.
+    """
     group_ids = await get_user_group_ids(session, user.id)
+    params: dict[str, Any] = {
+        "user_id": user.id,
+        "group_ids": group_ids or [-1],
+        "now": datetime.now(UTC),
+        "qvec": _vector_literal(query_embedding),
+        "limit": limit,
+    }
+    if space_ids is not None:
+        if not space_ids:
+            return []
+        params["space_ids"] = list(space_ids)
+        sql = _CANDIDATE_SEARCH_SQL_SCOPED
+    else:
+        sql = _CANDIDATE_SEARCH_SQL
     # expanding bindparam 은 빈 리스트도 안전히 처리한다(거짓 술어 → granted 시드 없음).
-    result = await session.execute(
-        _CANDIDATE_SEARCH_SQL,
-        {
-            "user_id": user.id,
-            "group_ids": group_ids or [-1],
-            "now": datetime.now(UTC),
-            "qvec": _vector_literal(query_embedding),
-            "limit": limit,
-        },
-    )
+    result = await session.execute(sql, params)
     return [
         RetrievedChunk(
             chunk_id=r.chunk_id,
@@ -139,17 +187,24 @@ async def retrieve(
     query_embedding: list[float],
     *,
     k: int,
+    space_ids: set[int] | None = None,
+    wiki_page_ids: set[int] | None = None,
 ) -> list[RetrievedChunk]:
     """권한 인지 검색 — 사전 필터 검색 후 파일별 사후 검증을 거친 청크 상위 k 를 반환한다.
 
-    항상 요청 사용자(user) 자격으로 검색한다. 반환 순서는 코사인 거리 오름차순(유사도 내림차순).
+    항상 요청 사용자(user) 자격으로 검색한다(admin 예외 없음). space_ids 가 주어지면 후보를 그
+    스페이스 파일 집합으로 교집합하고(범위 제한), wiki_page_ids 로 위키 페이지 청크를 우선
+    배치한다(PRD 3.7.5). 반환 순서는 코사인 거리 오름차순(유사도 내림차순).
     """
     if k <= 0:
         return []
     coarse_limit = max(k * _OVERSAMPLE, k + _OVERSAMPLE_MIN_MARGIN)
-    coarse = await _coarse_search(session, user, query_embedding, coarse_limit)
+    coarse = await _coarse_search(
+        session, user, query_embedding, coarse_limit, space_ids
+    )
 
-    # 파일별 접근 판정을 캐시해 같은 파일의 여러 청크에 중복 판정을 피한다.
+    # 파일별 접근 판정을 캐시해 같은 파일의 여러 청크에 중복 판정을 피한다. 위키 우선 배치를
+    # 위해 상위 후보 전체를 사후 검증한다(coarse_limit 은 작아 비용이 제한적).
     verdict: dict[int, bool] = {}
     passed: list[RetrievedChunk] = []
     for chunk in coarse:
@@ -160,9 +215,8 @@ async def retrieve(
             verdict[chunk.file_id] = allowed
         if allowed:
             passed.append(chunk)
-        if len(passed) >= k:
-            break
 
+    result = prioritize_wiki(passed, wiki_page_ids or set(), k)
     dropped = len(coarse) - len(passed)
     if dropped:
         _log.info(
@@ -172,4 +226,4 @@ async def retrieve(
             passed=len(passed),
             dropped=dropped,
         )
-    return passed[:k]
+    return result

@@ -212,6 +212,20 @@ async def get_access_level(
     return level
 
 
+async def group_access_level(
+    session: AsyncSession, group_id: int, file_id: int
+) -> GroupPermission | None:
+    """특정 그룹이 파일에 대해 가지는 유효 권한 수준(조상 상속 포함). 없으면 None.
+
+    위키 소스 등록의 핵심 불변식(권한 경계 = 컴파일 경계, PRD 3.7.1) 판정에 쓴다 — 등록자
+    **개인** 자격이 아니라 **그룹** 기준으로 read 가능 여부를 본다(group 스코프). 사용자 소속
+    그룹 전체가 아닌 단일 그룹만 대상으로 하는 점이 _determine_group_level 과 다르다.
+    """
+    rows = await _fetch_ancestor_perm_rows(session, file_id, [group_id])
+    level, _ = resolve_effective_permission(rows, datetime.now(UTC))
+    return level
+
+
 async def _active_member_ids(session: AsyncSession, group_id: int) -> list[int]:
     rows = (
         await session.execute(

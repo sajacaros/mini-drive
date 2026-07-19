@@ -201,7 +201,7 @@ class TestPostVerify:
         }
         fake_session = _FakeSession(files)
 
-        async def fake_coarse(session, u, vec, limit):  # noqa: ANN001
+        async def fake_coarse(session, u, vec, limit, space_ids=None):  # noqa: ANN001
             return [
                 _chunk(11, 1, "mine.txt", "내 문서", 0.1),
                 _chunk(22, 2, "secret.txt", "비밀 문서", 0.2),
@@ -226,7 +226,7 @@ class TestPostVerify:
                  for i in range(1, 6)}
         fake_session = _FakeSession(files)
 
-        async def fake_coarse(session, u, vec, limit):  # noqa: ANN001
+        async def fake_coarse(session, u, vec, limit, space_ids=None):  # noqa: ANN001
             return [_chunk(i * 10, i, f"f{i}.txt", "c", i * 0.1) for i in range(1, 6)]
 
         monkeypatch.setattr(retrieval_service, "_coarse_search", fake_coarse)

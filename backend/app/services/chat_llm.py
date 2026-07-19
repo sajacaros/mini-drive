@@ -159,6 +159,30 @@ class FakeChatProvider:
                 yield piece + " " if piece else " "
 
 
+async def acomplete(
+    provider: ChatProvider,
+    *,
+    system_prompt: str,
+    question: str,
+    history: list[tuple[str, str]] | None = None,
+    context_blocks: list[ContextBlock] | None = None,
+) -> str:
+    """astream 을 소진해 **전체 응답 문자열**을 반환한다(위키 컴파일 2단계 호출용, PRD 3.7.1).
+
+    위키 Ingest 는 스트리밍이 아니라 완성된 분석 JSON·페이지 마크다운이 필요하므로 토큰을
+    모아 하나로 합친다. 도구 호출은 여전히 부여하지 않는다(프롬프트 인젝션 방어, PRD 3.7.5).
+    """
+    parts: list[str] = []
+    async for token in provider.astream(
+        system_prompt=system_prompt,
+        history=history or [],
+        question=question,
+        context_blocks=context_blocks or [],
+    ):
+        parts.append(token)
+    return "".join(parts)
+
+
 @dataclass(frozen=True)
 class _OpenAIConfig:
     """OpenAI 호환 프로바이더(vllm/openai/upstage) 접속 설정. base_url None → OpenAI 기본."""

@@ -19,7 +19,10 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.models import WikiSpace
 from app.schemas.chat import (
+    ChatMessagePromoteRequest,
+    ChatMessagePromoteResponse,
     ChatMessageResponse,
     ChatMessageSendRequest,
     ChatSessionCreateRequest,
@@ -28,9 +31,12 @@ from app.schemas.chat import (
 )
 from app.services import chat as chat_service
 from app.services import chat_pipeline
+from app.services import wiki as wiki_service
 from app.services.chat import ChatServiceError
 from app.services.chat_llm import get_chat_provider
 from app.services.embeddings import get_embedding_provider
+from app.services.storage import get_storage
+from app.services.wiki import WikiServiceError
 
 router = APIRouter()
 
@@ -54,8 +60,13 @@ def _sse(event: str, data: object) -> str:
 async def create_session(
     body: ChatSessionCreateRequest, user: CurrentUser, session: DbSession
 ) -> ChatSessionResponse:
-    """세션 생성 (빈 title 허용 — 첫 질문으로 자동 설정)."""
-    row = await chat_service.create_session(session, user, body.title)
+    """세션 생성 (빈 title 허용 — 첫 질문으로 자동 설정). space_id 지정 시 접근 검증(없으면 404)."""
+    try:
+        row = await chat_service.create_session(
+            session, user, body.title, body.space_id
+        )
+    except ChatServiceError as exc:
+        raise _http_error(exc) from exc
     return ChatSessionResponse.from_session(row)
 
 
@@ -81,6 +92,7 @@ async def get_session(
     return ChatSessionDetailResponse(
         id=chat_session.id,
         title=chat_session.title,
+        space_id=chat_session.space_id,
         created_at=chat_session.created_at,
         messages=[ChatMessageResponse.from_message(m) for m in messages],
     )
@@ -134,6 +146,16 @@ async def send_message(
         session, session_id, settings.chat_history_limit
     )
 
+    # 세션이 위키 스페이스로 범위 지정됐으면 검색 후보를 그 범위로 제한한다(PRD 3.7.5).
+    space_ids: set[int] | None = None
+    wiki_page_ids: set[int] | None = None
+    if chat_session.space_id is not None:
+        space = await session.get(WikiSpace, chat_session.space_id)
+        if space is not None:
+            scope = await wiki_service.space_scope(session, space)
+            space_ids = scope.all_ids
+            wiki_page_ids = scope.wiki_page_ids
+
     async def event_stream() -> AsyncIterator[str]:
         answer = ""
         citations: list[Any] = []
@@ -146,6 +168,8 @@ async def send_message(
                 embedding_provider=embedding_provider,
                 chat_provider=chat_provider,
                 settings=settings,
+                space_ids=space_ids,
+                wiki_page_ids=wiki_page_ids,
             ):
                 etype = event.get("type")
                 if etype == "token":
@@ -187,3 +211,39 @@ async def send_message(
             "Cache-Control": "no-cache",
         },
     )
+
+
+@router.post(
+    "/messages/{message_id}/promote", response_model=ChatMessagePromoteResponse
+)
+async def promote_message(
+    message_id: int,
+    body: ChatMessagePromoteRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> ChatMessagePromoteResponse:
+    """답변을 위키 페이지로 승격한다 (PRD 6.9). 본인 assistant 메시지 + 스페이스 쓰기 자격만.
+
+    답변 본문 + citations 를 frontmatter(promoted_from, locked:false) 를 붙여 위키 페이지로
+    저장하고 index.md/log.md 를 부기한다(스페이스 스코프 폴더 하위 = 권한 경계 유지).
+    """
+    try:
+        message = await chat_service.get_owned_assistant_message(
+            session, user, message_id
+        )
+    except ChatServiceError as exc:
+        raise _http_error(exc) from exc
+    try:
+        page = await wiki_service.promote_answer(
+            session,
+            get_storage(),
+            user,
+            body.space_id,
+            message_id=message.id,
+            title=body.title,
+            content=message.content,
+            citations=message.citations,
+        )
+    except WikiServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return ChatMessagePromoteResponse(file_id=page.id, name=page.name)

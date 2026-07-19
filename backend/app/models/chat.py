@@ -40,7 +40,13 @@ class ChatSession(Base):
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    # space_id(wiki_spaces FK)는 7-3 마이그레이션에서 추가한다(위키 스페이스 도입 시).
+    # 위키 스페이스 범위(PRD 5.16, Phase 7-3). NULL = 전체 접근 범위 대상. 스페이스 삭제 시
+    # SET NULL 로 세션은 남기고 범위만 해제한다.
+    space_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("wiki_spaces.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

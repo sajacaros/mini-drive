@@ -80,6 +80,11 @@ services:
       INDEXING_ENABLED: ${INDEXING_ENABLED:-true}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-upstage}
       UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:-}
+      # 위키 Ingest 컴파일(7-3)은 워커에서 실행되므로 CHAT_* 를 워커에도 전달한다(2단계 LLM 호출).
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-vllm}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-}
     depends_on:
       db:
         condition: service_healthy

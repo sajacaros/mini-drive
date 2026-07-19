@@ -12,7 +12,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ChatMessage, ChatSession, User
+from app.models import ChatMessage, ChatSession, User, WikiSpace
+from app.services import wiki as wiki_service
 
 
 class ChatServiceError(Exception):
@@ -29,13 +30,49 @@ _TITLE_MAX = 200
 
 
 async def create_session(
-    session: AsyncSession, user: User, title: str = ""
+    session: AsyncSession,
+    user: User,
+    title: str = "",
+    space_id: int | None = None,
 ) -> ChatSession:
-    """빈 제목을 허용하는 세션 생성. 첫 질문 전송 시 제목이 자동 설정된다."""
-    row = ChatSession(user_id=user.id, title=(title or "")[:_TITLE_MAX])
+    """빈 제목을 허용하는 세션 생성. 첫 질문 전송 시 제목이 자동 설정된다.
+
+    space_id 가 주어지면 접근 가능한 위키 스페이스여야 한다(아니면 404) — 이후 이 세션의 검색은
+    그 스페이스 범위로 제한된다(PRD 3.7.5).
+    """
+    if space_id is not None:
+        space = await session.get(WikiSpace, space_id)
+        if space is None or not await wiki_service.can_access_space(
+            session, user, space
+        ):
+            raise ChatServiceError(404, "위키 스페이스를 찾을 수 없습니다.")
+    row = ChatSession(
+        user_id=user.id, title=(title or "")[:_TITLE_MAX], space_id=space_id
+    )
     session.add(row)
     await session.commit()
     await session.refresh(row)
+    return row
+
+
+async def get_owned_assistant_message(
+    session: AsyncSession, user: User, message_id: int
+) -> ChatMessage:
+    """소유 세션의 assistant 메시지를 조회한다(승격 대상 검증).
+
+    타인/부재는 404(존재 은닉), 사용자(user) 메시지는 400.
+    """
+    row = (
+        await session.execute(
+            select(ChatMessage)
+            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+            .where(ChatMessage.id == message_id, ChatSession.user_id == user.id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise ChatServiceError(404, "메시지를 찾을 수 없습니다.")
+    if row.role != "assistant":
+        raise ChatServiceError(400, "assistant 답변만 위키로 승격할 수 있습니다.")
     return row
 
 
