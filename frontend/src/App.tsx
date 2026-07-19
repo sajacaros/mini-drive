@@ -22,6 +22,8 @@ import { SetupPage } from "@/pages/SetupPage";
 import { SharedWithMePage } from "@/pages/SharedWithMePage";
 import { SharesPage } from "@/pages/SharesPage";
 import { TrashPage } from "@/pages/TrashPage";
+import { WikiPage } from "@/pages/WikiPage";
+import { WikiSpaceDetailPage } from "@/pages/WikiSpaceDetailPage";
 import { useAuthStore } from "@/store/auth";
 
 function App() {
@@ -73,6 +75,8 @@ function App() {
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />
+            <Route path="/wiki" element={<WikiPage />} />
+            <Route path="/wiki/:id" element={<WikiSpaceDetailPage />} />
             <Route path="/chat" element={<ChatPage />} />
           </Route>
         </Route>

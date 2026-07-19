@@ -16,14 +16,17 @@ import {
   deleteSession,
   getSession,
   listSessions,
+  promoteMessage,
   streamMessage,
 } from "@/api/chat";
+import { type WikiSpace, listSpaces } from "@/api/wiki";
 import { Markdown } from "@/components/Markdown";
 import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 import { PreviewModal } from "@/components/PreviewModal";
-import { EmptyState, ErrorState, LoadingState, Spinner } from "@/components/ui";
+import { Badge, EmptyState, ErrorState, LoadingState, Spinner } from "@/components/ui";
 import {
+  BookIcon,
   ChatIcon,
   FileIcon,
   PlusIcon,
@@ -66,6 +69,17 @@ export function ChatPage() {
   const [deleting, setDeleting] = useState(false);
   const [preview, setPreview] = useState<{ fileId: number; name: string } | null>(null);
 
+  // 위키 스페이스 — 새 대화의 검색 범위 선택 + 답변 승격 대상.
+  const [spaces, setSpaces] = useState<WikiSpace[]>([]);
+  // 새 대화(activeId==null)에 적용할 검색 범위. null = 전체 범위.
+  const [newSpaceId, setNewSpaceId] = useState<number | null>(null);
+
+  // 답변 승격 모달.
+  const [promoteTarget, setPromoteTarget] = useState<DisplayMessage | null>(null);
+  const [promoteSpaceId, setPromoteSpaceId] = useState<number | "">("");
+  const [promoteTitle, setPromoteTitle] = useState("");
+  const [promoting, setPromoting] = useState(false);
+
   const abortRef = useRef<AbortController | null>(null);
   // 오류 후 재시도용 — 마지막으로 스트리밍한 (세션, 질문).
   const pendingRef = useRef<{ sessionId: number; question: string } | null>(null);
@@ -86,6 +100,25 @@ export function ChatPage() {
   useEffect(() => {
     void loadSessions();
   }, [loadSessions]);
+
+  // 위키 스페이스 목록(범위 선택·승격용). 실패해도 챗은 동작하므로 조용히 비운다.
+  useEffect(() => {
+    void (async () => {
+      try {
+        setSpaces(await listSpaces());
+      } catch {
+        setSpaces([]);
+      }
+    })();
+  }, []);
+
+  const spaceName = useCallback(
+    (spaceId: number | null | undefined) => {
+      if (spaceId == null) return null;
+      return spaces.find((s) => s.id === spaceId)?.name ?? `스페이스 #${spaceId}`;
+    },
+    [spaces],
+  );
 
   // 활성 세션 변경 시 히스토리 로드. 스트리밍 중 전환은 아래 selectSession 이 막는다.
   const openSession = useCallback(
@@ -208,7 +241,7 @@ export function ChatPage() {
     let sessionId = activeId;
     if (sessionId == null) {
       try {
-        const created = await createSession();
+        const created = await createSession("", newSpaceId);
         sessionId = created.id;
         setActiveId(created.id);
         setSessions((prev) => [created, ...prev]);
@@ -259,6 +292,42 @@ export function ChatPage() {
   const openCitation = (c: ChatCitation) => {
     setPreview({ fileId: c.file_id, name: c.file_name || `파일 #${c.file_id}` });
   };
+
+  // 답변 승격 — 서버 메시지(id:number)만 대상. 기본 스페이스는 현재 세션 범위 → 없으면 첫 스페이스.
+  const startPromote = (m: DisplayMessage) => {
+    if (typeof m.id !== "number") return;
+    const active = sessions.find((s) => s.id === activeId);
+    const preferred = active?.space_id ?? spaces[0]?.id ?? "";
+    setPromoteSpaceId(preferred);
+    setPromoteTitle("");
+    setPromoteTarget(m);
+  };
+
+  const confirmPromote = async () => {
+    if (!promoteTarget || typeof promoteTarget.id !== "number") return;
+    const title = promoteTitle.trim();
+    if (!title || promoteSpaceId === "") return;
+    setPromoting(true);
+    try {
+      const res = await promoteMessage(promoteTarget.id, {
+        space_id: Number(promoteSpaceId),
+        title,
+      });
+      toast.success(`"${res.name}" 페이지로 저장했습니다.`);
+      setPromoteTarget(null);
+    } catch (err) {
+      const msg =
+        errorStatus(err) === 403
+          ? "이 스페이스에 쓸 권한이 없습니다."
+          : extractErrorMessage(err, "위키로 승격하지 못했습니다.");
+      toast.error(msg);
+    } finally {
+      setPromoting(false);
+    }
+  };
+
+  const activeSession = sessions.find((s) => s.id === activeId);
+  const canPromote = spaces.length > 0;
 
   return (
     <div className="flex h-screen">
@@ -334,6 +403,34 @@ export function ChatPage() {
 
       {/* 우: 대화창 */}
       <section className="flex min-w-0 flex-1 flex-col">
+        {/* 검색 범위: 새 대화면 선택, 진행 중 세션이면 확정된 범위 표시 */}
+        <div className="flex items-center gap-2 border-b border-token px-4 py-2.5 text-sm">
+          <span className="flex items-center gap-1.5 text-muted">
+            <BookIcon width={15} height={15} />
+            검색 범위
+          </span>
+          {activeId == null ? (
+            <select
+              className="input max-w-xs py-1 text-sm"
+              value={newSpaceId ?? ""}
+              onChange={(e) => setNewSpaceId(e.target.value === "" ? null : Number(e.target.value))}
+            >
+              <option value="">전체 범위 (접근 가능한 모든 문서)</option>
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  위키: {s.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <Badge tone={activeSession?.space_id != null ? "accent" : "neutral"}>
+              {activeSession?.space_id != null
+                ? `위키: ${spaceName(activeSession.space_id)}`
+                : "전체 범위"}
+            </Badge>
+          )}
+        </div>
+
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
           {messagesLoading ? (
             <LoadingState label="대화 불러오는 중..." />
@@ -348,7 +445,13 @@ export function ChatPage() {
           ) : (
             <div className="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-6">
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} onCitation={openCitation} onRetry={handleRetry} />
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  onCitation={openCitation}
+                  onRetry={handleRetry}
+                  onPromote={canPromote ? startPromote : undefined}
+                />
               ))}
             </div>
           )}
@@ -429,6 +532,67 @@ export function ChatPage() {
         }
         onDownload={preview ? () => void downloadFile(preview.fileId) : undefined}
       />
+
+      {/* 답변을 위키 페이지로 승격 */}
+      <Modal
+        open={promoteTarget !== null}
+        title="위키로 승격"
+        onClose={() => setPromoteTarget(null)}
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setPromoteTarget(null)}>
+              취소
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={confirmPromote}
+              disabled={promoting || promoteSpaceId === "" || !promoteTitle.trim()}
+            >
+              {promoting ? <Spinner className="h-4 w-4" /> : "승격"}
+            </button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-muted">
+            이 답변을 선택한 위키 스페이스의 페이지로 저장합니다. 출처도 함께 기록됩니다.
+          </p>
+          <div>
+            <label className="label" htmlFor="promoteSpace">
+              스페이스
+            </label>
+            <select
+              id="promoteSpace"
+              className="input"
+              value={promoteSpaceId}
+              onChange={(e) =>
+                setPromoteSpaceId(e.target.value === "" ? "" : Number(e.target.value))
+              }
+            >
+              <option value="">스페이스 선택...</option>
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.scope === "group" ? "그룹" : "개인"})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="promoteTitle">
+              페이지 제목
+            </label>
+            <input
+              id="promoteTitle"
+              className="input"
+              placeholder="예: 배포 절차 요약"
+              value={promoteTitle}
+              onChange={(e) => setPromoteTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && confirmPromote()}
+              autoFocus
+            />
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -437,12 +601,23 @@ function MessageBubble({
   message,
   onCitation,
   onRetry,
+  onPromote,
 }: {
   message: DisplayMessage;
   onCitation: (c: ChatCitation) => void;
   onRetry: () => void;
+  /** 있으면 답변 말풍선에 "위키로 승격" 버튼을 노출한다(스페이스가 있을 때만). */
+  onPromote?: (m: DisplayMessage) => void;
 }) {
   const isUser = message.role === "user";
+  // 서버 저장된 답변(id:number)만 승격 가능 — 스트리밍/오류 중 임시 말풍선은 제외.
+  const canPromote =
+    !isUser &&
+    onPromote &&
+    typeof message.id === "number" &&
+    !message.streaming &&
+    !message.error &&
+    message.content.length > 0;
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`flex max-w-[85%] flex-col gap-2 ${isUser ? "items-end" : "items-start"}`}>
@@ -491,6 +666,18 @@ function MessageBubble({
               </button>
             ))}
           </div>
+        )}
+
+        {/* 위키로 승격 */}
+        {canPromote && (
+          <button
+            className="btn btn-ghost px-2 py-1 text-xs text-muted"
+            onClick={() => onPromote?.(message)}
+            title="이 답변을 위키 페이지로 저장합니다"
+          >
+            <BookIcon width={13} height={13} />
+            위키로 승격
+          </button>
         )}
 
         {/* 오류 + 재시도 */}

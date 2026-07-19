@@ -203,6 +203,14 @@ export const XIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 위키 — 책. */
+export const BookIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />
+  </svg>
+);
+
 /** 챗봇 — 말풍선. */
 export const ChatIcon = (p: IconProps) => (
   <svg {...base(p)}>
