@@ -26,6 +26,9 @@ dependencies = [
     "langchain-core>=1.0.0",
     "langchain-text-splitters>=1.0.0",
     "langchain-upstage>=0.7.0",
+    # 챗봇 (PRD 3.7.5, Phase 7-2). LangGraph retrieve→generate 파이프라인 + vLLM/OpenAI 호환 챗 모델.
+    "langgraph>=1.0.0",
+    "langchain-openai>=0.3.0",
 ]
 
 [project.optional-dependencies]

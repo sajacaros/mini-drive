@@ -41,6 +41,14 @@ services:
       INDEXING_ENABLED: ${INDEXING_ENABLED:-true}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-upstage}
       UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:-}
+      # 챗봇 (PRD 3.7, Phase 7-2). 챗은 backend 프로세스에서 실행되므로 CHAT_* 는 backend 에만 전달한다.
+      # vllm/openai/upstage 는 필수값(키/base_url)이 없으면 챗 요청이 503("LLM 미구성")으로 실패한다.
+      # upstage 는 CHAT_API_KEY 미지정 시 UPSTAGE_API_KEY 를 폴백으로 쓴다(위에서 전달됨).
+      CHAT_PROVIDER: ${CHAT_PROVIDER:-vllm}
+      CHAT_BASE_URL: ${CHAT_BASE_URL:-}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      # 미지정 시 프로바이더별 기본 모델(vllm=glm-5.2, upstage=solar-open2)을 앱이 고른다.
+      CHAT_MODEL: ${CHAT_MODEL:-}
       # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
       # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
     depends_on:

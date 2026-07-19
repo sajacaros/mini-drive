@@ -7,6 +7,7 @@
 from app.core.database import Base
 from app.models.app_setting import AppSetting
 from app.models.audit import AuditLog
+from app.models.chat import ChatMessage, ChatSession
 from app.models.enums import (
     GroupPermission,
     GroupRole,
@@ -38,6 +39,8 @@ __all__ = [
     "UploadSession",
     "SignupCode",
     "AppSetting",
+    "ChatSession",
+    "ChatMessage",
     # 열거형
     "UserRole",
     "UserStatus",

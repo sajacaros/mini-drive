@@ -34,6 +34,10 @@ class EmbeddingProvider(Protocol):
         """문서 청크 목록을 임베딩 벡터 목록으로 변환한다(순서 보존)."""
         ...
 
+    async def embed_query(self, text: str) -> list[float]:
+        """검색 질의 하나를 임베딩 벡터로 변환한다(권한 인지 검색 7-2 진입점)."""
+        ...
+
 
 def _normalize(vec: list[float]) -> list[float]:
     """L2 정규화(단위벡터). 코사인 유사도 검색과 궁합이 좋고, 0벡터는 그대로 둔다."""
@@ -70,6 +74,10 @@ class FakeEmbeddingProvider:
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [self._embed_one(t) for t in texts]
 
+    async def embed_query(self, text: str) -> list[float]:
+        # 문서 임베딩과 동일한 결정적 해시 로직을 재사용한다 — 같은 텍스트는 같은 벡터를 낸다.
+        return self._embed_one(text)
+
 
 class UpstageEmbeddingProvider:
     """Upstage solar-embedding-1-large 래퍼(4096차원). langchain-upstage 를 지연 임포트한다.
@@ -87,6 +95,10 @@ class UpstageEmbeddingProvider:
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return await asyncio.to_thread(self._client.embed_documents, texts)
+
+    async def embed_query(self, text: str) -> list[float]:
+        # UpstageEmbeddings.embed_query 도 동기 HTTP 호출이므로 to_thread 로 감싼다.
+        return await asyncio.to_thread(self._client.embed_query, text)
 
 
 def get_embedding_provider(settings: Settings) -> EmbeddingProvider | None:

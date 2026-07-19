@@ -1,6 +1,16 @@
 from fastapi import APIRouter
 
-from app.api.routes import admin, auth, files, groups, permissions, setup, shares, users
+from app.api.routes import (
+    admin,
+    auth,
+    chat,
+    files,
+    groups,
+    permissions,
+    setup,
+    shares,
+    users,
+)
 
 api_router = APIRouter(prefix="/api")
 
@@ -18,3 +28,4 @@ api_router.include_router(
     permissions.router, prefix="/permissions", tags=["permissions"]
 )
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
