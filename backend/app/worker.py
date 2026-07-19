@@ -157,3 +157,6 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     max_tries = 3  # 재시도 최대 3회(PRD Phase 7).
+    # 폴더 위키 공유는 한 잡에서 하위 파일 전체를 순차 컴파일한다(파일당 LLM 2회 호출).
+    # arq 기본 300초로는 수십 파일 폴더가 반드시 죽으므로 넉넉히 잡는다(wiki-v2 D2).
+    job_timeout = 6 * 60 * 60

@@ -468,11 +468,12 @@ async def wiki_file_scope(session: AsyncSession) -> WikiScope:
 
 @dataclass(frozen=True)
 class IngestSummary:
-    """Ingest 잡 결과 요약. compiled 는 페이지가 생성/갱신된 소스 파일 수."""
+    """Ingest 잡 결과 요약. compiled 는 페이지가 생성/갱신된, failed 는 컴파일 실패한 소스 파일 수."""
 
     status: str
     compiled: int
     targets: int
+    failed: int = 0
 
 
 async def ingest_source(
@@ -514,19 +515,32 @@ async def ingest_source(
             target_ids = [file_id]
 
         compiled = 0
+        failed_names: list[str] = []
         for tid in target_ids:
             tfile = await files_service.get_file(session, tid)
             if tfile is None or tfile.is_deleted or tfile.is_folder:
                 continue
-            outcome = await wiki_compile.compile_source(
-                session,
-                storage,
-                chat_provider,
-                settings,
-                root_folder_id=root_id,
-                owner=owner,
-                source_file=tfile,
-            )
+            # rollback 시 ORM 객체가 만료되므로 이름을 미리 캡처한다(async lazy-load 회피).
+            tname = tfile.name
+            try:
+                outcome = await wiki_compile.compile_source(
+                    session,
+                    storage,
+                    chat_provider,
+                    settings,
+                    root_folder_id=root_id,
+                    owner=owner,
+                    source_file=tfile,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # 파일 하나의 실패(추출 불가·LLM 오류)가 폴더 전체 팬아웃을 막지 않게
+                # 한다(fail-soft). 폴더 재시도는 성공분까지 재컴파일하므로 여기서 삼킨다.
+                await session.rollback()
+                failed_names.append(tname)
+                _log.warning(
+                    "wiki_compile_failed", file_id=tid, name=tname, error=str(exc)
+                )
+                continue
             if outcome.status == "compiled":
                 compiled += 1
     except Exception as exc:  # noqa: BLE001 - 실패를 기록하고 arq 재시도에 맡긴다.
@@ -542,19 +556,34 @@ async def ingest_source(
         _log.warning("wiki_ingest_failed", file_id=file_id, error=str(exc))
         raise
 
-    # 성공 — 소스/잡 상태 갱신(내부 컴파일 커밋으로 만료됐을 수 있어 재조회).
+    # 종료 — 소스/잡 상태 갱신(내부 컴파일 커밋으로 만료됐을 수 있어 재조회).
+    # 일부 파일만 실패하면 done + error 메모(부분 성공), 전부 실패하면 failed 로 남긴다.
+    # 어느 쪽도 예외를 던지지 않는다 — 폴더 단위 arq 재시도는 성공분까지 재컴파일하므로.
+    all_failed = bool(failed_names) and compiled == 0
+    error_note: str | None = None
+    if failed_names:
+        shown = ", ".join(failed_names[:5])
+        more = f" 외 {len(failed_names) - 5}건" if len(failed_names) > 5 else ""
+        error_note = f"{len(failed_names)}개 파일 컴파일 실패(추출/LLM 오류): {shown}{more}"
     src = await session.get(WikiSource, file_id)
     if src is not None:
-        src.status = SOURCE_INDEXED
-        src.last_ingested_version = source_version
+        src.status = SOURCE_FAILED if all_failed else SOURCE_INDEXED
+        if not all_failed:
+            src.last_ingested_version = source_version
     done_job = await session.get(WikiJob, job_id)
     if done_job is not None:
-        done_job.status = JOB_DONE
+        done_job.status = JOB_FAILED if all_failed else JOB_DONE
+        done_job.error = error_note
     await session.commit()
     _log.info(
-        "wiki_ingest_done", file_id=file_id, targets=len(target_ids), compiled=compiled
+        "wiki_ingest_done",
+        file_id=file_id,
+        targets=len(target_ids),
+        compiled=compiled,
+        failed=len(failed_names),
     )
-    return IngestSummary("done", compiled, len(target_ids))
+    status = "failed" if all_failed else "done"
+    return IngestSummary(status, compiled, len(target_ids), len(failed_names))
 
 
 # --- 답변 승격 (wiki-v2 4.2, D7) --------------------------------------------
