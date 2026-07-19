@@ -268,12 +268,13 @@ async def list_files(
         items, total = await files_service.list_children(session, user, parent_id, page, size)
     except FileServiceError as exc:
         raise _http_error(exc) from exc
-    return FileListResponse(
-        items=[FileResponse.model_validate(f) for f in items],
-        total=total,
-        page=page,
-        size=size,
-    )
+    shared = await files_service.wiki_shared_ids(session, [f.id for f in items])
+    responses = []
+    for f in items:
+        resp = FileResponse.model_validate(f)
+        resp.wiki_shared = f.id in shared
+        responses.append(resp)
+    return FileListResponse(items=responses, total=total, page=page, size=size)
 
 
 @router.post("", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
@@ -333,7 +334,9 @@ async def get_metadata(file_id: int, user: CurrentUser, session: DbSession) -> F
         )
     except FileServiceError as exc:
         raise _http_error(exc) from exc
-    return FileResponse.model_validate(node)
+    resp = FileResponse.model_validate(node)
+    resp.wiki_shared = bool(await files_service.wiki_shared_ids(session, [node.id]))
+    return resp
 
 
 @router.get("/{file_id}/download")

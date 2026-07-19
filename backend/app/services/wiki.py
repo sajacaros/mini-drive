@@ -1,14 +1,17 @@
-"""위키 스페이스 서비스 (LLM 위키, PRD 3.7.1~3.7.2, 5.14, 6.8, Phase 7-3).
+"""전사 단일 위키 서비스 (LLM 위키, wiki-v2 재설계, Phase 7-4).
 
-핵심 불변식 — **권한 경계 = 컴파일 경계**(PRD 3.7.1):
-  - group 스코프 스페이스의 루트 폴더에는 그 그룹의 read 권한을 자동 부여(inherit_to_children)
-    하므로 "위키 페이지를 읽을 수 있는 사람 = 그룹 멤버"가 구조적으로 보장된다.
-  - 소스 등록 시 스코프의 read 권한을 검증한다 — personal 은 소유자(user_id) 자격, group 은
-    **그 그룹**이 해당 파일에 read 이상을 가져야 한다(개인 자격이 아니라 그룹 기준).
+위키 v2 재설계로 스페이스(personal/group 스코프) 개념을 제거했다. 새 모델:
 
-위키 페이지 자체는 별도 테이블이 아니라 root_folder_id 하위의 드라이브 파일이므로, 조회/버전/
-이름 변경은 기존 파일 API 를 그대로 쓴다. 이 서비스는 스페이스/소스/잡의 수명주기와 접근 인가,
-그리고 컴파일 범위(스코프 파일 집합) 산출을 담당한다.
+  - 드라이브 파일/폴더의 **"위키에 공유" 체크**(= wiki_sources 행) = 소유자의 명시적 **출판**.
+    체크된 콘텐츠는 **전사 단일 위키**로 컴파일되고, 컴파일된 위키 페이지는 **모든 로그인
+    사용자**가 읽는다(권한 서비스 특례, wiki-v2 D4). 원본은 기존 권한 그대로 보호된다 —
+    위키 페이지 출처 링크는 클릭 시점에 다시 ensure_file_access 를 통과한다(비권한자 403).
+  - 위키 페이지는 별도 테이블이 아니라 **시스템 사용자 소유** `Wiki` 폴더(부트스트랩,
+    app_settings 의 wiki_root_folder_id) 하위의 일반 드라이브 파일이다. 시스템 사용자는 로그인
+    불가(status=inactive)하며 백그라운드 컴파일이 페이지를 쓸 때의 자격이다(wiki-v2 D3).
+
+불변식은 "권한 경계 = 컴파일 경계"에서 "**출판 동의(체크) = 전사 출판**"으로 대체됐다(wiki-v2
+D1). 이 서비스는 부트스트랩·소스 수명주기·컴파일 오케스트레이션·챗 범위 산출을 담당한다.
 """
 
 from __future__ import annotations
@@ -16,46 +19,44 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from sqlalchemy import delete, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import arq_queue
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models import (
+    AppSetting,
     File,
     User,
     WikiJob,
     WikiSource,
-    WikiSpace,
 )
-from app.models.enums import GroupPermission, GroupRole
+from app.models.enums import UserRole, UserStatus
 from app.models.wiki import (
     JOB_DONE,
     JOB_FAILED,
     JOB_INGEST,
     JOB_QUEUED,
     JOB_RUNNING,
-    SCOPE_GROUP,
-    SCOPE_PERSONAL,
     SOURCE_FAILED,
     SOURCE_INDEXED,
     SOURCE_QUEUED,
     SOURCE_STALE,
 )
 from app.services import files as files_service
-from app.services import groups as groups_service
 from app.services import indexing as indexing_service
 from app.services import permissions as permissions_service
 from app.services import wiki_compile
 from app.services.chat_llm import ChatProvider
+from app.services.permissions import (
+    WIKI_ROOT_FOLDER_KEY,
+    WIKI_SYSTEM_USER_KEY,
+)
 from app.services.storage import StorageService
 
 _log = get_logger("app.wiki")
-
-# 그룹 스코프 스페이스를 만들거나 소스를 관리할 수 있는 그룹 역할.
-_SPACE_MANAGERS = frozenset({GroupRole.OWNER, GroupRole.ADMIN})
 
 # 상세 조회에 포함할 최근 log.md 항목 수.
 _RECENT_LOG_LIMIT = 20
@@ -63,6 +64,15 @@ _RECENT_LOG_LIMIT = 20
 # 초기 카탈로그/로그 스텁.
 _INDEX_STUB = "# 위키 카탈로그\n\n(아직 페이지가 없습니다. 소스를 등록하면 컴파일됩니다.)\n"
 _LOG_STUB = "# 컴파일 로그\n"
+
+# 위키 시스템 사용자(로그인 불가) 규약(wiki-v2 D3).
+WIKI_SYSTEM_EMAIL = "wiki-system@internal.invalid"
+WIKI_SYSTEM_NAME = "Wiki System"
+WIKI_FOLDER_NAME = "Wiki"
+# 시스템 사용자 quota — 위키 페이지 누적을 사실상 제한하지 않는다(대용량, wiki-v2 D3).
+WIKI_SYSTEM_MAX_STORAGE = 1 << 50  # 1 PiB
+# 동시 부트스트랩 레이스 방어용 sentinel(app_settings PK ON CONFLICT DO NOTHING, setup 패턴).
+_WIKI_BOOTSTRAP_LOCK = "wiki_bootstrap_lock"
 
 
 class WikiServiceError(Exception):
@@ -84,94 +94,315 @@ _SUBTREE_CTE = (
 )
 
 
-# --- 접근 인가 --------------------------------------------------------------
+# --- 부트스트랩 (lazy, 멱등, wiki-v2 3장) ------------------------------------
 
 
-async def _get_space(session: AsyncSession, space_id: int) -> WikiSpace:
-    space = await session.get(WikiSpace, space_id)
-    if space is None:
-        raise WikiServiceError(404, "위키 스페이스를 찾을 수 없습니다.")
-    return space
+async def _get_setting_int(session: AsyncSession, key: str) -> int | None:
+    row = await session.get(AppSetting, key)
+    return int(row.value) if row is not None else None
 
 
-async def can_access_space(
-    session: AsyncSession, user: User, space: WikiSpace
-) -> bool:
-    """스페이스 조회 자격 — personal 은 소유자, group 은 활성 멤버."""
-    if space.scope == SCOPE_PERSONAL:
-        return space.user_id == user.id
-    role = await groups_service.get_member_role(session, space.group_id, user.id)
-    return role is not None
+async def bootstrap_wiki(
+    session: AsyncSession, storage: StorageService
+) -> tuple[int, int]:
+    """전사 위키를 부트스트랩한다(멱등). (wiki_root_folder_id, wiki_system_user_id) 반환.
 
-
-async def ensure_access(
-    session: AsyncSession, user: User, space: WikiSpace
-) -> None:
-    """스페이스 조회 인가. 접근 불가면 404(존재 은닉, admin 도 예외 없음 — PRD 3.7.3)."""
-    if not await can_access_space(session, user, space):
-        raise WikiServiceError(404, "위키 스페이스를 찾을 수 없습니다.")
-
-
-async def ensure_write(
-    session: AsyncSession, user: User, space: WikiSpace
-) -> None:
-    """스페이스 쓰기 인가(소스 관리·삭제·승격) — personal 은 소유자, group 은 admin 이상.
-
-    조회조차 불가하면 404, 조회는 되지만 쓰기 부족이면 403.
+    첫 공유 체크(또는 첫 위키 조회) 시 시스템 사용자(로그인 불가) → 그 root 하위 `Wiki` 폴더 →
+    index.md/log.md 스텁 → app_settings 기록. 동시 부트스트랩 레이스는 sentinel 키의
+    ON CONFLICT DO NOTHING 으로 방어한다 — 먼저 잠근 요청만 실제 생성하고, 나머지는 잠금 해제
+    (winner 커밋) 후 기록된 id 를 읽는다(setup 서비스와 동일 패턴, wiki-v2 3장).
     """
-    if space.scope == SCOPE_PERSONAL:
-        if space.user_id != user.id:
-            raise WikiServiceError(404, "위키 스페이스를 찾을 수 없습니다.")
-        return
-    role = await groups_service.get_member_role(session, space.group_id, user.id)
-    if role is None:
-        raise WikiServiceError(404, "위키 스페이스를 찾을 수 없습니다.")
-    if role not in _SPACE_MANAGERS:
-        raise WikiServiceError(403, "이 스페이스를 관리할 권한이 없습니다 (그룹 admin 이상).")
+    root_id = await _get_setting_int(session, WIKI_ROOT_FOLDER_KEY)
+    sys_id = await _get_setting_int(session, WIKI_SYSTEM_USER_KEY)
+    if root_id is not None and sys_id is not None:
+        permissions_service.set_wiki_root_folder_id(root_id)
+        return root_id, sys_id
 
-
-async def page_owner(session: AsyncSession, space: WikiSpace) -> User:
-    """위키 페이지를 쓰는 자격(루트 폴더 소유자 = 스페이스 생성자)을 반환한다."""
-    root = await session.get(File, space.root_folder_id)
-    if root is None:
-        raise WikiServiceError(500, "위키 루트 폴더가 없습니다.")
-    owner = await session.get(User, root.user_id)
-    if owner is None:
-        raise WikiServiceError(500, "위키 페이지 소유자를 찾을 수 없습니다.")
-    return owner
-
-
-# --- 소스 스코프 read 검증 (권한 경계 = 컴파일 경계) -------------------------
-
-
-async def _user_can_read(
-    session: AsyncSession, user: User, file: File
-) -> bool:
-    if file.user_id == user.id:
-        return True
-    level = await permissions_service.get_access_level(session, user, file)
-    return level is not None
-
-
-async def scope_can_read(
-    session: AsyncSession, space: WikiSpace, file: File
-) -> bool:
-    """스코프가 파일을 read 가능한지(등록 가능 여부, PRD 3.7.1 불변식).
-
-    personal → 소유자(user_id) 자격, group → **그 그룹**이 파일에 read 이상.
-    """
-    if space.scope == SCOPE_PERSONAL:
-        owner = await session.get(User, space.user_id)
-        if owner is None:
-            return False
-        return await _user_can_read(session, owner, file)
-    level = await permissions_service.group_access_level(
-        session, space.group_id, file.id
+    # sentinel 원자적 선점 — winner 만 실제 생성한다. loser 는 winner 커밋까지 블록된 뒤 no-row.
+    claimed = await session.execute(
+        pg_insert(AppSetting)
+        .values(key=_WIKI_BOOTSTRAP_LOCK, value=True)
+        .on_conflict_do_nothing(index_elements=["key"])
+        .returning(AppSetting.key)
     )
-    return level is not None
+    if claimed.first() is None:
+        # 다른 요청이 먼저 부트스트랩했다(그 트랜잭션이 방금 커밋됨) — 기록된 id 를 읽는다.
+        await session.rollback()
+        root_id = await _get_setting_int(session, WIKI_ROOT_FOLDER_KEY)
+        sys_id = await _get_setting_int(session, WIKI_SYSTEM_USER_KEY)
+        if root_id is None or sys_id is None:  # pragma: no cover - winner 롤백 등 예외 경로
+            raise WikiServiceError(500, "위키 부트스트랩에 실패했습니다.")
+        permissions_service.set_wiki_root_folder_id(root_id)
+        return root_id, sys_id
+
+    # winner — 시스템 사용자 + Wiki 폴더 + 설정을 원자적으로 만든다(스텁 페이지는 커밋 후).
+    await session.execute(
+        pg_insert(User)
+        .values(
+            email=WIKI_SYSTEM_EMAIL,
+            password_hash="!",  # 로그인 불가(유효 해시 아님) + status=inactive 로 이중 차단.
+            display_name=WIKI_SYSTEM_NAME,
+            role=UserRole.USER,
+            status=UserStatus.INACTIVE,
+            max_storage=WIKI_SYSTEM_MAX_STORAGE,
+        )
+        .on_conflict_do_nothing(index_elements=["email"])
+    )
+    sys_user = (
+        await session.execute(select(User).where(User.email == WIKI_SYSTEM_EMAIL))
+    ).scalar_one()
+
+    sys_user_id = sys_user.id
+
+    from app.services.users import create_root_folder
+
+    root = await create_root_folder(session, sys_user)  # 멱등 — 기존 있으면 재사용.
+    wiki_folder = await files_service.find_active_child(
+        session, root.id, WIKI_FOLDER_NAME
+    )
+    if wiki_folder is None:
+        wiki_folder = File(
+            user_id=sys_user_id,
+            group_id=None,
+            parent_folder_id=root.id,
+            name=WIKI_FOLDER_NAME,
+            file_key="",
+            mime_type=None,
+            size=0,
+            is_folder=True,
+        )
+        session.add(wiki_folder)
+        await session.flush()
+    # 커밋 후엔 ORM 속성이 만료돼 async lazy-load 가 되므로 id 를 미리 캡처한다.
+    root_folder_id = wiki_folder.id
+
+    await _set_setting(session, WIKI_ROOT_FOLDER_KEY, root_folder_id)
+    await _set_setting(session, WIKI_SYSTEM_USER_KEY, sys_user_id)
+    await session.commit()
+    permissions_service.set_wiki_root_folder_id(root_folder_id)
+
+    # 스텁 index.md/log.md(없을 때만) — write_text_file_as 는 내부 커밋하므로 설정 커밋 뒤 쓴다.
+    sys_user = await session.get(User, sys_user_id)
+    if await files_service.find_active_child(
+        session, root_folder_id, wiki_compile.INDEX_PAGE
+    ) is None:
+        await files_service.write_text_file_as(
+            session, storage, sys_user,
+            parent_id=root_folder_id, name=wiki_compile.INDEX_PAGE,
+            content=_INDEX_STUB.encode(),
+        )
+    if await files_service.find_active_child(
+        session, root_folder_id, wiki_compile.LOG_PAGE
+    ) is None:
+        await files_service.write_text_file_as(
+            session, storage, sys_user,
+            parent_id=root_folder_id, name=wiki_compile.LOG_PAGE,
+            content=_LOG_STUB.encode(),
+        )
+    _log.info(
+        "wiki_bootstrapped", root_folder_id=root_folder_id, system_user_id=sys_user.id
+    )
+    return root_folder_id, sys_user.id
 
 
-# --- 스코프 파일 집합 (챗 범위 제한) -----------------------------------------
+async def _set_setting(session: AsyncSession, key: str, value: object) -> None:
+    """app_settings 를 upsert 한다(커밋은 호출자). setup 서비스의 set_setting 과 동일 패턴."""
+    from sqlalchemy import func
+
+    await session.execute(
+        pg_insert(AppSetting)
+        .values(key=key, value=value)
+        .on_conflict_do_update(
+            index_elements=["key"], set_={"value": value, "updated_at": func.now()}
+        )
+    )
+
+
+async def _ensure_wiki(
+    session: AsyncSession, storage: StorageService
+) -> tuple[int, User]:
+    """위키를 보장(부트스트랩)하고 (root_folder_id, 시스템 사용자) 를 반환한다.
+
+    페이지 쓰기 owner = 시스템 사용자(wiki-v2 D3). 모든 위키 서비스 작업의 진입 헬퍼.
+    """
+    root_id, sys_id = await bootstrap_wiki(session, storage)
+    sys_user = await session.get(User, sys_id)
+    if sys_user is None:  # pragma: no cover - 부트스트랩 직후엔 항상 존재
+        raise WikiServiceError(500, "위키 시스템 사용자를 찾을 수 없습니다.")
+    return root_id, sys_user
+
+
+# --- 잡 기록 ----------------------------------------------------------------
+
+
+async def record_job(
+    session: AsyncSession,
+    kind: str,
+    *,
+    file_id: int | None = None,
+    status: str = JOB_QUEUED,
+    error: str | None = None,
+) -> WikiJob:
+    """wiki_jobs 이력 한 건을 기록한다(커밋은 호출자 조율). 상태 조회·재시도 판단의 진실 소스."""
+    job = WikiJob(file_id=file_id, kind=kind, status=status, error=error)
+    session.add(job)
+    return job
+
+
+# --- 소스 등록 / 제거 (wiki-v2 4.2/4.4) -------------------------------------
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    file_id: int
+    file_name: str
+    status: str
+    last_ingested_version: int | None
+    added_by: int
+
+
+async def register_source(
+    session: AsyncSession,
+    storage: StorageService,
+    actor: User,
+    *,
+    file_id: int,
+) -> WikiSource:
+    """"위키에 공유" 체크 — 소스를 등록하고 Ingest 잡을 큐잉한다(wiki-v2 4.4, D1).
+
+    **항목 소유자만** 체크할 수 있다(소유자 아니면 403, admin 도 불가 — D1). 파일/폴더 무관.
+    성공 시 wiki_sources upsert(queued) + wiki_jobs(ingest) + arq wiki_ingest(file_id) 큐잉.
+    """
+    await bootstrap_wiki(session, storage)
+
+    file = await files_service.get_file(session, file_id)
+    if file is None or file.is_deleted:
+        raise WikiServiceError(404, "소스 파일을 찾을 수 없습니다.")
+    # 출판 동의 = 소유자만(wiki-v2 D1). admin 도 타인 콘텐츠를 대신 출판할 수 없다.
+    if file.user_id != actor.id:
+        raise WikiServiceError(403, "위키 공유는 항목 소유자만 설정할 수 있습니다.")
+
+    existing = await session.get(WikiSource, file_id)
+    if existing is None:
+        source = WikiSource(
+            file_id=file_id,
+            status=SOURCE_QUEUED,
+            added_by=actor.id,
+        )
+        session.add(source)
+    else:
+        existing.status = SOURCE_QUEUED
+        source = existing
+
+    await record_job(session, JOB_INGEST, file_id=file_id)
+    await session.commit()
+    await session.refresh(source)
+
+    # arq 큐잉(실패는 경고만 — fail-open). 워커가 컴파일을 수행한다.
+    await arq_queue.enqueue_wiki_ingest(file_id)
+    _log.info("wiki_source_registered", file_id=file_id, added_by=actor.id)
+    return source
+
+
+async def remove_source(
+    session: AsyncSession,
+    storage: StorageService,
+    actor: User,
+    file_id: int,
+) -> None:
+    """위키 공유 해제 — 소스를 제거한다(wiki-v2 4.4, D5). **소유자만**.
+
+    페이지 자동 삭제는 하지 않고(컴파일된 지식은 자산, D5) log.md 에 기록한다(Lint 로 정리 안내).
+    소스 파일의 청크는 지우지 않는다(파일 자체는 드라이브에 남아 다른 경로로 검색될 수 있음).
+    """
+    root_id, owner = await _ensure_wiki(session, storage)
+
+    existing = await session.get(WikiSource, file_id)
+    if existing is None:
+        raise WikiServiceError(404, "등록된 소스가 아닙니다.")
+    if existing.added_by != actor.id:
+        raise WikiServiceError(403, "위키 공유 해제는 소유자만 할 수 있습니다.")
+    await session.delete(existing)
+    await session.commit()
+
+    # log.md 에 제거 기록(관련 페이지 stale 안내는 Lint 리포트가 담당).
+    _, log_md = await wiki_compile._read_page_text(
+        session, storage, root_id, wiki_compile.LOG_PAGE
+    )
+    entry = wiki_compile.log_entry("source-removed", f"file:{file_id}", [])
+    new_log = wiki_compile.append_log(log_md, entry)
+    await files_service.write_text_file_as(
+        session, storage, owner,
+        parent_id=root_id, name=wiki_compile.LOG_PAGE, content=new_log.encode(),
+    )
+    _log.info("wiki_source_removed", file_id=file_id)
+
+
+# --- 개요 / 잡 이력 (wiki-v2 4.2) -------------------------------------------
+
+
+@dataclass(frozen=True)
+class WikiOverview:
+    root_folder_id: int
+    sources: list[SourceInfo]
+    recent_log: list[str]
+    index_entries: list[str]
+
+
+async def get_overview(
+    session: AsyncSession, storage: StorageService, user: User
+) -> WikiOverview:
+    """위키 개요 — 카탈로그(index_entries), 최근 log.md 항목, 공유 소스 현황(wiki-v2 4.2).
+
+    로그인 사용자 누구나 조회한다(전사 단일 위키).
+    """
+    root_id, _ = await _ensure_wiki(session, storage)
+
+    src_rows = (
+        await session.execute(
+            select(WikiSource, File.name)
+            .join(File, File.id == WikiSource.file_id)
+            .order_by(WikiSource.created_at.asc())
+        )
+    ).all()
+    sources = [
+        SourceInfo(
+            file_id=s.file_id,
+            file_name=name,
+            status=s.status,
+            last_ingested_version=s.last_ingested_version,
+            added_by=s.added_by,
+        )
+        for s, name in src_rows
+    ]
+
+    _, index_md = await wiki_compile._read_page_text(
+        session, storage, root_id, wiki_compile.INDEX_PAGE
+    )
+    _, log_md = await wiki_compile._read_page_text(
+        session, storage, root_id, wiki_compile.LOG_PAGE
+    )
+    return WikiOverview(
+        root_folder_id=root_id,
+        sources=sources,
+        recent_log=wiki_compile.recent_log_entries(log_md, _RECENT_LOG_LIMIT),
+        index_entries=wiki_compile.index_entries(index_md),
+    )
+
+
+async def list_jobs(
+    session: AsyncSession, user: User, limit: int = 50
+) -> list[WikiJob]:
+    """위키 잡 이력(최근순). 로그인 사용자 누구나(전사 자산, wiki-v2 4.2)."""
+    rows = (
+        await session.execute(
+            select(WikiJob).order_by(WikiJob.id.desc()).limit(limit)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
+# --- 챗 범위 파일 집합 (wiki-v2 4.5) -----------------------------------------
 
 
 async def _subtree_ids(session: AsyncSession, root_id: int) -> list[int]:
@@ -182,334 +413,57 @@ async def _subtree_ids(session: AsyncSession, root_id: int) -> list[int]:
 
 
 @dataclass(frozen=True)
-class SpaceScope:
-    """챗 범위 제한용 스페이스 파일 집합. wiki_page_ids 는 우선순위 배치에 쓴다."""
+class WikiScope:
+    """챗 위키 범위 파일 집합. wiki_page_ids 는 우선순위 배치에 쓴다."""
 
     all_ids: set[int]
     wiki_page_ids: set[int]
 
 
-async def space_scope(session: AsyncSession, space: WikiSpace) -> SpaceScope:
-    """스페이스 범위의 파일 집합 = 루트 폴더 서브트리(위키 페이지) ∪ 등록 소스 서브트리.
-
-    챗 세션이 이 스페이스로 범위 지정되면 검색 후보를 이 집합으로 교집합한다(PRD 3.7.5).
-    """
-    wiki_ids = set(await _subtree_ids(session, space.root_folder_id))
-    all_ids = set(wiki_ids)
-    sources = (
+async def _owned_descendant_files(
+    session: AsyncSession, root_id: int, owner_id: int
+) -> list[int]:
+    """폴더 하위(재귀)의 비폴더·미삭제 파일 중 owner_id 소유 파일 id(폴더 소스 컴파일 범위, D2)."""
+    ids = await indexing_service.eligible_descendant_files(session, root_id)
+    if not ids:
+        return []
+    rows = (
         await session.execute(
-            select(WikiSource.file_id, WikiSource.recursive).where(
-                WikiSource.space_id == space.id
-            )
+            select(File.id).where(File.id.in_(ids), File.user_id == owner_id)
         )
+    ).scalars().all()
+    return list(rows)
+
+
+async def wiki_file_scope(session: AsyncSession) -> WikiScope:
+    """전사 위키 범위 파일 집합 = 위키 루트 서브트리(페이지) ∪ 등록 소스별 added_by 소유 파일.
+
+    챗 세션이 위키 범위(wiki_scope)면 검색 후보를 이 집합으로 교집합한다(wiki-v2 4.5). 부트스트랩
+    전이면 위키 페이지 집합은 비어 있다(설정만 조회, 강제 부트스트랩하지 않음).
+    """
+    root_id = await _get_setting_int(session, WIKI_ROOT_FOLDER_KEY)
+    wiki_ids: set[int] = (
+        set(await _subtree_ids(session, root_id)) if root_id is not None else set()
+    )
+    all_ids = set(wiki_ids)
+
+    sources = (
+        await session.execute(select(WikiSource.file_id, WikiSource.added_by))
     ).all()
-    for file_id, recursive in sources:
-        if recursive:
-            all_ids.update(await _subtree_ids(session, file_id))
+    for file_id, added_by in sources:
+        file = await files_service.get_file(session, file_id)
+        if file is None or file.is_deleted:
+            continue
+        if file.is_folder:
+            all_ids.update(
+                await _owned_descendant_files(session, file_id, added_by)
+            )
         else:
             all_ids.add(file_id)
-    return SpaceScope(all_ids=all_ids, wiki_page_ids=wiki_ids)
+    return WikiScope(all_ids=all_ids, wiki_page_ids=wiki_ids)
 
 
-# --- 잡 기록 ----------------------------------------------------------------
-
-
-async def record_job(
-    session: AsyncSession,
-    space_id: int,
-    kind: str,
-    *,
-    file_id: int | None = None,
-    status: str = JOB_QUEUED,
-    error: str | None = None,
-) -> WikiJob:
-    """wiki_jobs 이력 한 건을 기록한다(커밋은 호출자 조율). 상태 조회·재시도 판단의 진실 소스."""
-    job = WikiJob(
-        space_id=space_id, file_id=file_id, kind=kind, status=status, error=error
-    )
-    session.add(job)
-    return job
-
-
-# --- 스페이스 생성 (PRD 6.8) -------------------------------------------------
-
-
-async def create_space(
-    session: AsyncSession,
-    storage: StorageService,
-    actor: User,
-    *,
-    name: str,
-    scope: str,
-    group_id: int | None,
-) -> WikiSpace:
-    """위키 스페이스를 만든다(루트 폴더 + index.md/log.md + group read 자동 부여, PRD 6.8/3.7.1)."""
-    name = name.strip()
-    if not name:
-        raise WikiServiceError(422, "스페이스 이름이 비어 있습니다.")
-    if scope not in (SCOPE_PERSONAL, SCOPE_GROUP):
-        raise WikiServiceError(422, "scope 는 personal 또는 group 이어야 합니다.")
-
-    if scope == SCOPE_GROUP:
-        if group_id is None:
-            raise WikiServiceError(422, "group 스코프는 group_id 가 필요합니다.")
-        # 그룹 admin 이상만 그룹 스페이스를 만들 수 있다(PRD 6.8).
-        try:
-            await groups_service.require_group_role(
-                session, group_id, actor.id, _SPACE_MANAGERS
-            )
-        except groups_service.GroupServiceError as exc:
-            raise WikiServiceError(exc.status_code, exc.detail) from exc
-
-    # 1) 루트 폴더 생성(생성자 소유). 이름 충돌 시 409.
-    try:
-        root = await files_service.create_folder(session, actor, name, None)
-    except files_service.FileServiceError as exc:
-        raise WikiServiceError(exc.status_code, exc.detail) from exc
-
-    # 2) group 스코프면 루트 폴더에 그룹 read(inherit) 자동 부여 — 페이지 읽기 = 그룹 멤버.
-    if scope == SCOPE_GROUP:
-        try:
-            await permissions_service.grant_permission(
-                session,
-                actor,
-                root.id,
-                group_id,
-                GroupPermission.READ,
-                inherit_to_children=True,
-                expires_at=None,
-            )
-        except permissions_service.PermissionServiceError as exc:
-            raise WikiServiceError(exc.status_code, exc.detail) from exc
-
-    # 3) wiki_spaces 행 생성.
-    space = WikiSpace(
-        name=name,
-        scope=scope,
-        user_id=actor.id if scope == SCOPE_PERSONAL else None,
-        group_id=group_id if scope == SCOPE_GROUP else None,
-        root_folder_id=root.id,
-        settings={},
-    )
-    session.add(space)
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise WikiServiceError(409, "스페이스 생성에 실패했습니다.") from exc
-    await session.refresh(space)
-
-    # 4) 초기 카탈로그/로그 페이지 생성(드라이브 파일 업로드 경로 재사용).
-    await files_service.write_text_file_as(
-        session, storage, actor,
-        parent_id=root.id, name=wiki_compile.INDEX_PAGE, content=_INDEX_STUB.encode(),
-    )
-    await files_service.write_text_file_as(
-        session, storage, actor,
-        parent_id=root.id, name=wiki_compile.LOG_PAGE, content=_LOG_STUB.encode(),
-    )
-    _log.info("wiki_space_created", space_id=space.id, scope=scope, actor=actor.id)
-    return space
-
-
-# --- 소스 등록 / 제거 (PRD 6.8) ---------------------------------------------
-
-
-async def register_source(
-    session: AsyncSession,
-    actor: User,
-    space_id: int,
-    *,
-    file_id: int,
-    recursive: bool,
-) -> WikiSource:
-    """소스를 등록한다 — 스코프 read 검증 후 Ingest 잡을 큐잉한다(PRD 6.8/3.7.1).
-
-    실패 시 403(스코프 read 불가). 성공 시 wiki_sources upsert + wiki_jobs(ingest) 기록 +
-    arq wiki_ingest(space_id, file_id) 큐잉.
-    """
-    space = await _get_space(session, space_id)
-    await ensure_write(session, actor, space)
-
-    file = await files_service.get_file(session, file_id)
-    if file is None or file.is_deleted:
-        raise WikiServiceError(404, "소스 파일을 찾을 수 없습니다.")
-
-    # 권한 경계 = 컴파일 경계 — 스코프가 read 불가한 파일은 등록 거부(PRD 3.7.1).
-    if not await scope_can_read(session, space, file):
-        raise WikiServiceError(
-            403, "스코프가 이 파일을 읽을 수 없어 소스로 등록할 수 없습니다."
-        )
-
-    existing = await session.get(WikiSource, (space_id, file_id))
-    if existing is None:
-        source = WikiSource(
-            space_id=space_id,
-            file_id=file_id,
-            recursive=recursive,
-            status=SOURCE_QUEUED,
-            added_by=actor.id,
-        )
-        session.add(source)
-    else:
-        existing.recursive = recursive
-        existing.status = SOURCE_QUEUED
-        source = existing
-
-    await record_job(session, space_id, JOB_INGEST, file_id=file_id)
-    await session.commit()
-    await session.refresh(source)
-
-    # arq 큐잉(실패는 경고만 — fail-open, 파일 서비스 철학). 워커가 컴파일을 수행한다.
-    await arq_queue.enqueue_wiki_ingest(space_id, file_id)
-    _log.info("wiki_source_registered", space_id=space_id, file_id=file_id)
-    return source
-
-
-async def remove_source(
-    session: AsyncSession,
-    storage: StorageService,
-    actor: User,
-    space_id: int,
-    file_id: int,
-) -> None:
-    """소스를 제거한다(PRD 6.8). 페이지 자동 삭제는 하지 않고 log.md 에 기록한다(Lint 로 안내).
-
-    소스 파일의 청크는 지우지 않는다 — 파일 자체는 드라이브에 남아 있고 다른 경로로 검색될 수
-    있으므로(위키 소스 등록만 해제한다).
-    """
-    space = await _get_space(session, space_id)
-    await ensure_write(session, actor, space)
-
-    existing = await session.get(WikiSource, (space_id, file_id))
-    if existing is None:
-        raise WikiServiceError(404, "등록된 소스가 아닙니다.")
-    await session.delete(existing)
-    await session.commit()
-
-    # log.md 에 제거 기록(관련 페이지 stale 안내는 Lint 리포트가 담당).
-    owner = await page_owner(session, space)
-    _, log_md = await wiki_compile._read_page_text(
-        session, storage, space.root_folder_id, wiki_compile.LOG_PAGE
-    )
-    entry = wiki_compile.log_entry("source-removed", f"file:{file_id}", [])
-    new_log = wiki_compile.append_log(log_md, entry)
-    await files_service.write_text_file_as(
-        session, storage, owner,
-        parent_id=space.root_folder_id, name=wiki_compile.LOG_PAGE,
-        content=new_log.encode(),
-    )
-    _log.info("wiki_source_removed", space_id=space_id, file_id=file_id)
-
-
-# --- 목록 / 상세 / 삭제 (PRD 6.8) -------------------------------------------
-
-
-async def list_spaces(session: AsyncSession, user: User) -> list[WikiSpace]:
-    """내가 접근 가능한 스페이스 — personal 소유 + 소속 그룹의 group 스페이스."""
-    group_ids = await groups_service.get_user_group_ids(session, user.id)
-    condition = WikiSpace.user_id == user.id
-    if group_ids:
-        condition = condition | WikiSpace.group_id.in_(group_ids)
-    rows = (
-        await session.execute(
-            select(WikiSpace)
-            .where(condition)
-            .order_by(WikiSpace.created_at.desc(), WikiSpace.id.desc())
-        )
-    ).scalars().all()
-    return list(rows)
-
-
-@dataclass(frozen=True)
-class SourceInfo:
-    file_id: int
-    file_name: str
-    recursive: bool
-    status: str
-    last_ingested_version: int | None
-
-
-@dataclass(frozen=True)
-class SpaceDetail:
-    space: WikiSpace
-    sources: list[SourceInfo]
-    recent_log: list[str]
-    index_entries: list[str]
-
-
-async def get_detail(
-    session: AsyncSession, storage: StorageService, user: User, space_id: int
-) -> SpaceDetail:
-    """스페이스 상세 — 소스 목록·상태, 최근 log.md 항목, index.md 카탈로그 요약(PRD 6.8)."""
-    space = await _get_space(session, space_id)
-    await ensure_access(session, user, space)
-
-    src_rows = (
-        await session.execute(
-            select(WikiSource, File.name)
-            .join(File, File.id == WikiSource.file_id)
-            .where(WikiSource.space_id == space_id)
-            .order_by(WikiSource.created_at.asc())
-        )
-    ).all()
-    sources = [
-        SourceInfo(
-            file_id=s.file_id,
-            file_name=name,
-            recursive=s.recursive,
-            status=s.status,
-            last_ingested_version=s.last_ingested_version,
-        )
-        for s, name in src_rows
-    ]
-
-    _, index_md = await wiki_compile._read_page_text(
-        session, storage, space.root_folder_id, wiki_compile.INDEX_PAGE
-    )
-    _, log_md = await wiki_compile._read_page_text(
-        session, storage, space.root_folder_id, wiki_compile.LOG_PAGE
-    )
-    return SpaceDetail(
-        space=space,
-        sources=sources,
-        recent_log=wiki_compile.recent_log_entries(log_md, _RECENT_LOG_LIMIT),
-        index_entries=wiki_compile.index_entries(index_md),
-    )
-
-
-async def list_jobs(
-    session: AsyncSession, user: User, space_id: int, limit: int = 50
-) -> list[WikiJob]:
-    """스페이스 잡 이력(최근순). 스페이스 접근자만(admin 도 스페이스 접근 자격 필요, PRD 6.8)."""
-    space = await _get_space(session, space_id)
-    await ensure_access(session, user, space)
-    rows = (
-        await session.execute(
-            select(WikiJob)
-            .where(WikiJob.space_id == space_id)
-            .order_by(WikiJob.id.desc())
-            .limit(limit)
-        )
-    ).scalars().all()
-    return list(rows)
-
-
-async def delete_space(
-    session: AsyncSession, user: User, space_id: int
-) -> None:
-    """스페이스를 삭제한다(PRD 6.8). wiki_* rows CASCADE, 위키 페이지 폴더는 드라이브에 잔존.
-
-    chat_sessions.space_id 는 FK ON DELETE SET NULL 로 세션은 남고 범위만 해제된다.
-    """
-    space = await _get_space(session, space_id)
-    await ensure_write(session, user, space)
-    await session.execute(delete(WikiSpace).where(WikiSpace.id == space_id))
-    await session.commit()
-    _log.info("wiki_space_deleted", space_id=space_id, actor=user.id)
-
-
-# --- Ingest 오케스트레이션 (워커 태스크가 호출, PRD 3.7.1) ------------------
+# --- Ingest 오케스트레이션 (워커 태스크가 호출, wiki-v2 4.4) -----------------
 
 
 @dataclass(frozen=True)
@@ -526,23 +480,22 @@ async def ingest_source(
     storage: StorageService,
     chat_provider: ChatProvider,
     settings: Settings,
-    space_id: int,
     file_id: int,
 ) -> IngestSummary:
-    """소스 하나(파일 또는 재귀 폴더)를 컴파일한다 — 워커 wiki_ingest 태스크의 본체.
+    """소스 하나(파일 또는 폴더)를 컴파일한다 — 워커 wiki_ingest 태스크의 본체(wiki-v2 4.4).
 
-    폴더+recursive 면 적격 하위 파일로 팬아웃해 순차 컴파일한다(파일당 1 페이지 컴파일). 잡·소스
-    상태를 진실 소스로 갱신한다(PRD 5.15). 실패는 wiki_jobs failed+error 로 남기고 예외를 다시
-    던져 arq 재시도(최대 3회)에 맡긴다.
+    폴더면 하위 파일 중 **added_by 소유 파일만** 대상으로 팬아웃해 순차 컴파일한다(항상 재귀,
+    타인 파일 제외 — D2). 파일당 1 페이지 컴파일. 페이지 owner = 시스템 사용자. 잡·소스 상태를
+    진실 소스로 갱신하고, 실패는 wiki_jobs failed+error 로 남긴 뒤 예외를 다시 던져 arq 재시도에
+    맡긴다.
     """
-    space = await session.get(WikiSpace, space_id)
-    source = await session.get(WikiSource, (space_id, file_id))
-    if space is None or source is None:
-        return IngestSummary("skipped", 0, 0)  # 스페이스/소스가 사라짐(경합)
+    root_id, owner = await _ensure_wiki(session, storage)
+    source = await session.get(WikiSource, file_id)
+    if source is None:
+        return IngestSummary("skipped", 0, 0)  # 소스가 사라짐(경합)
 
-    owner = await page_owner(session, space)
     job = await record_job(
-        session, space_id, JOB_INGEST, file_id=file_id, status=JOB_RUNNING
+        session, JOB_INGEST, file_id=file_id, status=JOB_RUNNING
     )
     await session.commit()
     job_id = job.id
@@ -553,14 +506,10 @@ async def ingest_source(
             raise WikiServiceError(404, "소스 파일을 찾을 수 없습니다.")
         # 컴파일 중 내부 커밋으로 file 이 만료되므로 버전을 미리 캡처한다(async lazy-load 회피).
         source_version = file.current_version
-        is_folder = file.is_folder
+        added_by = source.added_by
 
-        if is_folder:
-            target_ids = (
-                await indexing_service.eligible_descendant_files(session, file_id)
-                if source.recursive
-                else []
-            )
+        if file.is_folder:
+            target_ids = await _owned_descendant_files(session, file_id, added_by)
         else:
             target_ids = [file_id]
 
@@ -574,7 +523,7 @@ async def ingest_source(
                 storage,
                 chat_provider,
                 settings,
-                root_folder_id=space.root_folder_id,
+                root_folder_id=root_id,
                 owner=owner,
                 source_file=tfile,
             )
@@ -582,7 +531,7 @@ async def ingest_source(
                 compiled += 1
     except Exception as exc:  # noqa: BLE001 - 실패를 기록하고 arq 재시도에 맡긴다.
         await session.rollback()
-        src = await session.get(WikiSource, (space_id, file_id))
+        src = await session.get(WikiSource, file_id)
         if src is not None:
             src.status = SOURCE_FAILED
         failed_job = await session.get(WikiJob, job_id)
@@ -590,13 +539,11 @@ async def ingest_source(
             failed_job.status = JOB_FAILED
             failed_job.error = str(exc)[:2000]
         await session.commit()
-        _log.warning(
-            "wiki_ingest_failed", space_id=space_id, file_id=file_id, error=str(exc)
-        )
+        _log.warning("wiki_ingest_failed", file_id=file_id, error=str(exc))
         raise
 
     # 성공 — 소스/잡 상태 갱신(내부 컴파일 커밋으로 만료됐을 수 있어 재조회).
-    src = await session.get(WikiSource, (space_id, file_id))
+    src = await session.get(WikiSource, file_id)
     if src is not None:
         src.status = SOURCE_INDEXED
         src.last_ingested_version = source_version
@@ -605,45 +552,38 @@ async def ingest_source(
         done_job.status = JOB_DONE
     await session.commit()
     _log.info(
-        "wiki_ingest_done",
-        space_id=space_id,
-        file_id=file_id,
-        targets=len(target_ids),
-        compiled=compiled,
+        "wiki_ingest_done", file_id=file_id, targets=len(target_ids), compiled=compiled
     )
     return IngestSummary("done", compiled, len(target_ids))
 
 
-# --- 답변 승격 (PRD 6.9) -----------------------------------------------------
+# --- 답변 승격 (wiki-v2 4.2, D7) --------------------------------------------
 
 
 async def promote_answer(
     session: AsyncSession,
     storage: StorageService,
     actor: User,
-    space_id: int,
     *,
     message_id: int,
     title: str,
     content: str,
     citations: list[dict] | None,
 ) -> File:
-    """챗 답변을 위키 페이지로 승격한다(PRD 6.9). 스페이스 쓰기 자격 필요.
+    """챗 답변을 위키 페이지로 승격한다(wiki-v2 D7). 로그인 사용자 누구나(전사 출판 동의 행위).
 
     frontmatter 에 `promoted_from`(원본 메시지 id)·`locked: false` 를 붙이고 답변 본문 + 출처
-    인용을 담아 페이지를 쓴다(index.md/log.md 부기 포함). 인용 링크는 클릭 시점에 다시
-    ensure_file_access 를 통과하므로 승격이 권한을 넓히지 않는다.
+    인용을 담아 페이지를 쓴다(index.md/log.md 부기 포함). 페이지 owner = 시스템 사용자. 인용
+    링크는 클릭 시점에 다시 ensure_file_access 를 통과하므로 승격이 원본 권한을 넓히지 않는다.
     """
     title = title.strip()
     if not title:
         raise WikiServiceError(422, "페이지 제목이 비어 있습니다.")
-    space = await _get_space(session, space_id)
-    await ensure_write(session, actor, space)
-    owner = await page_owner(session, space)
+    root_id, owner = await _ensure_wiki(session, storage)
 
     filename = wiki_compile.page_filename(title)
     existing, existing_md = await wiki_compile._read_page_text(
-        session, storage, space.root_folder_id, filename
+        session, storage, root_id, filename
     )
     if existing is not None and wiki_compile.is_locked(existing_md):
         raise WikiServiceError(409, "이미 잠긴(locked) 페이지가 있어 덮어쓸 수 없습니다.")
@@ -666,39 +606,35 @@ async def promote_answer(
 
     page = await files_service.write_text_file_as(
         session, storage, owner,
-        parent_id=space.root_folder_id, name=filename, content=page_md.encode(),
+        parent_id=root_id, name=filename, content=page_md.encode(),
     )
 
     # 부기 — index.md 갱신 + log.md append(승격).
     _, index_md = await wiki_compile._read_page_text(
-        session, storage, space.root_folder_id, wiki_compile.INDEX_PAGE
+        session, storage, root_id, wiki_compile.INDEX_PAGE
     )
     new_index = wiki_compile.upsert_index_entry(
         index_md, title, filename, wiki_compile.summarize(content)
     )
     await files_service.write_text_file_as(
         session, storage, owner,
-        parent_id=space.root_folder_id, name=wiki_compile.INDEX_PAGE,
-        content=new_index.encode(),
+        parent_id=root_id, name=wiki_compile.INDEX_PAGE, content=new_index.encode(),
     )
     _, log_md = await wiki_compile._read_page_text(
-        session, storage, space.root_folder_id, wiki_compile.LOG_PAGE
+        session, storage, root_id, wiki_compile.LOG_PAGE
     )
     new_log = wiki_compile.append_log(
         log_md, wiki_compile.log_entry("promote", filename, [])
     )
     await files_service.write_text_file_as(
         session, storage, owner,
-        parent_id=space.root_folder_id, name=wiki_compile.LOG_PAGE,
-        content=new_log.encode(),
+        parent_id=root_id, name=wiki_compile.LOG_PAGE, content=new_log.encode(),
     )
-    _log.info(
-        "wiki_answer_promoted", space_id=space_id, message_id=message_id, page=filename
-    )
+    _log.info("wiki_answer_promoted", message_id=message_id, page=filename)
     return page
 
 
-# --- Lint (결정적 자동 수정 + 휴리스틱 리포트, PRD 3.7.1) --------------------
+# --- Lint (결정적 자동 수정 + 휴리스틱 리포트, wiki-v2 D6/D9) -----------------
 
 
 @dataclass(frozen=True)
@@ -709,26 +645,26 @@ class LintReport:
     reports: list[str] = field(default_factory=list)
 
 
-async def lint_space(
-    session: AsyncSession, storage: StorageService, user: User, space_id: int
+async def lint_wiki(
+    session: AsyncSession, storage: StorageService, user: User
 ) -> LintReport:
-    """수동 Lint 트리거(PRD 6.8) — 쓰기 자격 검증 후 run_lint 를 실행한다."""
-    space = await _get_space(session, space_id)
-    await ensure_write(session, user, space)
-    return await run_lint(session, storage, space)
+    """수동 Lint 트리거(wiki-v2 4.2). 로그인 사용자 누구나(결정적 자동 수정뿐, 위험 낮음 — D6)."""
+    root_id, owner = await _ensure_wiki(session, storage)
+    return await run_lint(session, storage, root_id, owner)
 
 
 async def run_lint(
-    session: AsyncSession, storage: StorageService, space: WikiSpace
+    session: AsyncSession,
+    storage: StorageService,
+    root_id: int,
+    owner: User,
 ) -> LintReport:
-    """스페이스 Lint — index 정합성 자동 수정 + stale 소스/권한 회수/깨진 링크 리포트(PRD 3.7.1).
+    """위키 Lint — index 정합성 자동 수정 + stale 소스/소유자 변경/깨진 링크 리포트(wiki-v2 D9).
 
     결정적 자동 수정은 index.md 정합성만(사라진 페이지 항목 제거·누락 페이지 항목 추가). 링크·
     사실 판단은 리포트만 하고 수정하지 않는다. 리포트는 log.md append + 잡 결과로 남긴다.
     """
     report = LintReport()
-    owner = await page_owner(session, space)
-    root_id = space.root_folder_id
 
     pages = await wiki_compile._list_pages(session, storage, root_id)
     page_names = {
@@ -755,8 +691,7 @@ async def run_lint(
     if new_index != index_md:
         await files_service.write_text_file_as(
             session, storage, owner,
-            parent_id=root_id, name=wiki_compile.INDEX_PAGE,
-            content=new_index.encode(),
+            parent_id=root_id, name=wiki_compile.INDEX_PAGE, content=new_index.encode(),
         )
 
     # 리포트: 페이지 간 깨진 내부 링크(.md 링크가 실재 페이지가 아님).
@@ -766,15 +701,11 @@ async def run_lint(
                 wiki_compile.INDEX_PAGE,
                 wiki_compile.LOG_PAGE,
             ):
-                report.reports.append(
-                    f"깨진 내부 링크: {page.name} → {target}"
-                )
+                report.reports.append(f"깨진 내부 링크: {page.name} → {target}")
 
-    # 리포트: 소스 버전 갱신(stale) / 권한 회수 / 고아 소스.
+    # 리포트: 소스 버전 갱신(stale) / 소유자 변경·삭제 / 고아 소스.
     src_rows = (
-        await session.execute(
-            select(WikiSource).where(WikiSource.space_id == space.id)
-        )
+        await session.execute(select(WikiSource))
     ).scalars().all()
     for src in src_rows:
         file = await files_service.get_file(session, src.file_id)
@@ -783,6 +714,7 @@ async def run_lint(
             continue
         if (
             src.last_ingested_version is not None
+            and not file.is_folder
             and file.current_version > src.last_ingested_version
         ):
             src.status = SOURCE_STALE
@@ -790,18 +722,16 @@ async def run_lint(
                 f"stale 소스(버전 갱신 v{src.last_ingested_version}→v{file.current_version}): "
                 f"{file.name} — 재컴파일 권장"
             )
-        if not await scope_can_read(session, space, file):
+        if file.user_id != src.added_by:
             report.reports.append(
-                f"소스 권한 회수됨(스코프 read 불가): {file.name} — 재컴파일/제거 제안"
+                f"소스 소유자 변경됨(added_by 불일치): {file.name} — 재컴파일/제거 제안"
             )
 
     # log.md 에 리포트 요약 append.
     _, log_md = await wiki_compile._read_page_text(
         session, storage, root_id, wiki_compile.LOG_PAGE
     )
-    summary = (
-        f"lint auto_fixed={len(report.auto_fixed)} reports={len(report.reports)}"
-    )
+    summary = f"lint auto_fixed={len(report.auto_fixed)} reports={len(report.reports)}"
     new_log = wiki_compile.append_log(
         log_md, wiki_compile.log_entry("lint", summary, [])
     )

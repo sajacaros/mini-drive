@@ -108,6 +108,25 @@ async def get_file(session: AsyncSession, file_id: int) -> File | None:
     return await session.get(File, file_id)
 
 
+async def wiki_shared_ids(
+    session: AsyncSession, file_ids: list[int]
+) -> set[int]:
+    """주어진 파일 id 중 "위키에 공유" 체크된(wiki_sources 행 존재) id 집합(wiki-v2 4.3).
+
+    목록/단건 응답의 `wiki_shared` 파생 필드용 — EXISTS 서브쿼리 대신 IN 배치 조회 한 번.
+    """
+    if not file_ids:
+        return set()
+    from app.models import WikiSource
+
+    rows = (
+        await session.execute(
+            select(WikiSource.file_id).where(WikiSource.file_id.in_(file_ids))
+        )
+    ).scalars().all()
+    return set(rows)
+
+
 async def _resolve_parent(
     session: AsyncSession, user: User, parent_id: int | None, need: AccessNeed = "read"
 ) -> File:

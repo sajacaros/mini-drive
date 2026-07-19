@@ -1,12 +1,13 @@
-"""chat_sessions / chat_messages 테이블 (PRD 5.16, Phase 7-2).
+"""chat_sessions / chat_messages 테이블 (PRD 5.16, wiki-v2 4.5, Phase 7-4).
 
 권한 인지 챗봇의 대화 세션과 메시지를 담는다. 세션·메시지는 소유 사용자만 조회 가능하며
 (공유 불가), citations 의 파일 링크는 클릭 시점에 다시 ensure_file_access 를 통과한다 —
 대화 이후 권한이 회수된 파일은 열리지 않는다.
 
-설계 (PRD 5.16):
-  - `space_id`(위키 스페이스 FK)는 **7-3 에서 wiki_spaces 테이블과 함께 추가**한다 — 이 페이즈
-    (7-2)에서는 전체 접근 범위(내 자격) 대상 챗만 다루므로 컬럼을 만들지 않는다.
+설계 (PRD 5.16, wiki-v2 4.5):
+  - `wiki_scope`(BOOLEAN): true 면 검색 후보를 전사 위키 범위(wiki_file_scope — 위키 페이지 ∪
+    공유 소스)로 제한하고 위키 페이지를 우선 배치한다. 위키 v2 재설계로 스페이스(space_id)를
+    폐기하고 이 불리언 토글로 대체했다(wiki-v2 D-전면개정).
   - `citations` 는 검색 통과 청크에서 구조적으로 산출한 [{file_id, chunk_id, version, snippet}]
     JSONB. 모델 출력 파싱이 아니라 파이프라인이 직접 채운다(위조 불가).
 """
@@ -18,12 +19,14 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -40,12 +43,10 @@ class ChatSession(Base):
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    # 위키 스페이스 범위(PRD 5.16, Phase 7-3). NULL = 전체 접근 범위 대상. 스페이스 삭제 시
-    # SET NULL 로 세션은 남기고 범위만 해제한다.
-    space_id: Mapped[int | None] = mapped_column(
-        BigInteger,
-        ForeignKey("wiki_spaces.id", ondelete="SET NULL"),
-        nullable=True,
+    # 전사 위키 범위 토글(wiki-v2 4.5). true 면 검색을 위키 범위로 제한하고 위키 페이지를
+    # 우선 배치한다. 스페이스 폐기로 space_id FK 를 이 불리언으로 대체했다.
+    wiki_scope: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(

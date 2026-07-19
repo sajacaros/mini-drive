@@ -1,43 +1,38 @@
-"""wiki_spaces / wiki_sources / wiki_jobs 테이블 (LLM 위키, PRD 5.14~5.15, Phase 7-3).
+"""wiki_sources / wiki_jobs 테이블 (전사 단일 LLM 위키, wiki-v2 D1~D9, Phase 7-4).
 
-Karpathy LLM Wiki 패턴 × 권한 경계. 핵심 불변식은 **권한 경계 = 컴파일 경계**다(PRD 3.7.1):
-스페이스 스코프(personal/group)가 read 가능한 소스만 컴파일에 투입되고, 컴파일된 페이지는
-스코프 소유 폴더(root_folder_id) 하위의 일반 드라이브 파일로 저장되므로 "페이지를 읽을 수
-있는 사람 = 그 소스를 읽을 수 있는 사람"이 구조적으로 보장된다.
+위키 v2 재설계(wiki-v2 재설계 문서)로 스페이스 개념(wiki_spaces, personal/group 스코프)을
+제거했다. 핵심 모델이 **권한 경계 = 컴파일 경계**에서 **출판 동의(체크) = 전사 출판**으로
+바뀌었다(wiki-v2 D1):
 
-설계 (PRD 5.14):
-  - 위키 페이지는 별도 테이블이 아니라 root_folder_id 하위의 files 행(권한·버전·휴지통 재사용).
-    페이지 frontmatter 의 `locked: true` 는 연쇄 갱신 제외(사람 확정 페이지 보호, 3.7.1 규칙 5).
-  - wiki_sources 는 등록 소스(파일 또는 재귀 폴더)와 인덱싱 상태(queued/indexed/stale/failed).
-  - wiki_jobs 는 arq(Redis) 실행 큐와 별개로 이력·상태 조회·재시도 판단의 진실 소스(PRD 5.15).
+  - 드라이브 파일/폴더에 "위키에 공유" 체크(= wiki_sources 행)를 두면 그 콘텐츠가 **전사 단일
+    위키**로 컴파일되고, 컴파일된 위키 페이지는 **모든 로그인 사용자**가 읽는다(권한 서비스
+    특례, wiki-v2 D4). 원본은 기존 권한 그대로 보호된다(출처 링크 클릭 시 권한 재검증).
+  - 위키 페이지는 별도 테이블이 아니라 시스템 사용자 소유 `Wiki` 폴더(app_settings 의
+    wiki_root_folder_id) 하위의 일반 드라이브 파일이다(권한·버전·휴지통 기존 체계 재사용).
+
+설계 (wiki-v2 3장):
+  - wiki_sources: PK(file_id). added_by = 파일 소유자(체크한 사람, D1). status 는 인덱싱/컴파일
+    진행 반영(queued/indexed/stale/failed). space_id·recursive 는 제거(폴더는 항상 재귀, D2).
+  - wiki_jobs: arq(Redis) 실행 큐와 별개로 이력·상태 조회·재시도 판단의 진실 소스. space_id 제거.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
-    CheckConstraint,
     DateTime,
     ForeignKey,
-    Index,
     Integer,
     String,
     Text,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
-
-# 스코프 값 상수 (wiki_spaces.scope).
-SCOPE_PERSONAL = "personal"
-SCOPE_GROUP = "group"
 
 # 소스 상태 (wiki_sources.status).
 SOURCE_QUEUED = "queued"
@@ -55,71 +50,19 @@ JOB_DONE = "done"
 JOB_FAILED = "failed"
 
 
-class WikiSpace(Base):
-    """위키 스페이스 (PRD 5.14). personal(user_id) 또는 group(group_id) 스코프.
-
-    root_folder_id 는 위키 페이지(.md 드라이브 파일)가 저장되는 폴더로, 그 폴더의 소유자
-    (files.user_id)가 곧 스페이스 생성자다 — 백그라운드 컴파일이 페이지를 쓸 때의 자격.
-    """
-
-    __tablename__ = "wiki_spaces"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    user_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("users.id"), nullable=True
-    )
-    group_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("groups.id"), nullable=True
-    )
-    root_folder_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("files.id"), nullable=False
-    )
-    settings: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    __table_args__ = (
-        CheckConstraint(
-            "(scope = 'personal' AND user_id IS NOT NULL AND group_id IS NULL)"
-            " OR (scope = 'group' AND group_id IS NOT NULL AND user_id IS NULL)",
-            name="ck_wiki_spaces_scope",
-        ),
-        Index("idx_wiki_spaces_user", "user_id"),
-        Index("idx_wiki_spaces_group", "group_id"),
-    )
-
-    def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
-        return f"<WikiSpace id={self.id} scope={self.scope} name={self.name!r}>"
-
-
 class WikiSource(Base):
-    """스페이스 소스 등록 (PRD 5.14). 파일 또는 재귀 폴더. 상태는 인덱싱/컴파일 진행 반영."""
+    """위키 공유 체크된 소스 (wiki-v2 3장). 파일 또는 폴더. 폴더는 항상 재귀(D2).
+
+    PK 는 file_id 단독 — 전사 단일 위키이므로 소스는 파일별 1행이다. added_by 는 체크한 사람
+    (= 파일 소유자, D1)으로, 폴더 소스일 때 컴파일 대상을 added_by 소유 파일로 한정한다(D2).
+    """
 
     __tablename__ = "wiki_sources"
 
-    space_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("wiki_spaces.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
     file_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("files.id", ondelete="CASCADE"),
         primary_key=True,
-    )
-    recursive: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=SOURCE_QUEUED
@@ -133,23 +76,15 @@ class WikiSource(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
-        return (
-            f"<WikiSource space={self.space_id} file={self.file_id} "
-            f"status={self.status}>"
-        )
+        return f"<WikiSource file={self.file_id} status={self.status}>"
 
 
 class WikiJob(Base):
-    """비동기 위키 잡 이력 (PRD 5.15). arq(Redis) 실행 큐와 별개의 상태 진실 소스."""
+    """비동기 위키 잡 이력 (wiki-v2 3장). arq(Redis) 실행 큐와 별개의 상태 진실 소스."""
 
     __tablename__ = "wiki_jobs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    space_id: Mapped[int] = mapped_column(
-        BigInteger,
-        ForeignKey("wiki_spaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
     file_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("files.id", ondelete="SET NULL"), nullable=True
     )
@@ -171,10 +106,7 @@ class WikiJob(Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = (Index("idx_wiki_jobs_space", "space_id", "id"),)
+    # 이력은 id 역순(최근순) 조회뿐이라 PK 인덱스로 충분하다(별도 보조 인덱스 불요).
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
-        return (
-            f"<WikiJob id={self.id} space={self.space_id} kind={self.kind} "
-            f"status={self.status}>"
-        )
+        return f"<WikiJob id={self.id} kind={self.kind} status={self.status}>"

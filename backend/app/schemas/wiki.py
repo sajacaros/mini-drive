@@ -1,7 +1,7 @@
-"""위키 API 요청/응답 스키마 (PRD 6.8, Phase 7-3).
+"""위키 API 요청/응답 스키마 (전사 단일 위키, wiki-v2 4.2, Phase 7-4).
 
 위키 **페이지** 자체는 드라이브 파일이므로 조회/버전/이름 변경은 기존 파일 API(6.2)를 쓴다.
-여기서는 스페이스/소스/잡/Lint 의 요청·응답만 정의한다.
+여기서는 개요/소스/잡/Lint/승격의 요청·응답만 정의한다(스페이스 스키마는 전면 제거).
 """
 
 from __future__ import annotations
@@ -12,102 +12,56 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:  # 런타임 임포트 순환 회피 — 팩토리 타입 힌트 전용.
-    from app.models import WikiJob, WikiSpace
-    from app.services.wiki import LintReport, SourceInfo, SpaceDetail
-
-
-class WikiSpaceCreateRequest(BaseModel):
-    """스페이스 생성 (PRD 6.8). group 스코프는 group_id 필수 + 그룹 admin 이상."""
-
-    name: str = Field(min_length=1, max_length=100)
-    scope: str = Field(pattern="^(personal|group)$")
-    group_id: int | None = Field(default=None)
+    from app.models import WikiJob
+    from app.services.wiki import LintReport, SourceInfo, WikiOverview
 
 
 class WikiSourceRegisterRequest(BaseModel):
-    """소스 등록 (PRD 6.8). recursive 는 폴더일 때 하위 재귀 포함 여부."""
+    """위키 공유 체크 (wiki-v2 4.2 POST /sources). 소유자만. 폴더는 항상 재귀(옵션 없음)."""
 
     file_id: int
-    recursive: bool = Field(default=True)
-
-
-class WikiSpaceResponse(BaseModel):
-    """스페이스 요약 (목록/생성 응답)."""
-
-    id: int
-    name: str
-    scope: str
-    user_id: int | None
-    group_id: int | None
-    root_folder_id: int
-    created_at: datetime
-
-    @classmethod
-    def from_space(cls, s: WikiSpace) -> WikiSpaceResponse:
-        return cls(
-            id=s.id,
-            name=s.name,
-            scope=s.scope,
-            user_id=s.user_id,
-            group_id=s.group_id,
-            root_folder_id=s.root_folder_id,
-            created_at=s.created_at,
-        )
 
 
 class WikiSourceResponse(BaseModel):
-    """등록 소스 한 건 (상세 응답)."""
+    """공유 소스 한 건 (개요/등록 응답)."""
 
     file_id: int
     file_name: str
-    recursive: bool
     status: str
     last_ingested_version: int | None
+    added_by: int
 
     @classmethod
     def from_info(cls, info: SourceInfo) -> WikiSourceResponse:
         return cls(
             file_id=info.file_id,
             file_name=info.file_name,
-            recursive=info.recursive,
             status=info.status,
             last_ingested_version=info.last_ingested_version,
+            added_by=info.added_by,
         )
 
 
-class WikiSpaceDetailResponse(BaseModel):
-    """스페이스 상세 (PRD 6.8) — 소스 목록·상태, 최근 log.md 항목, index.md 카탈로그 요약."""
+class WikiOverviewResponse(BaseModel):
+    """위키 개요 (wiki-v2 4.2 GET /api/wiki) — 카탈로그·최근 로그·공유 소스 현황."""
 
-    id: int
-    name: str
-    scope: str
-    user_id: int | None
-    group_id: int | None
     root_folder_id: int
-    created_at: datetime
     sources: list[WikiSourceResponse]
     recent_log: list[str]
     index_entries: list[str]
 
     @classmethod
-    def from_detail(cls, detail: SpaceDetail) -> WikiSpaceDetailResponse:
-        s = detail.space
+    def from_overview(cls, ov: WikiOverview) -> WikiOverviewResponse:
         return cls(
-            id=s.id,
-            name=s.name,
-            scope=s.scope,
-            user_id=s.user_id,
-            group_id=s.group_id,
-            root_folder_id=s.root_folder_id,
-            created_at=s.created_at,
-            sources=[WikiSourceResponse.from_info(i) for i in detail.sources],
-            recent_log=detail.recent_log,
-            index_entries=detail.index_entries,
+            root_folder_id=ov.root_folder_id,
+            sources=[WikiSourceResponse.from_info(i) for i in ov.sources],
+            recent_log=ov.recent_log,
+            index_entries=ov.index_entries,
         )
 
 
 class WikiJobResponse(BaseModel):
-    """위키 잡 이력 한 건 (PRD 6.8 GET /jobs)."""
+    """위키 잡 이력 한 건 (wiki-v2 4.2 GET /jobs)."""
 
     id: int
     kind: str
@@ -133,7 +87,7 @@ class WikiJobResponse(BaseModel):
 
 
 class WikiLintResponse(BaseModel):
-    """Lint 결과 (PRD 6.8 POST /lint) — 결정적 자동 수정 + 휴리스틱 리포트."""
+    """Lint 결과 (wiki-v2 4.2 POST /lint) — 결정적 자동 수정 + 휴리스틱 리포트."""
 
     auto_fixed: list[str]
     reports: list[str]
@@ -141,3 +95,17 @@ class WikiLintResponse(BaseModel):
     @classmethod
     def from_report(cls, report: LintReport) -> WikiLintResponse:
         return cls(auto_fixed=report.auto_fixed, reports=report.reports)
+
+
+class WikiPromoteRequest(BaseModel):
+    """답변 승격 (wiki-v2 4.2 POST /promote). 원본 assistant 메시지 + 페이지 제목."""
+
+    message_id: int
+    title: str = Field(min_length=1, max_length=100)
+
+
+class WikiPromoteResponse(BaseModel):
+    """승격 결과 — 생성/갱신된 위키 페이지(드라이브 파일) id 와 이름."""
+
+    file_id: int
+    name: str

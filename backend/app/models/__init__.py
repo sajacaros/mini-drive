@@ -23,7 +23,7 @@ from app.models.share import Share
 from app.models.signup_code import SignupCode
 from app.models.upload_session import UploadSession
 from app.models.user import User
-from app.models.wiki import WikiJob, WikiSource, WikiSpace
+from app.models.wiki import WikiJob, WikiSource
 
 __all__ = [
     "Base",
@@ -42,7 +42,6 @@ __all__ = [
     "AppSetting",
     "ChatSession",
     "ChatMessage",
-    "WikiSpace",
     "WikiSource",
     "WikiJob",
     # 열거형

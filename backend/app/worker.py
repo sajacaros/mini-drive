@@ -7,12 +7,12 @@
 기동:  arq app.worker.WorkerSettings
 
 잡 함수:
-  - index_file(file_id)            : 파일이면 인덱싱, 폴더면 하위 파일로 팬아웃.
-  - drop_file_index(file_id)       : 파일/폴더 하위의 청크 삭제(휴지통 이동·인덱싱 제외).
-  - wiki_ingest(space_id, file_id) : 위키 소스를 컴파일(2단계 LLM → 페이지 드라이브 파일).
-  - wiki_lint(space_id)            : 스페이스 Lint(index 정합성 자동 수정 + 휴리스틱 리포트).
+  - index_file(file_id)      : 파일이면 인덱싱, 폴더면 하위 파일로 팬아웃.
+  - drop_file_index(file_id) : 파일/폴더 하위의 청크 삭제(휴지통 이동·인덱싱 제외).
+  - wiki_ingest(file_id)     : 위키 소스를 컴파일(2단계 LLM → 페이지 드라이브 파일).
+  - wiki_lint()              : 전사 위키 Lint(index 정합성 자동 수정 + 휴리스틱 리포트).
 크론:
-  - wiki_lint_cron                 : 1일 1회 전체 스페이스 Lint(PRD 3.7.1).
+  - wiki_lint_cron           : 1일 1회 전사 위키 Lint(wiki-v2 D6/D9).
 
 임베딩/챗 프로바이더는 기동 시 1회 생성해 컨텍스트에 둔다. 키가 없으면 None 이 되어 해당 잡이
 스킵/실패로 처리된다(파일 서비스 본연 기능 불영향, PRD 3.7.4).
@@ -24,12 +24,10 @@ from typing import Any
 
 from arq import cron
 from arq.connections import RedisSettings
-from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import SessionFactory
 from app.core.logging import configure_logging, get_logger
-from app.models import WikiSpace
 from app.models.wiki import JOB_FAILED, JOB_INGEST
 from app.services import indexing as indexing_service
 from app.services import wiki as wiki_service
@@ -58,30 +56,28 @@ async def drop_file_index(ctx: dict[str, Any], file_id: int) -> str:
     return "dropped"
 
 
-async def wiki_ingest(ctx: dict[str, Any], space_id: int, file_id: int) -> str:
-    """위키 Ingest 잡 — 소스를 컴파일해 위키 페이지(드라이브 파일)를 생성/갱신한다(PRD 3.7.1)."""
+async def wiki_ingest(ctx: dict[str, Any], file_id: int) -> str:
+    """위키 Ingest 잡 — 소스를 컴파일해 위키 페이지(드라이브 파일)를 생성/갱신한다(wiki-v2 4.4)."""
     chat_provider = ctx.get("chat_provider")
     if chat_provider is None:
         # 챗 프로바이더 미구성이면 컴파일 불가 — 잡을 failed 로 기록하고 재시도하지 않는다.
         async with SessionFactory() as session:
             await wiki_service.record_job(
                 session,
-                space_id,
                 JOB_INGEST,
                 file_id=file_id,
                 status=JOB_FAILED,
                 error="chat provider 미구성(LLM 컴파일 불가)",
             )
             await session.commit()
-        _log.warning("wiki_ingest_no_provider", space_id=space_id, file_id=file_id)
+        _log.warning("wiki_ingest_no_provider", file_id=file_id)
         return "skipped:no_chat_provider"
     async with SessionFactory() as session:
         summary = await wiki_service.ingest_source(
-            session, get_storage(), chat_provider, settings, space_id, file_id
+            session, get_storage(), chat_provider, settings, file_id
         )
     _log.info(
         "worker_wiki_ingest",
-        space_id=space_id,
         file_id=file_id,
         compiled=summary.compiled,
         targets=summary.targets,
@@ -89,16 +85,13 @@ async def wiki_ingest(ctx: dict[str, Any], space_id: int, file_id: int) -> str:
     return f"ingest:{summary.compiled}/{summary.targets}"
 
 
-async def wiki_lint(ctx: dict[str, Any], space_id: int) -> str:
-    """위키 Lint 잡 — 단일 스페이스 정합성 자동 수정 + 휴리스틱 리포트(PRD 3.7.1)."""
+async def wiki_lint(ctx: dict[str, Any]) -> str:
+    """위키 Lint 잡 — 전사 위키 정합성 자동 수정 + 휴리스틱 리포트(wiki-v2 D6/D9)."""
     async with SessionFactory() as session:
-        space = await session.get(WikiSpace, space_id)
-        if space is None:
-            return "skipped:no_space"
-        report = await wiki_service.run_lint(session, get_storage(), space)
+        root_id, owner = await wiki_service._ensure_wiki(session, get_storage())
+        report = await wiki_service.run_lint(session, get_storage(), root_id, owner)
     _log.info(
         "worker_wiki_lint",
-        space_id=space_id,
         auto_fixed=len(report.auto_fixed),
         reports=len(report.reports),
     )
@@ -106,23 +99,22 @@ async def wiki_lint(ctx: dict[str, Any], space_id: int) -> str:
 
 
 async def wiki_lint_cron(ctx: dict[str, Any]) -> str:
-    """1일 1회 전체 스페이스 Lint(PRD 3.7.1). 스페이스마다 독립 세션으로 처리한다."""
+    """1일 1회 전사 위키 Lint(wiki-v2 D6/D9). 부트스트랩 전이면 조용히 건너뛴다."""
     async with SessionFactory() as session:
-        space_ids = list(
-            (await session.execute(select(WikiSpace.id))).scalars().all()
+        already = await wiki_service._get_setting_int(
+            session, wiki_service.WIKI_ROOT_FOLDER_KEY
         )
-    linted = 0
-    for sid in space_ids:
-        try:
-            async with SessionFactory() as session:
-                space = await session.get(WikiSpace, sid)
-                if space is not None:
-                    await wiki_service.run_lint(session, get_storage(), space)
-                    linted += 1
-        except Exception as exc:  # noqa: BLE001 - 개별 스페이스 실패가 나머지를 막지 않게 한다.
-            _log.warning("wiki_lint_cron_space_failed", space_id=sid, error=str(exc))
-    _log.info("worker_wiki_lint_cron", spaces=len(space_ids), linted=linted)
-    return f"lint_cron:{linted}/{len(space_ids)}"
+        if already is None:
+            return "skipped:no_wiki"
+    async with SessionFactory() as session:
+        root_id, owner = await wiki_service._ensure_wiki(session, get_storage())
+        report = await wiki_service.run_lint(session, get_storage(), root_id, owner)
+    _log.info(
+        "worker_wiki_lint_cron",
+        auto_fixed=len(report.auto_fixed),
+        reports=len(report.reports),
+    )
+    return f"lint_cron:{len(report.auto_fixed)}/{len(report.reports)}"
 
 
 async def startup(ctx: dict[str, Any]) -> None:

@@ -49,6 +49,6 @@ async def enqueue_drop_file_index(file_id: int) -> None:
     await _enqueue("drop_file_index", file_id)
 
 
-async def enqueue_wiki_ingest(space_id: int, file_id: int) -> None:
-    """위키 소스 Ingest(컴파일) 잡을 큐잉한다 (소스 등록/버전 갱신, PRD 3.7.1, Phase 7-3)."""
-    await _enqueue("wiki_ingest", space_id, file_id)
+async def enqueue_wiki_ingest(file_id: int) -> None:
+    """위키 소스 Ingest(컴파일) 잡을 큐잉한다 (소스 등록/버전 갱신, wiki-v2 4.4, Phase 7-4)."""
+    await _enqueue("wiki_ingest", file_id)

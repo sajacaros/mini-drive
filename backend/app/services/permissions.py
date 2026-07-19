@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.redis import redis_client
 from app.models import (
+    AppSetting,
     AuditLog,
     File,
     FileGroupPermission,
@@ -64,6 +65,76 @@ _RANK: dict[GroupPermission, int] = {
 def permission_covers(effective: GroupPermission, need: AccessNeed) -> bool:
     """effective 권한이 need 를 충족하는지(같거나 높은 수준)."""
     return _RANK[effective] >= _RANK[GroupPermission(need)]
+
+
+# --- 위키 특례 (전 사용자 READ, wiki-v2 D4) ----------------------------------
+#
+# 전사 단일 위키 페이지(시스템 사용자 소유 `Wiki` 폴더 하위)는 **모든 로그인 사용자**가 읽을 수
+# 있어야 한다(wiki-v2 D4). "전체 사용자" 시스템 그룹 대신 권한 서비스 한 곳(get_access_level)에
+# 특례를 두어, 대상 파일의 조상 체인(자기 포함)에 위키 루트 폴더가 있으면 READ 를 반환한다.
+# wiki_root_folder_id 는 app_settings 값을 프로세스 캐시한다(부트스트랩 전이면 None → 특례 없음).
+# 쓰기 특례는 없다 — 위키 페이지 쓰기는 서비스 내부에서 시스템 사용자 자격으로만 수행한다.
+
+WIKI_ROOT_FOLDER_KEY = "wiki_root_folder_id"
+WIKI_SYSTEM_USER_KEY = "wiki_system_user_id"
+
+# 위키 루트 폴더 id 프로세스 캐시. None + _loaded=False = 아직 조회 안 함(부트스트랩 전일 수 있음).
+_wiki_root_folder_id: int | None = None
+_wiki_root_loaded: bool = False
+
+
+def set_wiki_root_folder_id(folder_id: int) -> None:
+    """부트스트랩이 위키 루트 폴더를 확정한 뒤 프로세스 캐시를 갱신한다(즉시 특례 반영)."""
+    global _wiki_root_folder_id, _wiki_root_loaded
+    _wiki_root_folder_id = folder_id
+    _wiki_root_loaded = True
+
+
+def reset_wiki_root_cache() -> None:
+    """프로세스 캐시를 초기화한다(테스트에서 DB 리셋 후 재조회 강제)."""
+    global _wiki_root_folder_id, _wiki_root_loaded
+    _wiki_root_folder_id = None
+    _wiki_root_loaded = False
+
+
+async def _get_wiki_root_folder_id(session: AsyncSession) -> int | None:
+    """위키 루트 폴더 id(프로세스 캐시). 미부트스트랩이면 None(특례 없음)."""
+    global _wiki_root_folder_id, _wiki_root_loaded
+    if _wiki_root_loaded:
+        return _wiki_root_folder_id
+    row = await session.get(AppSetting, WIKI_ROOT_FOLDER_KEY)
+    if row is None:
+        return None  # 아직 부트스트랩 전 — 다음 호출에서 다시 조회한다(_loaded 유지 안 함).
+    _wiki_root_folder_id = int(row.value)
+    _wiki_root_loaded = True
+    return _wiki_root_folder_id
+
+
+# 대상 파일의 조상 체인(자기 포함)에 위키 루트 폴더가 있는지 판정한다(기존 조상 CTE 패턴).
+_WIKI_ANCESTOR_SQL = text(
+    """
+    WITH RECURSIVE ancestors AS (
+        SELECT id, parent_folder_id FROM files WHERE id = :file_id
+        UNION ALL
+        SELECT f.id, f.parent_folder_id
+        FROM files f JOIN ancestors a ON f.id = a.parent_folder_id
+    )
+    SELECT 1 FROM ancestors WHERE id = :wiki_root LIMIT 1
+    """
+)
+
+
+async def _is_under_wiki_root(session: AsyncSession, file_id: int) -> bool:
+    """file 이 위키 루트 서브트리(자기 포함)에 속하는지. 미부트스트랩이면 항상 False."""
+    wiki_root = await _get_wiki_root_folder_id(session)
+    if wiki_root is None:
+        return False
+    row = (
+        await session.execute(
+            _WIKI_ANCESTOR_SQL, {"file_id": file_id, "wiki_root": wiki_root}
+        )
+    ).first()
+    return row is not None
 
 
 # --- 순수 판정 로직 (DB 무관, 단위 테스트 대상) ------------------------------
@@ -203,6 +274,11 @@ async def get_access_level(
         return None if cached == "none" else GroupPermission(cached)
 
     level, _ = await _determine_group_level(session, user, file)
+    # 위키 특례(wiki-v2 D4) — 위키 루트 서브트리의 페이지는 모든 로그인 사용자에게 READ.
+    # 그룹 권한이 더 높으면(위키 페이지엔 사실상 없지만) 그 수준을 유지한다. 특례는 캐시에도
+    # 담기지만 위키 페이지는 항상 새 file_id 라 회수 대상이 아니다(부트스트랩 후 생성).
+    if level is None and await _is_under_wiki_root(session, file.id):
+        level = GroupPermission.READ
     try:
         await redis_client.set(
             key, level.value if level is not None else "none", ex=_CACHE_TTL_SECONDS

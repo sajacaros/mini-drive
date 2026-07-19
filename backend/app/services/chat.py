@@ -12,8 +12,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ChatMessage, ChatSession, User, WikiSpace
-from app.services import wiki as wiki_service
+from app.models import ChatMessage, ChatSession, User
 
 
 class ChatServiceError(Exception):
@@ -33,21 +32,15 @@ async def create_session(
     session: AsyncSession,
     user: User,
     title: str = "",
-    space_id: int | None = None,
+    wiki_scope: bool = False,
 ) -> ChatSession:
     """빈 제목을 허용하는 세션 생성. 첫 질문 전송 시 제목이 자동 설정된다.
 
-    space_id 가 주어지면 접근 가능한 위키 스페이스여야 한다(아니면 404) — 이후 이 세션의 검색은
-    그 스페이스 범위로 제한된다(PRD 3.7.5).
+    wiki_scope=True 면 이후 이 세션의 검색을 전사 위키 범위(위키 페이지 ∪ 공유 소스)로 제한하고
+    위키 페이지를 우선 배치한다(wiki-v2 4.5).
     """
-    if space_id is not None:
-        space = await session.get(WikiSpace, space_id)
-        if space is None or not await wiki_service.can_access_space(
-            session, user, space
-        ):
-            raise ChatServiceError(404, "위키 스페이스를 찾을 수 없습니다.")
     row = ChatSession(
-        user_id=user.id, title=(title or "")[:_TITLE_MAX], space_id=space_id
+        user_id=user.id, title=(title or "")[:_TITLE_MAX], wiki_scope=wiki_scope
     )
     session.add(row)
     await session.commit()

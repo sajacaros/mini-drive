@@ -1,8 +1,8 @@
-"""챗봇 라우터 (PRD 6.9, Phase 7-2) — 세션 CRUD + SSE 스트리밍 답변.
+"""챗봇 라우터 (PRD 6.9, wiki-v2 4.5, Phase 7-4) — 세션 CRUD + SSE 스트리밍 답변.
 
 세션·메시지는 소유 사용자만 접근한다(타인 404). 질문 전송은 권한 인지 검색(3.7.3) →
 LangGraph 파이프라인(3.7.5) 을 거쳐 답변을 **SSE 로 스트리밍**한다. 위키 승격(promote)은
-7-3 범위이므로 여기서 만들지 않는다.
+위키 라우터(/api/wiki/promote)로 이동했다(wiki-v2 4.2).
 
 라우터는 얇게 유지한다 — 검색/생성은 chat_pipeline, 세션 영속화는 chat 서비스가 담당한다.
 """
@@ -19,10 +19,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models import WikiSpace
 from app.schemas.chat import (
-    ChatMessagePromoteRequest,
-    ChatMessagePromoteResponse,
     ChatMessageResponse,
     ChatMessageSendRequest,
     ChatSessionCreateRequest,
@@ -35,8 +32,6 @@ from app.services import wiki as wiki_service
 from app.services.chat import ChatServiceError
 from app.services.chat_llm import get_chat_provider
 from app.services.embeddings import get_embedding_provider
-from app.services.storage import get_storage
-from app.services.wiki import WikiServiceError
 
 router = APIRouter()
 
@@ -60,10 +55,10 @@ def _sse(event: str, data: object) -> str:
 async def create_session(
     body: ChatSessionCreateRequest, user: CurrentUser, session: DbSession
 ) -> ChatSessionResponse:
-    """세션 생성 (빈 title 허용 — 첫 질문으로 자동 설정). space_id 지정 시 접근 검증(없으면 404)."""
+    """세션 생성 (빈 title 허용 — 첫 질문으로 자동 설정). wiki_scope=True 면 위키 범위 검색."""
     try:
         row = await chat_service.create_session(
-            session, user, body.title, body.space_id
+            session, user, body.title, body.wiki_scope
         )
     except ChatServiceError as exc:
         raise _http_error(exc) from exc
@@ -92,7 +87,7 @@ async def get_session(
     return ChatSessionDetailResponse(
         id=chat_session.id,
         title=chat_session.title,
-        space_id=chat_session.space_id,
+        wiki_scope=chat_session.wiki_scope,
         created_at=chat_session.created_at,
         messages=[ChatMessageResponse.from_message(m) for m in messages],
     )
@@ -146,15 +141,13 @@ async def send_message(
         session, session_id, settings.chat_history_limit
     )
 
-    # 세션이 위키 스페이스로 범위 지정됐으면 검색 후보를 그 범위로 제한한다(PRD 3.7.5).
+    # 세션이 위키 범위면 검색 후보를 전사 위키 범위로 제한한다(wiki-v2 4.5).
     space_ids: set[int] | None = None
     wiki_page_ids: set[int] | None = None
-    if chat_session.space_id is not None:
-        space = await session.get(WikiSpace, chat_session.space_id)
-        if space is not None:
-            scope = await wiki_service.space_scope(session, space)
-            space_ids = scope.all_ids
-            wiki_page_ids = scope.wiki_page_ids
+    if chat_session.wiki_scope:
+        scope = await wiki_service.wiki_file_scope(session)
+        space_ids = scope.all_ids
+        wiki_page_ids = scope.wiki_page_ids
 
     async def event_stream() -> AsyncIterator[str]:
         answer = ""
@@ -211,39 +204,3 @@ async def send_message(
             "Cache-Control": "no-cache",
         },
     )
-
-
-@router.post(
-    "/messages/{message_id}/promote", response_model=ChatMessagePromoteResponse
-)
-async def promote_message(
-    message_id: int,
-    body: ChatMessagePromoteRequest,
-    user: CurrentUser,
-    session: DbSession,
-) -> ChatMessagePromoteResponse:
-    """답변을 위키 페이지로 승격한다 (PRD 6.9). 본인 assistant 메시지 + 스페이스 쓰기 자격만.
-
-    답변 본문 + citations 를 frontmatter(promoted_from, locked:false) 를 붙여 위키 페이지로
-    저장하고 index.md/log.md 를 부기한다(스페이스 스코프 폴더 하위 = 권한 경계 유지).
-    """
-    try:
-        message = await chat_service.get_owned_assistant_message(
-            session, user, message_id
-        )
-    except ChatServiceError as exc:
-        raise _http_error(exc) from exc
-    try:
-        page = await wiki_service.promote_answer(
-            session,
-            get_storage(),
-            user,
-            body.space_id,
-            message_id=message.id,
-            title=body.title,
-            content=message.content,
-            citations=message.citations,
-        )
-    except WikiServiceError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return ChatMessagePromoteResponse(file_id=page.id, name=page.name)

@@ -26,7 +26,7 @@ from app.core.logging import get_logger
 from app.models import File
 from app.models.user import User
 from app.services.groups import get_user_group_ids
-from app.services.permissions import get_access_level
+from app.services.permissions import _get_wiki_root_folder_id, get_access_level
 
 _log = get_logger("app.retrieval")
 
@@ -58,7 +58,10 @@ def _candidate_search_sql(scoped: bool) -> Any:
 
     - granted: 내 활성 그룹에 부여된(미만료) grant 대상 파일 + inherit_to_children 서브트리.
       grant 지점 파일은 항상 후보, 하위는 grant 가 상속될 때만(inherit=TRUE) 재귀로 포함한다.
-    - candidates: 내 소유 파일 ∪ granted. 후보 밖 청크는 스캔되지 않는다.
+    - wiki_pages: 위키 루트 서브트리(전사 위키 페이지). 시스템 사용자 소유라 owned/granted 에 안
+      잡히지만 **모든 로그인 사용자**가 읽을 수 있어야 하므로(wiki-v2 D4 특례, get_access_level 과
+      일관) 후보에 포함한다. wiki_root 가 NULL(부트스트랩 전)이면 시드가 없어 빈 집합이다.
+    - candidates: 내 소유 파일 ∪ granted ∪ wiki_pages. 후보 밖 청크는 스캔되지 않는다.
     - qvec 는 텍스트 벡터 리터럴로 넘겨 CAST(:qvec AS vector) 로 캐스팅한다(타입 등록 불요).
     """
     return text(
@@ -74,10 +77,17 @@ def _candidate_search_sql(scoped: bool) -> Any:
             JOIN granted g ON f.parent_folder_id = g.id
             WHERE g.inherit = TRUE
         ),
+        wiki_pages AS (
+            SELECT id FROM files WHERE id = :wiki_root
+            UNION
+            SELECT f.id FROM files f JOIN wiki_pages w ON f.parent_folder_id = w.id
+        ),
         candidates AS (
             SELECT id FROM files WHERE user_id = :user_id
             UNION
             SELECT id FROM granted
+            UNION
+            SELECT id FROM wiki_pages
         )
         SELECT c.id AS chunk_id, c.file_id AS file_id, f.name AS file_name,
                c.version AS version, c.content AS content,
@@ -140,12 +150,15 @@ async def _coarse_search(
     않는다). 빈 집합이면 후보가 없으므로 즉시 [] 를 반환한다.
     """
     group_ids = await get_user_group_ids(session, user.id)
+    # 위키 루트(전사 위키 페이지 서브트리)를 후보에 포함하기 위한 시드. 부트스트랩 전이면 None.
+    wiki_root = await _get_wiki_root_folder_id(session)
     params: dict[str, Any] = {
         "user_id": user.id,
         "group_ids": group_ids or [-1],
         "now": datetime.now(UTC),
         "qvec": _vector_literal(query_embedding),
         "limit": limit,
+        "wiki_root": wiki_root,
     }
     if space_ids is not None:
         if not space_ids:

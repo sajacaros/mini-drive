@@ -21,6 +21,8 @@ class FileResponse(BaseModel):
     is_folder: bool
     is_deleted: bool
     indexing_excluded: bool = False
+    # "위키에 공유" 체크 여부(wiki_sources 행 존재, wiki-v2 4.3). 목록/단건에서 파생 채움.
+    wiki_shared: bool = False
     current_version: int
     created_at: datetime
     updated_at: datetime
