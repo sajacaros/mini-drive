@@ -11,6 +11,7 @@ import { AdminGroupsPage } from "@/pages/AdminGroupsPage";
 import { AdminSharesPage } from "@/pages/AdminSharesPage";
 import { AdminSignupCodesPage } from "@/pages/AdminSignupCodesPage";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
+import { ChatPage } from "@/pages/ChatPage";
 import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPage";
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
 import { GroupsPage } from "@/pages/GroupsPage";
@@ -72,6 +73,7 @@ function App() {
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />
+            <Route path="/chat" element={<ChatPage />} />
           </Route>
         </Route>
 

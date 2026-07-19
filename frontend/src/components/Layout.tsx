@@ -6,6 +6,7 @@ import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
 import { ThemePicker } from "./ThemePicker";
 import {
+  ChatIcon,
   DriveIcon,
   HistoryIcon,
   InboxIcon,
@@ -44,6 +45,7 @@ export function Layout() {
           <NavItem to="/" icon={<DriveIcon />} label="내 드라이브" end />
           <NavItem to="/shared" icon={<InboxIcon />} label="공유됨" />
           <NavItem to="/groups" icon={<UsersIcon />} label="그룹" />
+          <NavItem to="/chat" icon={<ChatIcon />} label="챗봇" />
           <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" />
           <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" />
 

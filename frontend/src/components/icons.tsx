@@ -202,3 +202,25 @@ export const XIcon = (p: IconProps) => (
     <path d="M18 6 6 18M6 6l12 12" />
   </svg>
 );
+
+/** 챗봇 — 말풍선. */
+export const ChatIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
+  </svg>
+);
+
+/** 전송 — 종이비행기. */
+export const SendIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M22 2 11 13" />
+    <path d="M22 2 15 22l-4-9-9-4Z" />
+  </svg>
+);
+
+/** 중단 — 정지 사각형. */
+export const StopIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+  </svg>
+);
