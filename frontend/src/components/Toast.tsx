@@ -31,14 +31,17 @@ const useToastStore = create<ToastState>((set) => ({
   remove: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
 
-/** 컴포넌트에서 토스트를 띄우는 훅. */
+// 렌더마다 새 객체를 만들면 이 객체를 effect/useCallback 의존성으로 쓰는 화면이
+// 무한 재실행 루프에 빠지므로, 항상 같은 참조를 반환한다.
+const toastApi = {
+  success: (msg: string) => useToastStore.getState().push("success", msg),
+  error: (msg: string) => useToastStore.getState().push("error", msg),
+  info: (msg: string) => useToastStore.getState().push("info", msg),
+};
+
+/** 컴포넌트에서 토스트를 띄우는 훅. 반환 객체는 참조가 안정적이다(의존성 배열 안전). */
 export function useToast() {
-  const push = useToastStore((s) => s.push);
-  return {
-    success: (msg: string) => push("success", msg),
-    error: (msg: string) => push("error", msg),
-    info: (msg: string) => push("info", msg),
-  };
+  return toastApi;
 }
 
 /** 훅 밖(예: axios 인터셉터)에서 토스트를 띄우는 명령형 헬퍼. */

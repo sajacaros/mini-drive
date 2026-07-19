@@ -105,10 +105,16 @@ export function WikiSpaceDetailPage() {
       const d = await getSpace(spaceId);
       setDetail(d);
       // root 폴더의 페이지 파일 목록(이름 매칭용). 실패해도 상세는 표시한다.
+      // 백엔드 size 상한(100)에 맞춰 전체 페이지를 순회한다.
       try {
-        const res = await listFiles(d.root_folder_id, 1, 200);
         const map = new Map<string, FileNode>();
-        for (const f of res.items) if (!f.is_folder) map.set(f.name, f);
+        let page = 1;
+        for (;;) {
+          const res = await listFiles(d.root_folder_id, page, 100);
+          for (const f of res.items) if (!f.is_folder) map.set(f.name, f);
+          if (page * 100 >= res.total || res.items.length === 0) break;
+          page += 1;
+        }
         setPageFiles(map);
       } catch {
         setPageFiles(new Map());
