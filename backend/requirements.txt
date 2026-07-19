@@ -3,6 +3,9 @@
 
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
+# 통합 테스트(tests/integration_*)가 컨테이너 안에서 AsyncClient 로 사용 — 명시 의존.
+# (이전에는 LLM 패키지의 전이 의존성으로 딸려 왔음)
+httpx>=0.27.0
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
 sqlalchemy[asyncio]>=2.0.36

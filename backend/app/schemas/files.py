@@ -24,6 +24,8 @@ class FileResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    # 파생 필드 (Phase 8-2) — 서비스가 File 인스턴스에 부착하면 채워지고, 없으면 False.
+    is_favorite: bool = False
 
 
 class FileListResponse(BaseModel):

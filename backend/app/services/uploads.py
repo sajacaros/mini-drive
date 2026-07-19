@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import File, FileVersion, UploadSession, User
+from app.services import file_events as file_events_service
 from app.services import files as files_service
 from app.services import thumbnails as thumbnails_service
 from app.services.files import FileServiceError, build_file_key
@@ -441,6 +442,13 @@ async def _complete_new(
 
     await session.refresh(file)
     await thumbnails_service.maybe_generate(session, storage, file)
+    await file_events_service.publish_file_event(
+        type="upload",
+        file_id=file.id,
+        parent_folder_id=file.parent_folder_id,
+        actor_id=user.id,
+        name=file.name,
+    )
     return file
 
 

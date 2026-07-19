@@ -14,6 +14,7 @@ from app.models.enums import (
     UserRole,
     UserStatus,
 )
+from app.models.favorite import FileFavorite, FileRecent
 from app.models.file import File, FileVersion
 from app.models.group import Group, GroupMember
 from app.models.permission import FileGroupPermission
@@ -32,6 +33,8 @@ __all__ = [
     "Group",
     "GroupMember",
     "FileGroupPermission",
+    "FileFavorite",
+    "FileRecent",
     "AuditLog",
     "UploadSession",
     "SignupCode",

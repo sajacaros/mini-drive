@@ -336,6 +336,7 @@ async def grant_permission(
     )
     await invalidate_group_members(session, group_id)
     await session.commit()
+    await _publish_permission_event(file, actor.id)
     return await _get_direct_permission(session, file_id, group_id)
 
 
@@ -395,6 +396,25 @@ async def revoke_permission(
     )
     await invalidate_group_members(session, group_id)
     await session.commit()
+    await _publish_permission_event(file, actor.id)
+
+
+async def _publish_permission_event(file: File, actor_id: int) -> None:
+    """권한 부여/회수 실시간 이벤트 발행 (Phase 8-1, fail-open).
+
+    file_events 가 이 모듈(permissions)을 임포트하므로 순환을 피하려 지연 임포트한다.
+    회수 시 접근권을 잃은 구독자는 구독 필터에서 걸러져 이벤트를 못 받는데, 이는 설계상
+    수용된 한계다(재조회/이동 시점에 404 로 자연 정리된다).
+    """
+    from app.services import file_events as file_events_service
+
+    await file_events_service.publish_file_event(
+        type="permission",
+        file_id=file.id,
+        parent_folder_id=file.parent_folder_id,
+        actor_id=actor_id,
+        name=file.name,
+    )
 
 
 async def _get_direct_permission(

@@ -21,6 +21,7 @@ from fastapi import (
     status,
 )
 from fastapi import File as FileParam
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, DbSession, RedisClient, rate_limit_user
 from app.api.download import content_disposition as _content_disposition
@@ -52,8 +53,11 @@ from app.schemas.uploads import (
     ResumableReuploadInitRequest,
     ResumableSessionResponse,
 )
+from app.services import favorites as favorites_service
+from app.services import file_events as file_events_service
 from app.services import files as files_service
 from app.services import permissions as permissions_service
+from app.services import recents as recents_service
 from app.services import tickets as tickets_service
 from app.services import uploads as uploads_service
 from app.services.files import FileServiceError
@@ -77,6 +81,56 @@ def _perm_http_error(exc: PermissionServiceError) -> HTTPException:
 
 
 # --- 고정 경로 (/{file_id} 보다 먼저) ---------------------------------------
+
+
+@router.get("/events")
+async def file_events(user: CurrentUser) -> StreamingResponse:
+    """파일 변경 실시간 이벤트 스트림 (SSE, Phase 8-1).
+
+    인증은 기존 Bearer 의존(fetch 스트리밍이 헤더를 붙인다 — EventSource 는 헤더 불가라 쓰지
+    않는다). Redis pub/sub `file-events` 를 구독해 **구독자 권한 필터**(read 이상)를 통과한
+    이벤트만 전달하고, 30초마다 keepalive 주석(ping)을 보낸다. 클라이언트 종료 시 구독 정리.
+
+    rate limit 은 이 경로에 걸지 않는다(장수명 스트림). 미들웨어는 async generator 를 그대로
+    스트리밍하므로 워커를 막지 않는다.
+    """
+    return StreamingResponse(
+        file_events_service.subscribe_file_events(user),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # nginx 등 프록시의 응답 버퍼링 비활성화 — 이벤트 즉시 전달.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/favorites", response_model=FileListResponse)
+async def list_favorites(
+    user: CurrentUser,
+    session: DbSession,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> FileListResponse:
+    """내 즐겨찾기 목록 (Phase 8-2). 삭제·접근권 상실 파일은 숨긴다(조회 시 권한 재검증)."""
+    items, total = await favorites_service.list_favorites(session, user, page, size)
+    responses = [FileResponse.model_validate(f) for f in items]
+    return FileListResponse(items=responses, total=total, page=page, size=size)
+
+
+@router.get("/recent", response_model=list[FileResponse])
+async def list_recent(
+    user: CurrentUser,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=recents_service.MAX_RECENT_LIMIT)] = (
+        recents_service.DEFAULT_RECENT_LIMIT
+    ),
+) -> list[FileResponse]:
+    """최근 이용 항목 (Phase 8-3, 최신순). 삭제·접근불가 제외."""
+    items = await recents_service.list_recent(session, user, limit)
+    await favorites_service.annotate_is_favorite(session, user, items)
+    return [FileResponse.model_validate(f) for f in items]
 
 
 @router.get("/shared-with-me", response_model=SharedWithMeResponse)
@@ -267,6 +321,7 @@ async def list_files(
         items, total = await files_service.list_children(session, user, parent_id, page, size)
     except FileServiceError as exc:
         raise _http_error(exc) from exc
+    await favorites_service.annotate_is_favorite(session, user, items)
     responses = [FileResponse.model_validate(f) for f in items]
     return FileListResponse(items=responses, total=total, page=page, size=size)
 
@@ -328,6 +383,7 @@ async def get_metadata(file_id: int, user: CurrentUser, session: DbSession) -> F
         )
     except FileServiceError as exc:
         raise _http_error(exc) from exc
+    node.is_favorite = await favorites_service.is_favorite(session, user.id, node.id)  # type: ignore[attr-defined]
     return FileResponse.model_validate(node)
 
 
@@ -377,7 +433,28 @@ async def preview(file_id: int, user: CurrentUser, session: DbSession) -> Respon
         )
     except FileServiceError as exc:
         raise _http_error(exc) from exc
+    # 미리보기 성공 = 최근 이용 기록 (fail-open). 공개 공유(무인증) 경로는 이 라우트를 타지 않는다.
+    await recents_service.record_recent(session, user.id, file_id)
     return render_preview(plan, filename)
+
+
+@router.put("/{file_id}/favorite", status_code=status.HTTP_204_NO_CONTENT)
+async def add_favorite(file_id: int, user: CurrentUser, session: DbSession) -> Response:
+    """즐겨찾기 등록 (Phase 8-2, 멱등). read 이상 접근 가능해야 하며 불가 시 404(존재 은닉)."""
+    try:
+        await favorites_service.add_favorite(session, user, file_id)
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{file_id}/favorite", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_favorite(
+    file_id: int, user: CurrentUser, session: DbSession
+) -> Response:
+    """즐겨찾기 해제 (Phase 8-2, 멱등). 접근권과 무관하게 해제 가능(없으면 no-op)."""
+    await favorites_service.remove_favorite(session, user, file_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -510,6 +587,8 @@ async def issue_download_ticket(
     token = await tickets_service.issue_ticket(
         redis, {"kind": "file", "file_id": file.id, "version": None, "uid": user.id}
     )
+    # 다운로드 티켓 발급 성공 = 최근 이용 기록 (fail-open).
+    await recents_service.record_recent(session, user.id, file.id)
     return DownloadTicketResponse(
         ticket=token,
         url=f"/api/files/download?ticket={token}",
@@ -546,6 +625,8 @@ async def issue_version_download_ticket(
         redis,
         {"kind": "file", "file_id": file.id, "version": version, "uid": user.id},
     )
+    # 다운로드 티켓 발급 성공 = 최근 이용 기록 (fail-open).
+    await recents_service.record_recent(session, user.id, file.id)
     return DownloadTicketResponse(
         ticket=token,
         url=f"/api/files/download?ticket={token}",

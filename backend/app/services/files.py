@@ -26,6 +26,7 @@ from starlette.datastructures import Headers, UploadFile
 
 from app.core.metrics import observe_download_bytes
 from app.models import File, FileVersion, User
+from app.services import file_events as file_events_service
 from app.services import permissions as permissions_service
 from app.services import previews as previews_service
 from app.services import thumbnails as thumbnails_service
@@ -218,6 +219,13 @@ async def create_folder(
         await session.rollback()
         raise FileServiceError(409, "같은 이름의 항목이 이미 있습니다.") from exc
     await session.refresh(folder)
+    await file_events_service.publish_file_event(
+        type="folder",
+        file_id=folder.id,
+        parent_folder_id=parent.id,
+        actor_id=user.id,
+        name=folder.name,
+    )
     return folder
 
 
@@ -242,6 +250,13 @@ async def rename_file(
         await session.rollback()
         raise FileServiceError(409, "같은 이름의 항목이 이미 있습니다.") from exc
     await session.refresh(file)
+    await file_events_service.publish_file_event(
+        type="rename",
+        file_id=file.id,
+        parent_folder_id=file.parent_folder_id,
+        actor_id=user.id,
+        name=file.name,
+    )
     return file
 
 
@@ -340,6 +355,13 @@ async def upload_file(
     await session.refresh(file)
     # 이미지면 썸네일 생성 (best-effort, 실패해도 업로드는 성공 상태 유지) — PRD 3.2.
     await thumbnails_service.maybe_generate(session, storage, file)
+    await file_events_service.publish_file_event(
+        type="upload",
+        file_id=file.id,
+        parent_folder_id=file.parent_folder_id,
+        actor_id=user.id,
+        name=file.name,
+    )
     return file
 
 
@@ -573,6 +595,14 @@ async def _commit_new_version(
     await session.refresh(file)
     # 새 버전 내용으로 썸네일 갱신 (재업로드/복구 공통, best-effort) — PRD 3.2.
     await thumbnails_service.maybe_generate(session, storage, file)
+    # 재업로드/버전 복구/재개 업로드(version)가 모두 이 경로를 지난다 — 단일 발행 지점.
+    await file_events_service.publish_file_event(
+        type="version",
+        file_id=file.id,
+        parent_folder_id=file.parent_folder_id,
+        actor_id=uploaded_by,
+        name=file.name,
+    )
     return file
 
 
@@ -761,6 +791,8 @@ async def soft_delete(session: AsyncSession, user: User, file_id: int) -> None:
     if file.is_deleted:
         raise FileServiceError(409, "이미 휴지통에 있는 항목입니다.")
 
+    # 발행에 쓸 값은 commit 전에 캡처한다(하위 재귀 UPDATE 후 ORM 접근 부작용 회피).
+    fid, parent_id, name = file.id, file.parent_folder_id, file.name
     await session.execute(
         text(
             _SUBTREE_CTE
@@ -770,6 +802,13 @@ async def soft_delete(session: AsyncSession, user: User, file_id: int) -> None:
         {"root": file.id},
     )
     await session.commit()
+    await file_events_service.publish_file_event(
+        type="delete",
+        file_id=fid,
+        parent_folder_id=parent_id,
+        actor_id=user.id,
+        name=name,
+    )
 
 
 async def list_trash(session: AsyncSession, user: User) -> list[File]:
@@ -845,6 +884,13 @@ async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File
         await session.rollback()
         raise FileServiceError(409, "복구 위치에 같은 이름의 항목이 있습니다.") from exc
     await session.refresh(file)
+    await file_events_service.publish_file_event(
+        type="restore",
+        file_id=file.id,
+        parent_folder_id=file.parent_folder_id,
+        actor_id=user.id,
+        name=file.name,
+    )
     return file
 
 
