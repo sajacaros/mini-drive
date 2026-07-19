@@ -64,8 +64,9 @@ export function SetupPage() {
       });
       setResult(res);
     } catch (err) {
-      // 409: 이미 다른 경로로 셋업이 완료된 경우 — 로그인으로 유도한다.
-      if (errorStatus(err) === 409) {
+      // 403(admin 이미 존재)/409(동시 셋업 레이스): 이미 셋업 완료 — 로그인으로 유도한다.
+      const st = errorStatus(err);
+      if (st === 403 || st === 409) {
         toast.error("이미 셋업이 완료되었습니다. 로그인해 주세요.");
         goToLogin();
         return;
