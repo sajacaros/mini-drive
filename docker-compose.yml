@@ -36,55 +36,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       REDIS_URL: redis://redis:6379/0
-      # RAG 인덱싱 (PRD 3.7, Phase 7). EMBEDDING_PROVIDER=upstage(기본)|fake.
-      # upstage 는 UPSTAGE_API_KEY 필요 — 없으면 인덱싱 잡이 스킵됨(fail-open).
-      INDEXING_ENABLED: ${INDEXING_ENABLED:-true}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-upstage}
-      UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:-}
-      # 챗봇 (PRD 3.7, Phase 7-2). 챗은 backend 프로세스에서 실행되므로 CHAT_* 는 backend 에만 전달한다.
-      # vllm/openai/upstage 는 필수값(키/base_url)이 없으면 챗 요청이 503("LLM 미구성")으로 실패한다.
-      # upstage 는 CHAT_API_KEY 미지정 시 UPSTAGE_API_KEY 를 폴백으로 쓴다(위에서 전달됨).
-      CHAT_PROVIDER: ${CHAT_PROVIDER:-vllm}
-      CHAT_BASE_URL: ${CHAT_BASE_URL:-}
-      CHAT_API_KEY: ${CHAT_API_KEY:-}
-      # 미지정 시 프로바이더별 기본 모델(vllm=glm-5.2, upstage=solar-open2)을 앱이 고른다.
-      CHAT_MODEL: ${CHAT_MODEL:-}
       # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
       # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
-    depends_on:
-      db:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - minidrive
-
-  # ── 인덱싱 워커 (arq, Phase 7-1) ────────────────────
-  # backend 이미지를 재사용해 RAG 인덱싱 잡(index_file/drop_file_index)을 처리한다.
-  # 마이그레이션은 backend 엔트리포인트가 담당하므로 워커는 entrypoint 를 덮어써 arq 만 실행한다.
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    entrypoint: ["arq", "app.worker.WorkerSettings"]
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
-      MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
-      MINIO_SECURE: "false"
-      REDIS_URL: redis://redis:6379/0
-      INDEXING_ENABLED: ${INDEXING_ENABLED:-true}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-upstage}
-      UPSTAGE_API_KEY: ${UPSTAGE_API_KEY:-}
-      # 위키 Ingest 컴파일(7-3)은 워커에서 실행되므로 CHAT_* 를 워커에도 전달한다(2단계 LLM 호출).
-      CHAT_PROVIDER: ${CHAT_PROVIDER:-vllm}
-      CHAT_BASE_URL: ${CHAT_BASE_URL:-}
-      CHAT_API_KEY: ${CHAT_API_KEY:-}
-      CHAT_MODEL: ${CHAT_MODEL:-}
     depends_on:
       db:
         condition: service_healthy
@@ -147,8 +100,8 @@ services:
       - minidrive
 
   # ── PostgreSQL (메타데이터 DB) ──────────────────────
-  # pgvector/pgvector:pg16 = postgres:16 + pgvector 확장 (PRD 4장, Phase 7 RAG 벡터 인덱스).
-  # 데이터 볼륨(pg_data)은 postgres:16 과 호환된다(동일 PG16 데이터 디렉터리).
+  # pgvector/pgvector:pg16 = postgres:16 + pgvector 확장 (PRD 4장). LLM 기능 제거 후에도
+  # 기존 데이터 볼륨(pg_data) 호환을 위해 이미지를 유지한다 — postgres:16 과 동일 PG16 데이터 디렉터리.
   db:
     image: pgvector/pgvector:pg16
     environment:

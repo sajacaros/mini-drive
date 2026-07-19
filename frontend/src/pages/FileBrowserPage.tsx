@@ -14,7 +14,6 @@ import {
 } from "@/api/files";
 import { checkPermission } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
-import { addSource as addWikiSource, removeSource as removeWikiSource } from "@/api/wiki";
 import { Modal } from "@/components/Modal";
 import { PermissionModal } from "@/components/PermissionModal";
 import { PreviewModal } from "@/components/PreviewModal";
@@ -22,9 +21,8 @@ import { ShareModal } from "@/components/ShareModal";
 import { Thumbnail } from "@/components/Thumbnail";
 import { VersionHistoryModal } from "@/components/VersionHistoryModal";
 import { useToast } from "@/components/Toast";
-import { Badge, EmptyState, ErrorState, LoadingState, Spinner } from "@/components/ui";
+import { Badge, EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import {
-  BookIcon,
   DownloadIcon,
   EyeIcon,
   FileIcon,
@@ -97,8 +95,6 @@ export function FileBrowserPage({
 }: FileBrowserPageProps) {
   const toast = useToast();
   const refreshUser = useAuthStore((s) => s.refreshUser);
-  // "위키에 공유" 토글은 내 소유 항목에만 노출한다(wiki-v2 D1).
-  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
 
   const [path, setPath] = useState<Crumb[]>([{ id: rootId, name: rootName }]);
   const [items, setItems] = useState<FileNode[]>([]);
@@ -137,9 +133,6 @@ export function FileBrowserPage({
   // 새 버전 업로드: 파일 선택 대기 대상, 그리고 409 충돌 시 강제 덮어쓰기 후보.
   const [versionTarget, setVersionTarget] = useState<FileNode | null>(null);
   const [conflict, setConflict] = useState<{ target: FileNode; file: File } | null>(null);
-  // "위키에 공유"/"공유 해제" 확인 대상 (wiki_shared 로 방향 결정).
-  const [wikiTarget, setWikiTarget] = useState<FileNode | null>(null);
-  const [wikiSubmitting, setWikiSubmitting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const versionInputRef = useRef<HTMLInputElement>(null);
@@ -480,35 +473,6 @@ export function FileBrowserPage({
     setPreviewTarget(file);
   };
 
-  // 위키 공유/해제 확정 — wiki_shared 로 방향을 정한다. 성공 시 목록을 새로고침해 배지를 갱신.
-  const confirmWikiToggle = async () => {
-    if (!wikiTarget) return;
-    const sharing = !wikiTarget.wiki_shared;
-    setWikiSubmitting(true);
-    try {
-      if (sharing) await addWikiSource(wikiTarget.id);
-      else await removeWikiSource(wikiTarget.id);
-      toast.success(
-        sharing ? `"${wikiTarget.name}" 을(를) 위키에 공유했습니다.` : "위키 공유를 해제했습니다.",
-      );
-      setWikiTarget(null);
-      await reload();
-    } catch (err) {
-      const msg =
-        errorStatus(err) === 403
-          ? sharing
-            ? "소유자만 위키에 공유할 수 있습니다."
-            : "소유자만 공유를 해제할 수 있습니다."
-          : extractErrorMessage(
-              err,
-              sharing ? "위키 공유에 실패했습니다." : "공유 해제에 실패했습니다.",
-            );
-      toast.error(msg);
-    } finally {
-      setWikiSubmitting(false);
-    }
-  };
-
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
@@ -744,7 +708,6 @@ export function FileBrowserPage({
               shared,
               canWrite,
               canManage,
-              currentUserId,
               onOpenFolder: openFolder,
               onPreview: openPreview,
               onDownload,
@@ -757,7 +720,6 @@ export function FileBrowserPage({
               onDelete: (f: FileNode) => setDeleteTarget(f),
               onVersions: (f: FileNode) => setVersionsTarget(f),
               onNewVersion: startVersionUpload,
-              onWikiToggle: (f: FileNode) => setWikiTarget(f),
             };
             return view === "grid" ? (
               <FileGrid items={items} {...rowProps} />
@@ -900,55 +862,6 @@ export function FileBrowserPage({
         </p>
       </Modal>
 
-      {/* 위키 공유/해제 확인 */}
-      <Modal
-        open={wikiTarget !== null}
-        title={wikiTarget?.wiki_shared ? "위키 공유 해제" : "위키에 공유"}
-        onClose={() => setWikiTarget(null)}
-        footer={
-          <>
-            <button className="btn btn-secondary" onClick={() => setWikiTarget(null)}>
-              취소
-            </button>
-            <button
-              className={wikiTarget?.wiki_shared ? "btn btn-danger" : "btn btn-primary"}
-              onClick={confirmWikiToggle}
-              disabled={wikiSubmitting}
-            >
-              {wikiSubmitting ? (
-                <Spinner className="h-4 w-4" />
-              ) : wikiTarget?.wiki_shared ? (
-                "공유 해제"
-              ) : (
-                "위키에 공유"
-              )}
-            </button>
-          </>
-        }
-      >
-        {wikiTarget?.wiki_shared ? (
-          <>
-            <p className="text-sm">
-              <span className="font-medium">{wikiTarget?.name}</span> 의 위키 공유를 해제할까요?
-            </p>
-            <p className="mt-2 text-sm text-muted">
-              이미 만들어진 위키 페이지는 자동으로 삭제되지 않고, Lint 실행 시 정리 안내로 표시됩니다.
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="text-sm">
-              <span className="font-medium">{wikiTarget?.name}</span> 을(를) 위키에 공유할까요?
-            </p>
-            <p className="mt-2 text-sm text-muted">
-              원본 권한과 무관하게 LLM 요약이 <span className="font-medium text-[color:var(--warning)]">모든 사용자에게 공개</span>
-              됩니다.
-              {wikiTarget?.is_folder && " 폴더는 하위의 내 소유 파일만 포함됩니다(하위 폴더 포함)."}
-            </p>
-          </>
-        )}
-      </Modal>
-
       <ShareModal
         file={shareTarget}
         open={shareTarget !== null}
@@ -1039,8 +952,6 @@ interface FileRowProps {
   shared: boolean;
   canWrite: boolean;
   canManage: boolean;
-  /** 현재 로그인 사용자 id — "위키에 공유" 토글은 소유자(f.user_id===이 값)에게만 노출. */
-  currentUserId: number | null;
   onOpenFolder: (f: FileNode) => void;
   onPreview: (f: FileNode) => void;
   onDownload: (f: FileNode) => void;
@@ -1050,7 +961,6 @@ interface FileRowProps {
   onDelete: (f: FileNode) => void;
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
-  onWikiToggle: (f: FileNode) => void;
 }
 
 /** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용). */
@@ -1096,16 +1006,6 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
           </IconAction>
         </>
       )}
-      {/* 위키에 공유/해제 — 소유자 항목에만 노출(wiki-v2 D1). */}
-      {f.user_id === p.currentUserId && (
-        <IconAction
-          title={f.wiki_shared ? "위키 공유 해제" : "위키에 공유"}
-          onClick={() => p.onWikiToggle(f)}
-          active={f.wiki_shared}
-        >
-          <BookIcon width={16} height={16} />
-        </IconAction>
-      )}
     </>
   );
 }
@@ -1146,7 +1046,6 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                   {!f.is_folder && f.current_version >= 2 && (
                     <Badge tone="neutral">v{f.current_version}</Badge>
                   )}
-                  {f.wiki_shared && <Badge tone="accent">위키</Badge>}
                 </button>
               </td>
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
@@ -1198,11 +1097,6 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                 <Badge tone="neutral">v{f.current_version}</Badge>
               </span>
             )}
-            {f.wiki_shared && (
-              <span className="absolute right-1.5 top-1.5">
-                <Badge tone="accent">위키</Badge>
-              </span>
-            )}
           </button>
 
           {/* 이름 + 동작 */}
@@ -1229,14 +1123,11 @@ function IconAction({
   title,
   onClick,
   danger,
-  active,
   children,
 }: {
   title: string;
   onClick: () => void;
   danger?: boolean;
-  /** 토글 상태 강조(예: 위키 공유 중) — accent 색으로 표시한다. */
-  active?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -1247,9 +1138,7 @@ function IconAction({
       className={`rounded-md p-1.5 transition-colors hover:bg-[color:var(--bg-secondary)] ${
         danger
           ? "text-muted hover:text-danger"
-          : active
-            ? "text-[color:var(--accent)]"
-            : "text-muted hover:text-[color:var(--text-primary)]"
+          : "text-muted hover:text-[color:var(--text-primary)]"
       }`}
     >
       {children}

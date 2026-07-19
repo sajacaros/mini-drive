@@ -11,7 +11,6 @@ import { AdminGroupsPage } from "@/pages/AdminGroupsPage";
 import { AdminSharesPage } from "@/pages/AdminSharesPage";
 import { AdminSignupCodesPage } from "@/pages/AdminSignupCodesPage";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
-import { ChatPage } from "@/pages/ChatPage";
 import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPage";
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
 import { GroupsPage } from "@/pages/GroupsPage";
@@ -22,7 +21,6 @@ import { SetupPage } from "@/pages/SetupPage";
 import { SharedWithMePage } from "@/pages/SharedWithMePage";
 import { SharesPage } from "@/pages/SharesPage";
 import { TrashPage } from "@/pages/TrashPage";
-import { WikiPage } from "@/pages/WikiPage";
 import { useAuthStore } from "@/store/auth";
 
 function App() {
@@ -74,8 +72,6 @@ function App() {
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />
-            <Route path="/wiki" element={<WikiPage />} />
-            <Route path="/chat" element={<ChatPage />} />
           </Route>
         </Route>
 

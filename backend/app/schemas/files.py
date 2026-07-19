@@ -20,9 +20,6 @@ class FileResponse(BaseModel):
     size: int
     is_folder: bool
     is_deleted: bool
-    indexing_excluded: bool = False
-    # "위키에 공유" 체크 여부(wiki_sources 행 존재, wiki-v2 4.3). 목록/단건에서 파생 채움.
-    wiki_shared: bool = False
     current_version: int
     created_at: datetime
     updated_at: datetime
@@ -49,12 +46,6 @@ class FileRenameRequest(BaseModel):
     """이름 변경 (PRD 6.2 PUT /api/files/{id})."""
 
     name: str = Field(min_length=1, max_length=255)
-
-
-class FileUpdateRequest(BaseModel):
-    """파일 속성 부분 갱신 (PATCH /api/files/{id}). 현재는 인덱싱 제외 플래그만 — PRD 3.7.2."""
-
-    indexing_excluded: bool | None = None
 
 
 class FileVersionResponse(BaseModel):

@@ -17,18 +17,10 @@ dependencies = [
     "pillow>=11.0.0",
     "pyjwt>=2.10.0",
     "argon2-cffi>=23.1.0",
+    # redis 는 권한 캐시·rate limit·다운로드 티켓에 쓰인다(LLM 무관 — 유지).
     "redis>=5.2.0",
     "structlog>=24.4.0",
     "prometheus-client>=0.21.0",
-    # RAG 인덱싱 (PRD 3.7, Phase 7). arq 비동기 워커 + pgvector 타입 + LangChain 1.x 텍스트 분할/Upstage.
-    "arq>=0.26.0",
-    "pgvector>=0.3.6",
-    "langchain-core>=1.0.0",
-    "langchain-text-splitters>=1.0.0",
-    "langchain-upstage>=0.7.0",
-    # 챗봇 (PRD 3.7.5, Phase 7-2). LangGraph retrieve→generate 파이프라인 + vLLM/OpenAI 호환 챗 모델.
-    "langgraph>=1.0.0",
-    "langchain-openai>=0.3.0",
 ]
 
 [project.optional-dependencies]

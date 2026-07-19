@@ -7,7 +7,6 @@
 from app.core.database import Base
 from app.models.app_setting import AppSetting
 from app.models.audit import AuditLog
-from app.models.chat import ChatMessage, ChatSession
 from app.models.enums import (
     GroupPermission,
     GroupRole,
@@ -16,14 +15,12 @@ from app.models.enums import (
     UserStatus,
 )
 from app.models.file import File, FileVersion
-from app.models.file_chunk import FileChunk
 from app.models.group import Group, GroupMember
 from app.models.permission import FileGroupPermission
 from app.models.share import Share
 from app.models.signup_code import SignupCode
 from app.models.upload_session import UploadSession
 from app.models.user import User
-from app.models.wiki import WikiJob, WikiSource
 
 __all__ = [
     "Base",
@@ -31,7 +28,6 @@ __all__ = [
     "User",
     "File",
     "FileVersion",
-    "FileChunk",
     "Share",
     "Group",
     "GroupMember",
@@ -40,10 +36,6 @@ __all__ = [
     "UploadSession",
     "SignupCode",
     "AppSetting",
-    "ChatSession",
-    "ChatMessage",
-    "WikiSource",
-    "WikiJob",
     # 열거형
     "UserRole",
     "UserStatus",

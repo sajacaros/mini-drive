@@ -18,7 +18,6 @@ downgrade 는 vector 확장을 drop 하지 않는다 — 다른 곳에서 공유
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from pgvector.sqlalchemy import Vector
 
 from alembic import op
 
@@ -66,7 +65,6 @@ def upgrade() -> None:
             sa.Column("version", sa.Integer(), nullable=False),
             sa.Column("chunk_index", sa.Integer(), nullable=False),
             sa.Column("content", sa.Text(), nullable=False),
-            sa.Column("embedding", Vector(EMBEDDING_DIM), nullable=True),
             sa.Column("token_count", sa.Integer(), nullable=True),
             sa.Column(
                 "created_at",
@@ -82,6 +80,10 @@ def upgrade() -> None:
                 "chunk_index",
                 name="uq_file_chunks_file_version_index",
             ),
+        )
+        # embedding(vector) 컬럼은 pgvector 파이썬 패키지 의존을 피하려 raw SQL 로 추가한다.
+        op.execute(
+            f"ALTER TABLE file_chunks ADD COLUMN embedding vector({EMBEDDING_DIM})"
         )
         # 파일별 청크 조회/삭제(재인덱싱·drop)를 위한 보조 인덱스. HNSW 벡터 인덱스는 만들지
         # 않는다(4096차원 제한, PRD 5.13 — 사전 필터 전제의 정확 검색).

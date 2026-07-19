@@ -33,7 +33,6 @@ from app.schemas.files import (
     FileListResponse,
     FileRenameRequest,
     FileResponse,
-    FileUpdateRequest,
     FileVersionListResponse,
     FileVersionResponse,
     FolderCreateRequest,
@@ -268,12 +267,7 @@ async def list_files(
         items, total = await files_service.list_children(session, user, parent_id, page, size)
     except FileServiceError as exc:
         raise _http_error(exc) from exc
-    shared = await files_service.wiki_shared_ids(session, [f.id for f in items])
-    responses = []
-    for f in items:
-        resp = FileResponse.model_validate(f)
-        resp.wiki_shared = f.id in shared
-        responses.append(resp)
+    responses = [FileResponse.model_validate(f) for f in items]
     return FileListResponse(items=responses, total=total, page=page, size=size)
 
 
@@ -334,9 +328,7 @@ async def get_metadata(file_id: int, user: CurrentUser, session: DbSession) -> F
         )
     except FileServiceError as exc:
         raise _http_error(exc) from exc
-    resp = FileResponse.model_validate(node)
-    resp.wiki_shared = bool(await files_service.wiki_shared_ids(session, [node.id]))
-    return resp
+    return FileResponse.model_validate(node)
 
 
 @router.get("/{file_id}/download")
@@ -571,28 +563,6 @@ async def rename(
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return FileResponse.model_validate(file)
-
-
-@router.patch("/{file_id}", response_model=FileResponse)
-async def update_file(
-    file_id: int, payload: FileUpdateRequest, user: CurrentUser, session: DbSession
-) -> FileResponse:
-    """파일 속성 부분 갱신 (PRD 3.7.2). 현재는 인덱싱 제외 플래그(indexing_excluded)만 — 소유자만.
-
-    true 로 바꾸면 본인+하위 청크 삭제 잡을, false 면 재인덱싱 잡을 큐잉한다.
-    """
-    try:
-        if payload.indexing_excluded is not None:
-            node = await files_service.set_indexing_excluded(
-                session, user, file_id, payload.indexing_excluded
-            )
-        else:
-            node = await files_service.ensure_file_access(
-                session, user, await files_service.get_file(session, file_id)
-            )
-    except FileServiceError as exc:
-        raise _http_error(exc) from exc
-    return FileResponse.model_validate(node)
 
 
 @router.post("/{file_id}/delete", status_code=status.HTTP_204_NO_CONTENT)
