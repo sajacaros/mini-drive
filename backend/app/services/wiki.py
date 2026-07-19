@@ -505,9 +505,11 @@ async def ingest_source(
         file = await files_service.get_file(session, file_id)
         if file is None or file.is_deleted:
             raise WikiServiceError(404, "소스 파일을 찾을 수 없습니다.")
-        # 컴파일 중 내부 커밋으로 file 이 만료되므로 버전을 미리 캡처한다(async lazy-load 회피).
+        # 컴파일 중 내부 커밋/롤백으로 ORM 객체가 만료되므로 스칼라를 미리 캡처한다
+        # (async lazy-load 회피).
         source_version = file.current_version
         added_by = source.added_by
+        owner_id = owner.id
 
         if file.is_folder:
             target_ids = await _owned_descendant_files(session, file_id, added_by)
@@ -536,6 +538,11 @@ async def ingest_source(
                 # 파일 하나의 실패(추출 불가·LLM 오류)가 폴더 전체 팬아웃을 막지 않게
                 # 한다(fail-soft). 폴더 재시도는 성공분까지 재컴파일하므로 여기서 삼킨다.
                 await session.rollback()
+                # rollback 으로 owner ORM 객체가 만료되면 다음 파일의 페이지 쓰기가
+                # greenlet 오류로 연쇄 실패하므로 반드시 재조회한다.
+                owner = await session.get(User, owner_id)
+                if owner is None:
+                    raise WikiServiceError(500, "위키 시스템 사용자가 사라졌습니다.") from exc
                 failed_names.append(tname)
                 _log.warning(
                     "wiki_compile_failed", file_id=tid, name=tname, error=str(exc)
