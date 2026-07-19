@@ -56,3 +56,6 @@ Thumbs.db
 
 # ── Claude Code ───────────────────────────────────────
 .claude/settings.local.json
+
+# 로컬 전용 접속 정보 (커밋 금지)
+env
