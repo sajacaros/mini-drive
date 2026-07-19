@@ -53,6 +53,20 @@ services:
           cpus: "2.0"
           memory: 1G
 
+  worker:
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DEBUG: "false"
+      ENVIRONMENT: production
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
   frontend:
     restart: unless-stopped
     logging: *default-logging

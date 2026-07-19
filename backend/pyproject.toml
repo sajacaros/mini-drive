@@ -20,6 +20,12 @@ dependencies = [
     "redis>=5.2.0",
     "structlog>=24.4.0",
     "prometheus-client>=0.21.0",
+    # RAG 인덱싱 (PRD 3.7, Phase 7). arq 비동기 워커 + pgvector 타입 + LangChain 1.x 텍스트 분할/Upstage.
+    "arq>=0.26.0",
+    "pgvector>=0.3.6",
+    "langchain-core>=1.0.0",
+    "langchain-text-splitters>=1.0.0",
+    "langchain-upstage>=0.7.0",
 ]
 
 [project.optional-dependencies]

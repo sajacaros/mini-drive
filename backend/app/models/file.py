@@ -57,6 +57,11 @@ class File(Base):
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # 인덱싱 제외 플래그 (PRD 3.7.2/5.2, Phase 7-1). 자신 또는 조상 폴더 어디에도 이 플래그가
+    # 있으면 RAG 인덱싱·외부 API 전송 대상에서 제외한다(권한 상속과 동일하게 조회 시 판정).
+    indexing_excluded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
 
     base_version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")

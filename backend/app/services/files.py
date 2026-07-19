@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
+from app.core import arq_queue
 from app.core.metrics import observe_download_bytes
 from app.models import File, FileVersion, User
 from app.services import permissions as permissions_service
@@ -244,6 +245,39 @@ async def rename_file(
     return file
 
 
+# --- 인덱싱 제외 플래그 (PRD 3.7.2) -----------------------------------------
+
+
+async def set_indexing_excluded(
+    session: AsyncSession, user: User, file_id: int, excluded: bool
+) -> File:
+    """인덱싱 제외 플래그를 토글한다 — **소유자만** (PRD 3.7.2).
+
+    true 로 바꾸면 본인+하위(폴더면) 청크 삭제 잡을, false 면 재인덱싱 잡을 큐잉한다. 값이
+    그대로면(멱등) 잡을 큐잉하지 않는다. 접근 불가 파일은 404 로 숨기고, 접근은 되지만
+    소유자가 아니면 403 이다.
+    """
+    file = await ensure_file_access(
+        session, user, await get_file(session, file_id), need="read"
+    )
+    if file.is_deleted:
+        raise FileServiceError(409, "삭제된 항목은 인덱싱 설정을 변경할 수 없습니다.")
+    if file.user_id != user.id:
+        raise FileServiceError(403, "인덱싱 제외 설정은 소유자만 변경할 수 있습니다.")
+
+    if file.indexing_excluded == excluded:
+        return file
+
+    file.indexing_excluded = excluded
+    await session.commit()
+    await session.refresh(file)
+    if excluded:
+        await arq_queue.enqueue_drop_file_index(file.id)
+    else:
+        await arq_queue.enqueue_index_file(file.id)
+    return file
+
+
 # --- 업로드 (스트리밍) -------------------------------------------------------
 
 
@@ -339,6 +373,8 @@ async def upload_file(
     await session.refresh(file)
     # 이미지면 썸네일 생성 (best-effort, 실패해도 업로드는 성공 상태 유지) — PRD 3.2.
     await thumbnails_service.maybe_generate(session, storage, file)
+    # RAG 재인덱싱 잡 큐잉 (PRD 3.7.2). enqueue 실패는 경고 로그만 — 업로드는 이미 성공.
+    await arq_queue.enqueue_index_file(file.id)
     return file
 
 
@@ -519,6 +555,8 @@ async def _commit_new_version(
     await session.refresh(file)
     # 새 버전 내용으로 썸네일 갱신 (재업로드/복구 공통, best-effort) — PRD 3.2.
     await thumbnails_service.maybe_generate(session, storage, file)
+    # 새 버전 재인덱싱 잡 큐잉 (재업로드/복구/재개 재업로드 완료 공통 경로) — PRD 3.7.2.
+    await arq_queue.enqueue_index_file(file.id)
     return file
 
 
@@ -716,6 +754,8 @@ async def soft_delete(session: AsyncSession, user: User, file_id: int) -> None:
         {"root": file.id},
     )
     await session.commit()
+    # 휴지통 이동 → 청크 삭제 잡 큐잉 (폴더면 하위 재귀). 영구 삭제는 FK CASCADE — PRD 3.7.2.
+    await arq_queue.enqueue_drop_file_index(file.id)
 
 
 async def list_trash(session: AsyncSession, user: User) -> list[File]:
@@ -750,6 +790,9 @@ async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File
         raise FileServiceError(409, "휴지통에 있는 항목만 복구할 수 있습니다.")
 
     # 재부착 대상 부모 결정: 원래 부모가 사라졌으면(삭제됐으면) 루트로.
+    # NOTE(7-3): 복구 시 부모가 바뀌는 것은 일종의 이동이다. 이동은 내용 불변이라 청크 재작성은
+    # 불필요하지만(7-1), 상속 권한·폴더 재귀 소스 범위를 바꿀 수 있어 위키 소스 범위 재평가가
+    # 필요하다(PRD 3.7.2 자동 재인덱싱 — 이동 훅). 7-3(위키)에서 소스 stale 마킹을 추가한다.
     target_parent_id = file.parent_folder_id
     if target_parent_id is not None:
         parent = await get_file(session, target_parent_id)
@@ -788,6 +831,8 @@ async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File
         await session.rollback()
         raise FileServiceError(409, "복구 위치에 같은 이름의 항목이 있습니다.") from exc
     await session.refresh(file)
+    # 복구 → 재인덱싱 잡 큐잉 (폴더면 하위 재귀 팬아웃) — PRD 3.7.2.
+    await arq_queue.enqueue_index_file(file.id)
     return file
 
 

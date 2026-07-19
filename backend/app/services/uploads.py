@@ -29,6 +29,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import arq_queue
 from app.core.config import settings
 from app.models import File, FileVersion, UploadSession, User
 from app.services import files as files_service
@@ -441,6 +442,9 @@ async def _complete_new(
 
     await session.refresh(file)
     await thumbnails_service.maybe_generate(session, storage, file)
+    # 재개 업로드(새 파일) 완료 → RAG 인덱싱 잡 큐잉 (PRD 3.7.2). 재개 재업로드(새 버전)는
+    # files._commit_new_version 경로에서 큐잉되므로 여기서 중복 큐잉하지 않는다.
+    await arq_queue.enqueue_index_file(file.id)
     return file
 
 

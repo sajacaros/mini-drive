@@ -15,6 +15,7 @@ from app.models.enums import (
     UserStatus,
 )
 from app.models.file import File, FileVersion
+from app.models.file_chunk import FileChunk
 from app.models.group import Group, GroupMember
 from app.models.permission import FileGroupPermission
 from app.models.share import Share
@@ -28,6 +29,7 @@ __all__ = [
     "User",
     "File",
     "FileVersion",
+    "FileChunk",
     "Share",
     "Group",
     "GroupMember",

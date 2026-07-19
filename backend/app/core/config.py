@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     resumable_part_size: int = 8 * 1024 * 1024        # 8 MiB
     resumable_session_ttl_seconds: int = 24 * 60 * 60  # 24h
 
+    # RAG 인덱싱 (PRD 3.7, Phase 7-1). arq 워커가 업로드/버전/삭제 훅으로 큐잉된 잡을 처리한다.
+    #   indexing_enabled=False 로 전체 비활성화(훅이 큐잉을 건너뛴다).
+    indexing_enabled: bool = True
+    # 임베딩 프로바이더: upstage(solar-embedding-1-large, 4096d) | fake(결정적 해시, 외부 호출 없음).
+    # 키가 없는데 upstage 면 인덱싱 잡이 경고 후 스킵된다(fail-open — 파일 서비스 본연 기능 불영향).
+    embedding_provider: str = "upstage"
+    upstage_api_key: str | None = None
+    # 문서 파싱/임베딩 모델명(런타임에 실제 키가 있을 때만 사용).
+    upstage_embedding_model: str = "solar-embedding-1-large"
+    # 인덱싱 대상 최대 원본 크기(초과 시 스킵) — backend 로 전체 적재하므로 상한을 둔다.
+    indexing_max_file_size: int = 20 * 1024 * 1024  # 20 MiB
+    # 청킹 파라미터 (RecursiveCharacterTextSplitter, 문자 기준).
+    indexing_chunk_size: int = 1000
+    indexing_chunk_overlap: int = 150
+
 
 @lru_cache
 def get_settings() -> Settings:

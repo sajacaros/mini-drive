@@ -110,6 +110,13 @@ class TopUser(BaseModel):
     max_storage: int
 
 
+class IndexStats(BaseModel):
+    """RAG 인덱스 운영 규모 (PRD 6.9 비고 — 내용 접근 없이 규모만, Phase 7-1)."""
+
+    chunks: int
+    indexed_files: int
+
+
 class AdminStatsResponse(BaseModel):
     """대시보드용 단일 응답. 파일 메타데이터 집계만 담는다 (내용 접근 없음 — 3.6.4)."""
 
@@ -121,6 +128,8 @@ class AdminStatsResponse(BaseModel):
     total_shares: ShareCounts
     total_groups: int
     top_users: list[TopUser]
+    # 인덱스 규모(청크 수·인덱싱된 파일 수). 기존 스키마 계약 보존을 위해 기본값을 둔다(Phase 7-1).
+    index: IndexStats = Field(default_factory=lambda: IndexStats(chunks=0, indexed_files=0))
 
 
 # --- 감사 로그 조회 (PRD 5.9, 6.7) -------------------------------------------

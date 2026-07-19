@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AuditLog, File, Group, GroupMember, Share, User
+from app.models import AuditLog, File, FileChunk, Group, GroupMember, Share, User
 from app.models.enums import UserRole, UserStatus
 
 
@@ -350,6 +350,16 @@ async def get_stats(session: AsyncSession) -> dict[str, Any]:
         await session.execute(select(func.count()).select_from(Group))
     ).scalar_one()
 
+    # 인덱스 규모 (PRD 6.9 비고, Phase 7-1) — 청크 수 + 인덱싱된 파일 수(내용 접근 없음).
+    total_chunks = (
+        await session.execute(select(func.count()).select_from(FileChunk))
+    ).scalar_one()
+    indexed_files = (
+        await session.execute(
+            select(func.count(func.distinct(FileChunk.file_id)))
+        )
+    ).scalar_one()
+
     # 상위 5 사용자 (사용량 기준).
     top_rows = (
         await session.execute(
@@ -376,6 +386,7 @@ async def get_stats(session: AsyncSession) -> dict[str, Any]:
         },
         "total_groups": total_groups,
         "top_users": top_users,
+        "index": {"chunks": total_chunks, "indexed_files": indexed_files},
     }
 
 
