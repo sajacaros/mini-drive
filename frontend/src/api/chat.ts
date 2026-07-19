@@ -18,8 +18,8 @@ export interface ChatCitation {
 export interface ChatSessionSummary {
   id: number;
   title: string;
-  /** 지정 시 검색이 그 위키 스페이스 범위로 제한된다. null = 전체 접근 범위. */
-  space_id: number | null;
+  /** true 면 검색이 전사 위키 범위로 제한된다. false = 전체 접근 범위. */
+  wiki_scope: boolean;
   created_at: string;
 }
 
@@ -34,37 +34,20 @@ export interface ChatMessage {
 export interface ChatSessionDetail {
   id: number;
   title: string;
-  space_id: number | null;
+  wiki_scope: boolean;
   created_at: string;
   messages: ChatMessage[];
 }
 
-/** 세션 생성. spaceId 를 주면 검색이 그 위키 스페이스 범위로 제한된다(생략 = 전체 범위). */
+/** 세션 생성. wikiScope=true 면 검색이 전사 위키 범위로 제한된다(기본 false = 전체 범위). */
 export async function createSession(
   title?: string,
-  spaceId?: number | null,
+  wikiScope?: boolean,
 ): Promise<ChatSessionSummary> {
   const { data } = await apiClient.post<ChatSessionSummary>("/chat/sessions", {
     title: title ?? "",
-    space_id: spaceId ?? null,
+    wiki_scope: wikiScope ?? false,
   });
-  return data;
-}
-
-/** 답변(assistant 메시지)을 위키 페이지로 승격한다. 대상 스페이스 쓰기 자격 필요(403). */
-export interface PromoteResult {
-  file_id: number;
-  name: string;
-}
-
-export async function promoteMessage(
-  messageId: number,
-  payload: { space_id: number; title: string },
-): Promise<PromoteResult> {
-  const { data } = await apiClient.post<PromoteResult>(
-    `/chat/messages/${messageId}/promote`,
-    payload,
-  );
   return data;
 }
 

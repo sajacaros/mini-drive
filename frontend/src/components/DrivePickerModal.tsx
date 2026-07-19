@@ -1,9 +1,9 @@
 /**
- * 드라이브 파일/폴더 선택 모달 (위키 소스 등록 등에 재사용).
+ * 드라이브 파일/폴더 선택 모달 (위키 소스 등록에 재사용).
  *
  * 전용 파일 선택 컴포넌트가 없어(FileBrowserPage 는 페이지 전체) 여기서 간단한 폴더 탐색기를
- * 제공한다. 폴더는 열어 들어가거나 소스로 선택할 수 있고, 파일도 선택할 수 있다. 폴더를 소스로
- * 선택할 때 recursive(하위 포함) 여부를 함께 전달한다.
+ * 제공한다. 폴더는 열어 들어가거나 소스로 선택할 수 있고, 파일도 선택할 수 있다. 폴더 공유는
+ * 항상 하위의 내 소유 파일까지 재귀 컴파일되므로(wiki-v2 D2) 재귀 옵션은 없다.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -23,10 +23,12 @@ interface DrivePickerModalProps {
   open: boolean;
   title: string;
   onClose: () => void;
-  /** 선택 확정. 폴더 선택 시 recursive 를 함께 전달한다(파일이면 무의미). */
-  onPick: (node: FileNode, recursive: boolean) => void;
+  /** 선택 확정. */
+  onPick: (node: FileNode) => void;
   /** 이미 등록된 파일 id — 목록에서 "등록됨" 으로 비활성화한다. */
   disabledIds?: Set<number>;
+  /** 지정 시 이 사용자 소유 항목만 선택 가능(그 외는 "내 소유 아님" 표시). 폴더 탐색은 허용. */
+  pickableOwnerId?: number;
 }
 
 const PAGE_SIZE = 100;
@@ -37,12 +39,12 @@ export function DrivePickerModal({
   onClose,
   onPick,
   disabledIds,
+  pickableOwnerId,
 }: DrivePickerModalProps) {
   const [path, setPath] = useState<Crumb[]>([{ id: null, name: "내 드라이브" }]);
   const [items, setItems] = useState<FileNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [recursive, setRecursive] = useState(true);
 
   const current = path[path.length - 1];
 
@@ -63,7 +65,6 @@ export function DrivePickerModal({
   useEffect(() => {
     if (!open) return;
     setPath([{ id: null, name: "내 드라이브" }]);
-    setRecursive(true);
   }, [open]);
 
   useEffect(() => {
@@ -134,7 +135,8 @@ export function DrivePickerModal({
           ) : (
             <ul className="flex flex-col gap-0.5">
               {items.map((f) => {
-                const disabled = disabledIds?.has(f.id) ?? false;
+                const registered = disabledIds?.has(f.id) ?? false;
+                const ownedOk = pickableOwnerId == null || f.user_id === pickableOwnerId;
                 return (
                   <li
                     key={f.id}
@@ -157,12 +159,14 @@ export function DrivePickerModal({
                         {f.name}
                       </span>
                     </button>
-                    {disabled ? (
+                    {registered ? (
                       <span className="shrink-0 text-xs text-muted">등록됨</span>
+                    ) : !ownedOk ? (
+                      <span className="shrink-0 text-xs text-muted">내 소유 아님</span>
                     ) : (
                       <button
                         className="btn btn-secondary shrink-0 px-2 py-1 text-xs"
-                        onClick={() => onPick(f, recursive)}
+                        onClick={() => onPick(f)}
                       >
                         선택
                       </button>
@@ -172,18 +176,6 @@ export function DrivePickerModal({
               })}
             </ul>
           )}
-        </div>
-
-        {/* recursive 옵션 */}
-        <div className="border-t border-token px-5 py-3">
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input
-              type="checkbox"
-              checked={recursive}
-              onChange={(e) => setRecursive(e.target.checked)}
-            />
-            폴더 선택 시 하위 폴더까지 포함
-          </label>
         </div>
       </div>
     </div>

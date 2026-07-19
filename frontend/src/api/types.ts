@@ -47,6 +47,8 @@ export interface FileNode {
   size: number;
   is_folder: boolean;
   is_deleted: boolean;
+  /** "위키에 공유" 체크 여부(wiki_sources 행 존재, wiki-v2 4.3). 배지·토글 표시용. */
+  wiki_shared: boolean;
   current_version: number;
   created_at: string;
   updated_at: string;

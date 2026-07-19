@@ -16,10 +16,9 @@ import {
   deleteSession,
   getSession,
   listSessions,
-  promoteMessage,
   streamMessage,
 } from "@/api/chat";
-import { type WikiSpace, listSpaces } from "@/api/wiki";
+import { promoteAnswer } from "@/api/wiki";
 import { Markdown } from "@/components/Markdown";
 import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
@@ -69,14 +68,11 @@ export function ChatPage() {
   const [deleting, setDeleting] = useState(false);
   const [preview, setPreview] = useState<{ fileId: number; name: string } | null>(null);
 
-  // 위키 스페이스 — 새 대화의 검색 범위 선택 + 답변 승격 대상.
-  const [spaces, setSpaces] = useState<WikiSpace[]>([]);
-  // 새 대화(activeId==null)에 적용할 검색 범위. null = 전체 범위.
-  const [newSpaceId, setNewSpaceId] = useState<number | null>(null);
+  // 새 대화(activeId==null)에 적용할 검색 범위. true = 전사 위키 범위, false = 전체 범위.
+  const [newWikiScope, setNewWikiScope] = useState(false);
 
-  // 답변 승격 모달.
+  // 답변 승격 모달 (전사 위키 단일 — 대상 선택 없음).
   const [promoteTarget, setPromoteTarget] = useState<DisplayMessage | null>(null);
-  const [promoteSpaceId, setPromoteSpaceId] = useState<number | "">("");
   const [promoteTitle, setPromoteTitle] = useState("");
   const [promoting, setPromoting] = useState(false);
 
@@ -100,25 +96,6 @@ export function ChatPage() {
   useEffect(() => {
     void loadSessions();
   }, [loadSessions]);
-
-  // 위키 스페이스 목록(범위 선택·승격용). 실패해도 챗은 동작하므로 조용히 비운다.
-  useEffect(() => {
-    void (async () => {
-      try {
-        setSpaces(await listSpaces());
-      } catch {
-        setSpaces([]);
-      }
-    })();
-  }, []);
-
-  const spaceName = useCallback(
-    (spaceId: number | null | undefined) => {
-      if (spaceId == null) return null;
-      return spaces.find((s) => s.id === spaceId)?.name ?? `스페이스 #${spaceId}`;
-    },
-    [spaces],
-  );
 
   // 활성 세션 변경 시 히스토리 로드. 스트리밍 중 전환은 아래 selectSession 이 막는다.
   const openSession = useCallback(
@@ -241,7 +218,7 @@ export function ChatPage() {
     let sessionId = activeId;
     if (sessionId == null) {
       try {
-        const created = await createSession("", newSpaceId);
+        const created = await createSession("", newWikiScope);
         sessionId = created.id;
         setActiveId(created.id);
         setSessions((prev) => [created, ...prev]);
@@ -293,12 +270,9 @@ export function ChatPage() {
     setPreview({ fileId: c.file_id, name: c.file_name || `파일 #${c.file_id}` });
   };
 
-  // 답변 승격 — 서버 메시지(id:number)만 대상. 기본 스페이스는 현재 세션 범위 → 없으면 첫 스페이스.
+  // 답변 승격 — 서버 메시지(id:number)만 대상. 전사 위키 단일이라 대상 선택은 없다.
   const startPromote = (m: DisplayMessage) => {
     if (typeof m.id !== "number") return;
-    const active = sessions.find((s) => s.id === activeId);
-    const preferred = active?.space_id ?? spaces[0]?.id ?? "";
-    setPromoteSpaceId(preferred);
     setPromoteTitle("");
     setPromoteTarget(m);
   };
@@ -306,28 +280,20 @@ export function ChatPage() {
   const confirmPromote = async () => {
     if (!promoteTarget || typeof promoteTarget.id !== "number") return;
     const title = promoteTitle.trim();
-    if (!title || promoteSpaceId === "") return;
+    if (!title) return;
     setPromoting(true);
     try {
-      const res = await promoteMessage(promoteTarget.id, {
-        space_id: Number(promoteSpaceId),
-        title,
-      });
+      const res = await promoteAnswer({ message_id: promoteTarget.id, title });
       toast.success(`"${res.name}" 페이지로 저장했습니다.`);
       setPromoteTarget(null);
     } catch (err) {
-      const msg =
-        errorStatus(err) === 403
-          ? "이 스페이스에 쓸 권한이 없습니다."
-          : extractErrorMessage(err, "위키로 승격하지 못했습니다.");
-      toast.error(msg);
+      toast.error(extractErrorMessage(err, "위키로 승격하지 못했습니다."));
     } finally {
       setPromoting(false);
     }
   };
 
   const activeSession = sessions.find((s) => s.id === activeId);
-  const canPromote = spaces.length > 0;
 
   return (
     <div className="flex h-screen">
@@ -373,14 +339,17 @@ export function ChatPage() {
                       disabled={streaming && s.id !== activeId}
                     >
                       <p
-                        className={`truncate text-sm ${
+                        className={`flex items-center gap-1 truncate text-sm ${
                           s.id === activeId
                             ? "font-medium text-[color:var(--accent)]"
                             : "text-[color:var(--text-secondary)]"
                         }`}
-                        title={s.title || "제목 없음"}
+                        title={s.wiki_scope ? `${s.title || "제목 없음"} (위키 범위)` : s.title || "제목 없음"}
                       >
-                        {s.title || "제목 없음"}
+                        {s.wiki_scope && (
+                          <BookIcon width={12} height={12} className="shrink-0 text-[color:var(--accent)]" />
+                        )}
+                        <span className="truncate">{s.title || "제목 없음"}</span>
                       </p>
                       <p className="truncate text-[0.7rem] text-muted">{formatDate(s.created_at)}</p>
                     </button>
@@ -403,30 +372,29 @@ export function ChatPage() {
 
       {/* 우: 대화창 */}
       <section className="flex min-w-0 flex-1 flex-col">
-        {/* 검색 범위: 새 대화면 선택, 진행 중 세션이면 확정된 범위 표시 */}
+        {/* 검색 범위: 새 대화면 위키 범위 토글, 진행 중 세션이면 확정된 범위 표시 */}
         <div className="flex items-center gap-2 border-b border-token px-4 py-2.5 text-sm">
           <span className="flex items-center gap-1.5 text-muted">
             <BookIcon width={15} height={15} />
             검색 범위
           </span>
           {activeId == null ? (
-            <select
-              className="input max-w-xs py-1 text-sm"
-              value={newSpaceId ?? ""}
-              onChange={(e) => setNewSpaceId(e.target.value === "" ? null : Number(e.target.value))}
-            >
-              <option value="">전체 범위 (접근 가능한 모든 문서)</option>
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  위키: {s.name}
-                </option>
-              ))}
-            </select>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={newWikiScope}
+                onChange={(e) => setNewWikiScope(e.target.checked)}
+              />
+              <span>위키 범위로 한정</span>
+              <span className="text-xs text-muted">
+                {newWikiScope
+                  ? "(공유 문서·위키 페이지만)"
+                  : "(접근 가능한 모든 문서)"}
+              </span>
+            </label>
           ) : (
-            <Badge tone={activeSession?.space_id != null ? "accent" : "neutral"}>
-              {activeSession?.space_id != null
-                ? `위키: ${spaceName(activeSession.space_id)}`
-                : "전체 범위"}
+            <Badge tone={activeSession?.wiki_scope ? "accent" : "neutral"}>
+              {activeSession?.wiki_scope ? "위키 범위" : "전체 범위"}
             </Badge>
           )}
         </div>
@@ -450,7 +418,7 @@ export function ChatPage() {
                   message={m}
                   onCitation={openCitation}
                   onRetry={handleRetry}
-                  onPromote={canPromote ? startPromote : undefined}
+                  onPromote={startPromote}
                 />
               ))}
             </div>
@@ -546,7 +514,7 @@ export function ChatPage() {
             <button
               className="btn btn-primary"
               onClick={confirmPromote}
-              disabled={promoting || promoteSpaceId === "" || !promoteTitle.trim()}
+              disabled={promoting || !promoteTitle.trim()}
             >
               {promoting ? <Spinner className="h-4 w-4" /> : "승격"}
             </button>
@@ -555,28 +523,10 @@ export function ChatPage() {
       >
         <div className="flex flex-col gap-4">
           <p className="text-sm text-muted">
-            이 답변을 선택한 위키 스페이스의 페이지로 저장합니다. 출처도 함께 기록됩니다.
+            이 답변을 전사 위키 페이지로 저장합니다. 출처도 함께 기록됩니다. 승격하면 답변이{" "}
+            <span className="font-medium text-[color:var(--warning)]">모든 사용자에게 공개</span>
+            됩니다(인용 원본은 클릭 시 권한이 재검증됩니다).
           </p>
-          <div>
-            <label className="label" htmlFor="promoteSpace">
-              스페이스
-            </label>
-            <select
-              id="promoteSpace"
-              className="input"
-              value={promoteSpaceId}
-              onChange={(e) =>
-                setPromoteSpaceId(e.target.value === "" ? "" : Number(e.target.value))
-              }
-            >
-              <option value="">스페이스 선택...</option>
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.scope === "group" ? "그룹" : "개인"})
-                </option>
-              ))}
-            </select>
-          </div>
           <div>
             <label className="label" htmlFor="promoteTitle">
               페이지 제목
@@ -606,7 +556,7 @@ function MessageBubble({
   message: DisplayMessage;
   onCitation: (c: ChatCitation) => void;
   onRetry: () => void;
-  /** 있으면 답변 말풍선에 "위키로 승격" 버튼을 노출한다(스페이스가 있을 때만). */
+  /** 답변 말풍선에 "위키로 승격" 버튼을 노출한다(전사 위키 단일이라 항상 가능). */
   onPromote?: (m: DisplayMessage) => void;
 }) {
   const isUser = message.role === "user";
