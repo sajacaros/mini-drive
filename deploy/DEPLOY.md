@@ -124,6 +124,13 @@ curl -fsS http://127.0.0.1:7755/health && echo OK
 ```
 > 프론트는 경로 무관하게 빌드되므로, 배포 경로를 바꾸려면 `.env` 의 `BASE_PATH` 만 바꾸고 재기동하면 된다.
 
+> **게이트웨이 재시작 불필요.** 게이트웨이 nginx 는 upstream(backend/frontend/minio) 을
+> 도커 내장 DNS(`127.0.0.11`)로 **요청 시점에 다시 해석**한다(`nginx/conf.d/default.conf` 의
+> `resolver` + 변수 `proxy_pass`). 그래서 `$DC up -d` 가 backend/frontend 만 새 IP 로 재생성해도
+> 게이트웨이가 옛 IP 를 물지 않는다. (예전엔 nginx 가 시작 시 IP 를 한 번만 캐시해,
+> 재빌드 때마다 `connect() failed (113: Host is unreachable)` 502 가 나 게이트웨이 강제
+> 재생성이 필요했다.) 만약 그래도 502 가 나면 `$DC logs nginx` 로 upstream 주소를 확인한다.
+
 ---
 
 ## 2. (선택) Jenkins 자동화
