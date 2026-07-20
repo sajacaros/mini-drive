@@ -304,6 +304,10 @@ export function FileBrowserPage({
     scheduleUploadCleanup();
   };
 
+  // 업로드 완료 알림 — 전송 경로(단일/재개)와 무관하게 동일한 완료 피드백을 준다.
+  const notifyUploadSuccess = (name: string) =>
+    toast.success(`${name}: 업로드를 완료했습니다.`);
+
   // 재개 가능 업로드 컨트롤러 콜백 — 태스크 상태를 갱신하고 완료 시 목록을 새로고침한다.
   const resumableCallbacks = (id: number, name: string) => ({
     onProgress: (percent: number) => patchTask(id, { percent }),
@@ -314,7 +318,7 @@ export function FileBrowserPage({
       }
       patchTask(id, { status });
       if (status === "completed") {
-        toast.success(`${name}: 업로드를 완료했습니다.`);
+        notifyUploadSuccess(name);
         void afterUpload();
       }
     },
@@ -355,6 +359,7 @@ export function FileBrowserPage({
       try {
         await uploadFile(file, parentId, (percent) => patchTask(id, { percent }));
         patchTask(id, { percent: 100, status: "completed" });
+        notifyUploadSuccess(file.name);
       } catch (err) {
         const status = errorStatus(err);
         const msg =

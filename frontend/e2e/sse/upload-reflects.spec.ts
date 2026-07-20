@@ -33,10 +33,10 @@ test.describe("실시간 목록 갱신 (SSE)", () => {
       const fileChooser = await fileChooserPromise;
       await fileChooser.setFiles(filePath);
 
-      // 참고: "{파일명}: 업로드를 완료했습니다." 토스트는 1GB 초과 재개 가능(resumable) 업로드
-      // 경로에서만 표시된다(src/pages/FileBrowserPage.tsx의 resumableCallbacks.onStatus).
-      // 이 테스트처럼 1GB 이하의 일반 업로드 경로는 완료 토스트 없이 목록 갱신으로만 반영되므로
-      // (제품 동작 확인 완료, 테스트로 고칠 수 없음) 성공 토스트 대신 아래 행 노출로 완료를 검증한다.
+      // expect: 완료 토스트가 노출된다. 소형(≤1GB)·대형(resumable) 업로드 모두 공통 핸들러
+      // (FileBrowserPage.notifyUploadSuccess)로 동일 문구를 띄운다. 전이성 토스트라 느린 단언
+      // (행/용량) 앞에서 먼저 검사한다.
+      await expect(page.getByText(`${fileName}: 업로드를 완료했습니다.`)).toBeVisible();
       // expect: 파일 선택 즉시(수동 새로고침·재방문 없이) 목록 테이블에 새 행이 나타난다
       await expect(page.getByRole("button", { name: fileName })).toBeVisible();
       // expect: 사이드바 저장 용량 텍스트(예: "0 B / 10.0 GB")가 증가한다
