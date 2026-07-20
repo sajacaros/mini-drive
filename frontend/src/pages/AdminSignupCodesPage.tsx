@@ -4,6 +4,7 @@ import { errorStatus, extractErrorMessage } from "@/api/client";
 import { createSignupCode, listSignupCodes, updateSignupCode } from "@/api/signupCodes";
 import type { SignupCode } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import { Badge, EmptyState, ErrorState, LoadingState, Pagination, Spinner } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
@@ -187,11 +188,15 @@ export function AdminSignupCodesPage() {
 
   return (
     <div className="flex h-screen flex-col">
-      <div className="flex items-center justify-between border-b border-token px-6 py-4">
-        <h1 className="text-lg font-semibold">가입 코드</h1>
-        <button className="btn btn-primary" onClick={openCreate}>
-          코드 발급
-        </button>
+      <div className="border-b border-token px-6 py-4">
+        <PageHeader>
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-lg font-semibold">가입 코드</h1>
+            <button className="btn btn-primary" onClick={openCreate}>
+              코드 발급
+            </button>
+          </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

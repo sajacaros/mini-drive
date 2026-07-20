@@ -11,6 +11,7 @@ import { extractErrorMessage } from "@/api/client";
 import { listFavorites, removeFavorite } from "@/api/files";
 import type { FileNode } from "@/api/types";
 import { FileListView } from "@/components/FileListView";
+import { PageHeader } from "@/components/PageHeader";
 import { PreviewModal } from "@/components/PreviewModal";
 import { useToast } from "@/components/Toast";
 import { EmptyState, ErrorState, LoadingState, Pagination } from "@/components/ui";
@@ -88,7 +89,9 @@ export function FavoritesPage() {
 
   return (
     <div className="flex h-screen flex-col">
-      <div className="flex items-center justify-between gap-4 border-b border-token px-6 py-4">
+      <div className="border-b border-token px-6 py-4">
+        <PageHeader>
+          <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
             <span className="text-[color:var(--accent)]">
@@ -127,6 +130,8 @@ export function FavoritesPage() {
             <GridIcon width={16} height={16} />
           </button>
         </div>
+          </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

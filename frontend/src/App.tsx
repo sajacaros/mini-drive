@@ -16,12 +16,10 @@ import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPag
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
 import { GroupsPage } from "@/pages/GroupsPage";
 import { LoginPage } from "@/pages/LoginPage";
-import { ProfilePage } from "@/pages/ProfilePage";
 import { PublicSharePage } from "@/pages/PublicSharePage";
 import { RecentPage } from "@/pages/RecentPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { SetupPage } from "@/pages/SetupPage";
-import { SharedWithMePage } from "@/pages/SharedWithMePage";
 import { SharesPage } from "@/pages/SharesPage";
 import { TrashPage } from "@/pages/TrashPage";
 import { useAuthStore } from "@/store/auth";
@@ -73,11 +71,13 @@ function App() {
             <Route path="/recent" element={<RecentPage />} />
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/shares" element={<SharesPage />} />
-            <Route path="/shared" element={<SharedWithMePage />} />
+            {/* "공유됨"은 내 드라이브 > 공유 가상 폴더로 통합됨 — 기존 경로는 홈으로 리다이렉트. */}
+            <Route path="/shared" element={<Navigate to="/" replace />} />
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />
-            <Route path="/profile" element={<ProfilePage />} />
+            {/* 프로필은 모달로 전환됨 — 딥링크/구링크는 홈으로. */}
+            <Route path="/profile" element={<Navigate to="/" replace />} />
           </Route>
         </Route>
 

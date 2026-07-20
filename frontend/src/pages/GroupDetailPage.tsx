@@ -14,6 +14,7 @@ import {
 import { searchUsers } from "@/api/users";
 import type { GroupDetail, GroupMember, GroupRole, UserLookup } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import { Badge, ErrorState, LoadingState, Spinner } from "@/components/ui";
 import { ChevronRight, PlusIcon, TrashIcon } from "@/components/icons";
@@ -148,6 +149,7 @@ export function GroupDetailPage() {
     <div className="flex h-screen flex-col">
       {/* 헤더: breadcrumb + 그룹명 */}
       <div className="border-b border-token px-6 py-4">
+        <PageHeader>
         <nav className="mb-1 flex items-center gap-1 text-sm text-muted">
           <button className="hover:text-[color:var(--text-primary)]" onClick={() => navigate("/groups")}>
             그룹
@@ -176,6 +178,7 @@ export function GroupDetailPage() {
             )}
           </div>
         </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

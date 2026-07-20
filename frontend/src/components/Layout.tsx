@@ -1,6 +1,6 @@
-/** 인증 사용자 공통 레이아웃 — 사이드 네비 + 저장 용량 표시 + 상단 바. */
+/** 인증 사용자 공통 레이아웃 — 사이드 네비 + 저장 용량 표시. 프로필 칩은 각 페이지 헤더(PageHeader) 우측에 표시된다. */
 
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 
 import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
@@ -8,10 +8,8 @@ import { ThemePicker } from "./ThemePicker";
 import {
   DriveIcon,
   HistoryIcon,
-  InboxIcon,
   LinkIcon,
   LockIcon,
-  LogoutIcon,
   ShieldIcon,
   StarIcon,
   TrashIcon,
@@ -19,13 +17,7 @@ import {
 } from "./icons";
 
 export function Layout() {
-  const { user, logout } = useAuthStore();
-  const navigate = useNavigate();
-
-  const onLogout = async () => {
-    await logout();
-    navigate("/login", { replace: true });
-  };
+  const { user } = useAuthStore();
 
   const used = user?.storage_used ?? 0;
   const max = user?.max_storage ?? 1;
@@ -49,7 +41,6 @@ export function Layout() {
           <NavItem to="/" icon={<DriveIcon />} label="내 드라이브" end />
           <NavItem to="/favorites" icon={<StarIcon />} label="즐겨찾기" />
           <NavItem to="/recent" icon={<HistoryIcon />} label="최근" />
-          <NavItem to="/shared" icon={<InboxIcon />} label="공유됨" />
           <NavItem to="/groups" icon={<UsersIcon />} label="그룹" />
           <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" />
           <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" />
@@ -91,21 +82,7 @@ export function Layout() {
         </div>
 
         <div className="border-t border-token px-4 py-3">
-          <div className="mb-3">
-            <ThemePicker />
-          </div>
-          <NavLink
-            to="/profile"
-            className="mb-2 block rounded-lg px-1 py-1 transition-colors hover:bg-[color:var(--bg-muted)]"
-            title="내 프로필"
-          >
-            <p className="truncate text-sm font-medium">{user?.display_name || user?.email}</p>
-            <p className="truncate text-xs text-muted">{user?.email}</p>
-          </NavLink>
-          <button className="btn btn-ghost w-full justify-start" onClick={onLogout}>
-            <LogoutIcon width={16} height={16} />
-            로그아웃
-          </button>
+          <ThemePicker />
         </div>
       </aside>
 

@@ -5,6 +5,7 @@ import { errorStatus, extractErrorMessage } from "@/api/client";
 import { createGroup, listGroups } from "@/api/groups";
 import type { GroupSummary } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import { Badge, EmptyState, ErrorState, LoadingState, Spinner } from "@/components/ui";
 import { PlusIcon, UsersIcon } from "@/components/icons";
@@ -72,7 +73,9 @@ export function GroupsPage() {
 
   return (
     <div className="flex h-screen flex-col">
-      <div className="flex items-center justify-between gap-4 border-b border-token px-6 py-4">
+      <div className="border-b border-token px-6 py-4">
+        <PageHeader>
+          <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold">그룹</h1>
           <p className="mt-0.5 text-sm text-muted">파일 공유의 단위가 되는 그룹을 관리합니다.</p>
@@ -81,6 +84,8 @@ export function GroupsPage() {
           <PlusIcon width={16} height={16} />
           그룹 만들기
         </button>
+          </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

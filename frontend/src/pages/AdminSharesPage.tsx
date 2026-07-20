@@ -4,6 +4,7 @@ import { disableShare, listShares } from "@/api/admin";
 import { errorStatus, extractErrorMessage } from "@/api/client";
 import type { AdminShare } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import { Badge, EmptyState, ErrorState, LoadingState, Pagination, Spinner } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
@@ -75,18 +76,20 @@ export function AdminSharesPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 pt-4">
-        <h1 className="text-lg font-semibold">공유 링크</h1>
-        <div className="mt-3 flex gap-1">
-          <FilterTab active={filter === "all"} onClick={() => switchFilter("all")}>
-            전체
-          </FilterTab>
-          <FilterTab active={filter === "active"} onClick={() => switchFilter("active")}>
-            활성
-          </FilterTab>
-          <FilterTab active={filter === "inactive"} onClick={() => switchFilter("inactive")}>
-            비활성
-          </FilterTab>
-        </div>
+        <PageHeader>
+          <h1 className="text-lg font-semibold">공유 링크</h1>
+          <div className="mt-3 flex gap-1">
+            <FilterTab active={filter === "all"} onClick={() => switchFilter("all")}>
+              전체
+            </FilterTab>
+            <FilterTab active={filter === "active"} onClick={() => switchFilter("active")}>
+              활성
+            </FilterTab>
+            <FilterTab active={filter === "inactive"} onClick={() => switchFilter("inactive")}>
+              비활성
+            </FilterTab>
+          </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

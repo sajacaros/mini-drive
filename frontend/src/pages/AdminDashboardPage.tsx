@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getStats } from "@/api/admin";
 import { extractErrorMessage } from "@/api/client";
 import type { AdminStats } from "@/api/types";
+import { PageHeader } from "@/components/PageHeader";
 import { Badge, ErrorState, LoadingState } from "@/components/ui";
 import { formatBytes, formatPercent } from "@/lib/format";
 import { userStatusLabel, userStatusTone } from "@/lib/labels";
@@ -32,8 +33,10 @@ export function AdminDashboardPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <h1 className="text-lg font-semibold">대시보드</h1>
-        <p className="mt-0.5 text-sm text-muted">인스턴스 사용 현황 (메타데이터 집계)</p>
+        <PageHeader>
+          <h1 className="text-lg font-semibold">대시보드</h1>
+          <p className="mt-0.5 text-sm text-muted">인스턴스 사용 현황 (메타데이터 집계)</p>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

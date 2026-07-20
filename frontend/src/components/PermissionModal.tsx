@@ -197,7 +197,8 @@ export function PermissionModal({
                         >
                           <option value="read">읽기</option>
                           <option value="write">쓰기</option>
-                          <option value="manage">관리</option>
+                          {/* 관리 권한 신규 부여는 중단. 기존 관리 권한은 표시만 하고 읽기/쓰기로 강등 가능. */}
+                          {d.permission === "manage" && <option value="manage">관리</option>}
                         </select>
                         {file?.is_folder && (
                           <label className="flex items-center gap-1.5 text-muted">
@@ -290,7 +291,6 @@ export function PermissionModal({
                       >
                         <option value="read">읽기 (조회·다운로드)</option>
                         <option value="write">쓰기 (업로드·수정·삭제)</option>
-                        <option value="manage">관리 (권한 관리)</option>
                       </select>
                     </div>
                   </div>

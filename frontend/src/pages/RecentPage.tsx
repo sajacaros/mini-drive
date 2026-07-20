@@ -10,6 +10,7 @@ import { extractErrorMessage } from "@/api/client";
 import { addFavorite, listRecent, removeFavorite } from "@/api/files";
 import type { FileNode } from "@/api/types";
 import { FileListView } from "@/components/FileListView";
+import { PageHeader } from "@/components/PageHeader";
 import { PreviewModal } from "@/components/PreviewModal";
 import { useToast } from "@/components/Toast";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui";
@@ -68,6 +69,7 @@ export function RecentPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
+        <PageHeader>
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <span className="text-[color:var(--accent)]">
             <HistoryIcon width={18} height={18} />
@@ -75,6 +77,7 @@ export function RecentPage() {
           최근
         </h1>
         <p className="mt-0.5 text-sm text-muted">최근에 미리보거나 내려받은 파일입니다.</p>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

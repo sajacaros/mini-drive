@@ -13,6 +13,7 @@ import { FavoriteStar } from "@/components/FavoriteStar";
 import { Thumbnail } from "@/components/Thumbnail";
 import { DownloadIcon, FileIcon, FolderIcon } from "@/components/icons";
 import { formatBytes, formatDateTime } from "@/lib/format";
+import { permissionLabel, permissionTone } from "@/lib/labels";
 
 export interface FileListViewProps {
   items: FileNode[];
@@ -30,6 +31,20 @@ function openOf(f: FileNode, p: FileListViewProps) {
 
 export function FileListView(props: FileListViewProps) {
   return (props.view ?? "list") === "grid" ? <Grid {...props} /> : <Table {...props} />;
+}
+
+/** 권한 셀 — owner 는 "소유자"로 구분해 강조하고, 그 외는 라벨/톤 배지로 표시. */
+function PermissionCell({ f }: { f: FileNode }) {
+  if (!f.permission) return <span className="text-muted">-</span>;
+  if (f.permission === "owner") {
+    return <span className="text-xs font-medium text-[color:var(--accent)]">소유자</span>;
+  }
+  return <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>;
+}
+
+/** 그룹명 목록을 ", " 로 합쳐 표시하고, 비어 있으면 "-". */
+function groupText(f: FileNode): string {
+  return f.group_names && f.group_names.length > 0 ? f.group_names.join(", ") : "-";
 }
 
 function DownloadButton({ file, onDownload }: { file: FileNode; onDownload: (f: FileNode) => void }) {
@@ -55,9 +70,12 @@ function Table(p: FileListViewProps) {
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
             <th className="px-4 py-2.5 font-medium">이름</th>
-            <th className="w-28 px-4 py-2.5 font-medium">크기</th>
-            <th className="w-40 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-32 px-4 py-2.5" />
+            <th className="w-32 px-4 py-2.5 font-medium">소유자</th>
+            <th className="w-40 px-4 py-2.5 font-medium">그룹</th>
+            <th className="w-24 px-4 py-2.5 font-medium">권한</th>
+            <th className="w-24 px-4 py-2.5 font-medium">크기</th>
+            <th className="w-36 px-4 py-2.5 font-medium">수정일</th>
+            <th className="w-24 px-4 py-2.5" />
           </tr>
         </thead>
         <tbody>
@@ -80,13 +98,33 @@ function Table(p: FileListViewProps) {
                         fallback={f.is_folder ? <FolderIcon /> : <FileIcon />}
                       />
                     </span>
-                    <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
-                    {!f.is_folder && f.current_version >= 2 && (
-                      <Badge tone="neutral">v{f.current_version}</Badge>
-                    )}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="flex items-center gap-1.5">
+                        <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
+                        {!f.is_folder && f.current_version >= 2 && (
+                          <Badge tone="neutral">v{f.current_version}</Badge>
+                        )}
+                      </span>
+                      {f.location && (
+                        <span className="truncate text-xs text-muted">{f.location}</span>
+                      )}
+                    </span>
                   </button>
                   <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
                 </div>
+              </td>
+              <td className="px-4 py-2.5 text-muted">
+                <span className="block truncate" title={f.owner_name ?? undefined}>
+                  {f.owner_name ?? "-"}
+                </span>
+              </td>
+              <td className="px-4 py-2.5 text-muted">
+                <span className="block truncate" title={groupText(f)}>
+                  {groupText(f)}
+                </span>
+              </td>
+              <td className="px-4 py-2.5">
+                <PermissionCell f={f} />
               </td>
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
@@ -135,12 +173,19 @@ function Grid(p: FileListViewProps) {
                 <Badge tone="neutral">v{f.current_version}</Badge>
               </span>
             )}
+            {/* 그리드는 간결 유지 — 소유자가 아닌 항목만 작은 권한 배지 노출 */}
+            {f.permission && f.permission !== "owner" && (
+              <span className="absolute bottom-1.5 left-1.5">
+                <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>
+              </span>
+            )}
           </button>
 
           <div className="flex items-center gap-1 border-t border-token px-2.5 py-2">
             <button className="min-w-0 flex-1 text-left" onClick={openOf(f, p)}>
               <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
               <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
+              {f.location && <p className="truncate text-[10px] text-muted">{f.location}</p>}
             </button>
             {!f.is_folder && (
               <span className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100">

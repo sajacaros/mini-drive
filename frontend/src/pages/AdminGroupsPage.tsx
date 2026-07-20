@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { listGroups } from "@/api/admin";
 import { extractErrorMessage } from "@/api/client";
 import type { AdminGroup } from "@/api/types";
+import { PageHeader } from "@/components/PageHeader";
 import { Badge, EmptyState, ErrorState, LoadingState, Pagination } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
 
@@ -41,22 +42,26 @@ export function AdminGroupsPage() {
 
   return (
     <div className="flex h-screen flex-col">
-      <div className="flex items-center justify-between border-b border-token px-6 py-4">
-        <div>
-          <h1 className="text-lg font-semibold">그룹</h1>
-          <p className="mt-0.5 text-sm text-muted">전체 {total}개</p>
-        </div>
-        <label className="flex items-center gap-2 text-sm text-muted">
-          <input
-            type="checkbox"
-            checked={includeInactive}
-            onChange={(e) => {
-              setIncludeInactive(e.target.checked);
-              setPage(1);
-            }}
-          />
-          비활성 포함
-        </label>
+      <div className="border-b border-token px-6 py-4">
+        <PageHeader>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-lg font-semibold">그룹</h1>
+              <p className="mt-0.5 text-sm text-muted">전체 {total}개</p>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input
+                type="checkbox"
+                checked={includeInactive}
+                onChange={(e) => {
+                  setIncludeInactive(e.target.checked);
+                  setPage(1);
+                }}
+              />
+              비활성 포함
+            </label>
+          </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

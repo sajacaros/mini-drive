@@ -15,10 +15,11 @@ import {
   softDeleteFile,
   uploadFile,
 } from "@/api/files";
-import { checkPermission } from "@/api/permissions";
+import { checkPermission, listSharedWithMe } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
 import { FavoriteStar } from "@/components/FavoriteStar";
 import { Modal } from "@/components/Modal";
+import { PageHeader } from "@/components/PageHeader";
 import { PermissionModal } from "@/components/PermissionModal";
 import { PreviewModal } from "@/components/PreviewModal";
 import { ShareModal } from "@/components/ShareModal";
@@ -33,6 +34,7 @@ import {
   FolderIcon,
   GridIcon,
   HistoryIcon,
+  InboxIcon,
   ListIcon,
   PauseIcon,
   PlayIcon,
@@ -47,7 +49,7 @@ import {
 import { downloadFile } from "@/lib/download";
 import { subscribeFileEvents } from "@/lib/fileEvents";
 import { formatBytes, formatDateTime } from "@/lib/format";
-import { permissionCovers } from "@/lib/labels";
+import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
 import {
   forgetSession,
@@ -65,6 +67,15 @@ import { useAuthStore } from "@/store/auth";
 const PAGE_SIZE = 50;
 const VIEW_KEY = "minidrive:fileView";
 type ViewMode = "list" | "grid";
+
+/**
+ * "공유" 가상 폴더의 crumb id. 실제 파일 id 는 항상 양수이므로 음수 센티넬로 구분한다.
+ * 이 crumb 이 경로에 포함되면 "공유받은 항목" 하위 트리(읽기 전용 컨테이너 + 권한 게이팅)로 취급한다.
+ */
+const SHARED_VIRTUAL_ID = -1;
+
+/** 권한 수준 순위 — 다중 그룹 공유 시 최고 권한을 고를 때 사용. */
+const PERM_RANK: Record<string, number> = { read: 1, write: 2, manage: 3, owner: 4 };
 
 interface Crumb {
   id: number | null;
@@ -89,19 +100,24 @@ interface FileBrowserPageProps {
   rootId?: number | null;
   /** 루트 breadcrumb 표시명. */
   rootName?: string;
-  /** 공유 폴더 탐색 모드 — 내 유효 권한(check)에 따라 액션을 게이팅한다. */
-  shared?: boolean;
+  /**
+   * 초기 breadcrumb 경로. 지정하면 rootId/rootName 대신 사용한다.
+   * 공유 폴더 딥링크(/shared/f/:id)를 "내 드라이브 > 공유 > 폴더" 아래에 seed 할 때 쓴다.
+   */
+  initialPath?: Crumb[];
 }
 
 export function FileBrowserPage({
   rootId = null,
   rootName = "내 드라이브",
-  shared = false,
+  initialPath,
 }: FileBrowserPageProps) {
   const toast = useToast();
   const refreshUser = useAuthStore((s) => s.refreshUser);
 
-  const [path, setPath] = useState<Crumb[]>([{ id: rootId, name: rootName }]);
+  const [path, setPath] = useState<Crumb[]>(
+    () => initialPath ?? [{ id: rootId, name: rootName }],
+  );
   const [items, setItems] = useState<FileNode[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -126,8 +142,11 @@ export function FileBrowserPage({
     localStorage.setItem(VIEW_KEY, v);
   };
 
-  // 현재 폴더에 대한 내 유효 권한 수준 (own 모드는 항상 manage=소유자).
-  const [perm, setPerm] = useState<string>(shared ? "none" : "manage");
+  // 현재 폴더에 대한 내 유효 권한 수준 (내 소유 폴더는 항상 manage=소유자).
+  // 공유 하위 트리로 seed 된 경우(딥링크)는 "none"에서 시작해 checkPermission 으로 보정한다.
+  const [perm, setPerm] = useState<string>(
+    (initialPath ?? []).some((c) => c.id === SHARED_VIRTUAL_ID) ? "none" : "manage",
+  );
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
@@ -146,6 +165,13 @@ export function FileBrowserPage({
   const current = path[path.length - 1];
   const parentId = current.id;
 
+  // 현재 경로가 "공유" 가상 폴더 목록 자체인지 (읽기 전용 컨테이너).
+  const atVirtualShared = current.id === SHARED_VIRTUAL_ID;
+  // 현재 경로가 "공유" 하위 트리(가상 목록 또는 그 안의 실제 공유 폴더)인지.
+  const inSharedSubtree = path.some((c) => c.id === SHARED_VIRTUAL_ID);
+  // 내 드라이브 루트 목록(첫 페이지)에서만 상단에 "공유" 가상 폴더 행을 고정 노출한다.
+  const showSharedVirtualRow = !inSharedSubtree && parentId == null && page === 1;
+
   const canWrite = permissionCovers(perm, "write");
   const canManage = permissionCovers(perm, "manage");
 
@@ -154,6 +180,40 @@ export function FileBrowserPage({
       setLoading(true);
       setError(null);
       try {
+        if (pid === SHARED_VIRTUAL_ID) {
+          // "공유" 가상 폴더: 내 소속 그룹으로 공유받은 항목을 한 화면에 모은다.
+          // 같은 파일이 여러 그룹으로 공유되면 부여행 전체에 걸쳐 그룹명을 합집합으로 병합하고,
+          // 권한은 최고 수준(read<write<manage)을 유지해 한 행으로 정리한다.
+          const res = await listSharedWithMe();
+          const byId = new Map<number, FileNode>();
+          for (const it of res.items) {
+            // 부여행마다 그룹을 모은다: grant 레벨 group_name(부여 그룹, 항상 단일)과
+            // 임베드 file.group_names 를 합친다. 임베드 값이 부여 그룹을 반영하지 않을 수 있어
+            // group_name 을 fallback 이 아니라 항상 포함한다.
+            const rowGroups = [it.group_name, ...(it.file.group_names ?? [])].filter(Boolean);
+            const rowPerm = (it.file.permission ??
+              it.permission) as FileNode["permission"];
+            const existing = byId.get(it.file.id);
+            if (existing) {
+              existing.group_names = Array.from(
+                new Set([...(existing.group_names ?? []), ...rowGroups]),
+              ).sort();
+              if ((PERM_RANK[rowPerm ?? ""] ?? 0) > (PERM_RANK[existing.permission ?? ""] ?? 0)) {
+                existing.permission = rowPerm;
+              }
+            } else {
+              byId.set(it.file.id, {
+                ...it.file,
+                group_names: Array.from(new Set(rowGroups)).sort(),
+                permission: rowPerm,
+              });
+            }
+          }
+          const rows = Array.from(byId.values());
+          setItems(rows);
+          setTotal(rows.length);
+          return;
+        }
         const res = await listFiles(pid, pageNum, PAGE_SIZE);
         setItems(res.items);
         setTotal(res.total);
@@ -203,7 +263,7 @@ export function FileBrowserPage({
   }, [scheduleReload]);
 
   // --- 최근 항목 스트립 (Phase 8-3) — 내 드라이브 루트에서만 노출 -------------
-  const showRecentStrip = !shared && parentId == null;
+  const showRecentStrip = !inSharedSubtree && parentId == null;
   useEffect(() => {
     if (!showRecentStrip) {
       setRecent([]);
@@ -253,9 +313,16 @@ export function FileBrowserPage({
     );
   }, [parentId, uploads]);
 
-  // 공유 모드: 폴더가 바뀔 때마다 현재 폴더의 내 유효 권한을 재확인해 액션을 게이팅한다.
+  // 폴더가 바뀔 때마다 현재 폴더의 내 유효 권한을 재확인해 액션을 게이팅한다.
+  // - "공유" 가상 목록: 읽기 전용 컨테이너 → 쓰기/관리 차단(none).
+  // - 공유 하위 트리의 실제 폴더: checkPermission 으로 유효 권한 판정.
+  // - 내 소유 폴더: 항상 manage.
   useEffect(() => {
-    if (!shared) {
+    if (atVirtualShared) {
+      setPerm("none");
+      return;
+    }
+    if (!inSharedSubtree) {
       setPerm("manage");
       return;
     }
@@ -273,14 +340,23 @@ export function FileBrowserPage({
     return () => {
       cancelled = true;
     };
-  }, [shared, parentId]);
+  }, [atVirtualShared, inSharedSubtree, parentId]);
 
   const reload = () => load(parentId, page);
 
   // --- 탐색 -----------------------------------------------------------------
 
   const openFolder = (folder: FileNode) => {
-    setPath((p) => [...p, { id: folder.id, name: folder.name }]);
+    // 같은 폴더를 연속 클릭(더블클릭)해도 crumb 이 중복 쌓이지 않도록 가드.
+    setPath((p) => (p[p.length - 1]?.id === folder.id ? p : [...p, { id: folder.id, name: folder.name }]));
+    setPage(1);
+  };
+
+  // "공유" 가상 폴더 진입 — 내 드라이브 루트에서만 노출되는 고정 행.
+  const openSharedVirtual = () => {
+    setPath((p) =>
+      p[p.length - 1]?.id === SHARED_VIRTUAL_ID ? p : [...p, { id: SHARED_VIRTUAL_ID, name: "공유" }],
+    );
     setPage(1);
   };
 
@@ -562,8 +638,10 @@ export function FileBrowserPage({
 
   return (
     <div className="flex h-screen flex-col">
-      {/* 헤더: breadcrumb + 액션 */}
-      <div className="flex items-center justify-between gap-4 border-b border-token px-6 py-4">
+      {/* 헤더: breadcrumb + 액션 + 프로필 칩 */}
+      <div className="border-b border-token px-6 py-4">
+        <PageHeader>
+          <div className="flex items-center justify-between gap-4">
         <nav className="flex min-w-0 items-center gap-1 text-sm">
           {path.map((crumb, i) => (
             <span key={i} className="flex items-center gap-1">
@@ -656,6 +734,8 @@ export function FileBrowserPage({
             }}
           />
         </div>
+          </div>
+        </PageHeader>
       </div>
 
       {/* 본문: 드롭존 */}
@@ -805,20 +885,22 @@ export function FileBrowserPage({
           <LoadingState />
         ) : error ? (
           <ErrorState message={error} onRetry={reload} />
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && !showSharedVirtualRow ? (
           <EmptyState
             icon={<FolderIcon width={40} height={40} />}
-            title="이 폴더가 비어 있습니다"
+            title={atVirtualShared ? "공유받은 항목이 없습니다" : "이 폴더가 비어 있습니다"}
             hint={
-              canWrite
-                ? "파일을 끌어다 놓거나 업로드 버튼을 눌러 시작하세요."
-                : "표시할 항목이 없습니다."
+              atVirtualShared
+                ? "그룹에 초대되고 파일 권한을 받으면 여기에 표시됩니다."
+                : canWrite
+                  ? "파일을 끌어다 놓거나 업로드 버튼을 눌러 시작하세요."
+                  : "표시할 항목이 없습니다."
             }
           />
         ) : (
           (() => {
             const rowProps = {
-              shared,
+              shared: inSharedSubtree,
               canWrite,
               canManage,
               onOpenFolder: openFolder,
@@ -834,6 +916,8 @@ export function FileBrowserPage({
               onVersions: (f: FileNode) => setVersionsTarget(f),
               onNewVersion: startVersionUpload,
               onToggleFavorite,
+              // 내 드라이브 루트에서만 상단에 "공유" 가상 폴더 행을 고정한다.
+              onOpenShared: showSharedVirtualRow ? openSharedVirtual : undefined,
             };
             return view === "grid" ? (
               <FileGrid items={items} {...rowProps} />
@@ -1044,7 +1128,7 @@ export function SharedFolderBrowserPage() {
       <div className="flex h-screen flex-col p-6">
         <ErrorState
           message="공유 폴더를 열 수 없습니다."
-          onRetry={() => navigate("/shared", { replace: true })}
+          onRetry={() => navigate("/", { replace: true })}
         />
       </div>
     );
@@ -1058,7 +1142,18 @@ export function SharedFolderBrowserPage() {
     );
   }
 
-  return <FileBrowserPage rootId={id} rootName={name} shared />;
+  // 딥링크는 "내 드라이브 > 공유 > 폴더명" 아래에 seed 해 통합 트리 내비게이션과 이어지게 한다.
+  return (
+    <FileBrowserPage
+      rootId={id}
+      rootName={name}
+      initialPath={[
+        { id: null, name: "내 드라이브" },
+        { id: SHARED_VIRTUAL_ID, name: "공유" },
+        { id, name },
+      ]}
+    />
+  );
 }
 
 /** 목록/그리드가 공유하는 행 동작 핸들러. */
@@ -1076,10 +1171,44 @@ interface FileRowProps {
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
   onToggleFavorite: (f: FileNode) => void;
+  /** 지정 시 목록 상단에 "공유" 가상 폴더 행을 고정 노출한다(내 드라이브 루트 전용). */
+  onOpenShared?: () => void;
+}
+
+/** 권한 셀 — owner 는 "소유자"로 구분해 강조하고, 그 외는 라벨/톤 배지로 표시. */
+function PermissionCell({ f }: { f: FileNode }) {
+  if (!f.permission) return <span className="text-muted">-</span>;
+  if (f.permission === "owner") {
+    return <span className="text-xs font-medium text-[color:var(--accent)]">소유자</span>;
+  }
+  return <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>;
+}
+
+/** 그룹명 목록을 ", " 로 합쳐 표시하고, 비어 있으면 "-". */
+function groupText(f: FileNode): string {
+  return f.group_names && f.group_names.length > 0 ? f.group_names.join(", ") : "-";
+}
+
+/**
+ * 행별 액션 가드는 컨테이너 perm 이 아니라 항목 자체의 유효 권한(f.permission)으로 판정한다.
+ * "owner"는 permissionCovers 순위표에 없어 별도로 전부 허용한다. f.permission 이 없으면
+ * (백엔드가 아직 안 채운 경우) 컨테이너 수준 값으로 fallback 한다.
+ */
+function rowCanWrite(f: FileNode, containerCanWrite: boolean): boolean {
+  if (!f.permission) return containerCanWrite;
+  return f.permission === "owner" || permissionCovers(f.permission, "write");
+}
+
+function rowCanManage(f: FileNode, containerCanManage: boolean): boolean {
+  if (!f.permission) return containerCanManage;
+  return f.permission === "owner" || permissionCovers(f.permission, "manage");
 }
 
 /** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용). */
 function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
+  // 행별 조작(새 버전/이름 변경/삭제/권한 관리)은 항목 자체 권한으로 게이팅한다.
+  const canWrite = rowCanWrite(f, p.canWrite);
+  const canManage = rowCanManage(f, p.canManage);
   return (
     <>
       {!f.is_folder && (
@@ -1090,7 +1219,7 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
           <IconAction title="다운로드" onClick={() => p.onDownload(f)}>
             <DownloadIcon width={16} height={16} />
           </IconAction>
-          {p.canWrite && (
+          {canWrite && (
             <IconAction title="새 버전 업로드" onClick={() => p.onNewVersion(f)}>
               <UploadIcon width={16} height={16} />
             </IconAction>
@@ -1106,12 +1235,12 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
           )}
         </>
       )}
-      {p.canManage && (
+      {canManage && (
         <IconAction title="권한 관리" onClick={() => p.onPermissions(f)}>
           <ShieldIcon width={16} height={16} />
         </IconAction>
       )}
-      {p.canWrite && (
+      {canWrite && (
         <>
           <IconAction title="이름 변경" onClick={() => p.onRename(f)}>
             <RenameIcon width={16} height={16} />
@@ -1132,12 +1261,38 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
             <th className="px-4 py-2.5 font-medium">이름</th>
-            <th className="w-28 px-4 py-2.5 font-medium">크기</th>
-            <th className="w-40 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-72 px-4 py-2.5" />
+            <th className="w-32 px-4 py-2.5 font-medium">소유자</th>
+            <th className="w-40 px-4 py-2.5 font-medium">그룹</th>
+            <th className="w-24 px-4 py-2.5 font-medium">권한</th>
+            <th className="w-24 px-4 py-2.5 font-medium">크기</th>
+            <th className="w-36 px-4 py-2.5 font-medium">수정일</th>
+            <th className="w-64 px-4 py-2.5" />
           </tr>
         </thead>
         <tbody>
+          {/* 내 드라이브 루트 전용 "공유" 가상 폴더 고정 행 */}
+          {p.onOpenShared && (
+            <tr
+              className="group cursor-pointer border-b border-token hover:bg-[color:var(--bg-muted)]"
+              onClick={p.onOpenShared}
+            >
+              <td className="px-4 py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-[color:var(--accent)]">
+                    <InboxIcon width={20} height={20} />
+                  </span>
+                  <span className="font-medium">공유</span>
+                  <Badge tone="accent">공유받은 항목</Badge>
+                </div>
+              </td>
+              <td className="px-4 py-2.5 text-muted">-</td>
+              <td className="px-4 py-2.5 text-muted">-</td>
+              <td className="px-4 py-2.5 text-muted">-</td>
+              <td className="px-4 py-2.5 text-muted">-</td>
+              <td className="px-4 py-2.5 text-muted">-</td>
+              <td className="px-4 py-2.5" />
+            </tr>
+          )}
           {items.map((f) => (
             <tr key={f.id} className="group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)]">
               <td className="px-4 py-2.5">
@@ -1166,6 +1321,19 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                   <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
                 </div>
               </td>
+              <td className="px-4 py-2.5 text-muted">
+                <span className="block truncate" title={f.owner_name ?? undefined}>
+                  {f.owner_name ?? "-"}
+                </span>
+              </td>
+              <td className="px-4 py-2.5 text-muted">
+                <span className="block truncate" title={groupText(f)}>
+                  {groupText(f)}
+                </span>
+              </td>
+              <td className="px-4 py-2.5">
+                <PermissionCell f={f} />
+              </td>
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
@@ -1185,6 +1353,22 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
 function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+      {/* 내 드라이브 루트 전용 "공유" 가상 폴더 카드 */}
+      {p.onOpenShared && (
+        <button
+          onClick={p.onOpenShared}
+          className="card relative flex flex-col overflow-hidden p-0 text-left transition-colors hover:bg-[color:var(--bg-muted)]"
+          title="공유받은 항목"
+        >
+          <span className="flex aspect-square w-full items-center justify-center bg-muted-token text-[color:var(--accent)]">
+            <InboxIcon width={44} height={44} />
+          </span>
+          <div className="flex flex-col gap-1 border-t border-token px-2.5 py-2">
+            <p className="truncate text-xs font-medium">공유</p>
+            <p className="text-[10px] text-muted">공유받은 항목</p>
+          </div>
+        </button>
+      )}
       {items.map((f) => (
         <div key={f.id} className="group card relative flex flex-col overflow-hidden p-0">
           {/* 즐겨찾기 별 — 활성이면 항상, 아니면 hover 시 노출 */}
@@ -1217,6 +1401,12 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
             {!f.is_folder && f.current_version >= 2 && (
               <span className="absolute left-1.5 top-1.5">
                 <Badge tone="neutral">v{f.current_version}</Badge>
+              </span>
+            )}
+            {/* 그리드는 간결 유지 — 소유자가 아닌 항목만 작은 권한 배지 노출 */}
+            {f.permission && f.permission !== "owner" && (
+              <span className="absolute bottom-1.5 left-1.5">
+                <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>
               </span>
             )}
           </button>

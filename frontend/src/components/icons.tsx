@@ -99,6 +99,14 @@ export const LinkIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 단일 사용자 실루엣(머리+어깨) — 기본 프로필 아바타용. */
+export const UserIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+  </svg>
+);
+
 export const UsersIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />

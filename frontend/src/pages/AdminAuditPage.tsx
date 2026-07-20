@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listAuditLogs, type AuditLogFilter } from "@/api/admin";
 import { extractErrorMessage } from "@/api/client";
 import type { AdminAuditLog } from "@/api/types";
+import { PageHeader } from "@/components/PageHeader";
 import { Badge, EmptyState, ErrorState, LoadingState, Pagination } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
 import { auditActionLabel, auditActionTone, targetTypeLabel } from "@/lib/labels";
@@ -74,6 +75,7 @@ export function AdminAuditPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
+        <PageHeader>
         <h1 className="text-lg font-semibold">감사 로그</h1>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div>
@@ -139,6 +141,7 @@ export function AdminAuditPage() {
             </button>
           )}
         </div>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

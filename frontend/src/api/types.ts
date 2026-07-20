@@ -54,6 +54,14 @@ export interface FileNode {
   deleted_at: string | null;
   /** 내 즐겨찾기 여부 (Phase 8-2). 목록/단건 응답의 파생 필드, 없으면 false. */
   is_favorite: boolean;
+  /** 조상 폴더 경로("내 드라이브 / A / B"). 최근·즐겨찾기 응답에만 채워지는 파생 필드. */
+  location?: string;
+  /** 소유자 표시 이름 (Unix 스타일 소유자 열). 목록/단건 응답의 파생 필드. */
+  owner_name?: string;
+  /** 공유 그룹명 목록. 소유자 시점: 이 항목이 공유된 그룹들, 수신자 시점: 접근을 부여한 그룹. */
+  group_names?: string[];
+  /** 요청 사용자의 유효 권한. owner=소유자, 그 외 그룹 권한 수준. */
+  permission?: "owner" | "read" | "write" | "manage";
 }
 
 /** GET /api/files (페이지네이션). */

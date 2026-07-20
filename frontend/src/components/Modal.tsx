@@ -8,9 +8,16 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  /** 카드 최대 너비. 기본 md. */
+  size?: "md" | "lg";
 }
 
-export function Modal({ open, title, onClose, children, footer }: ModalProps) {
+const SIZE_CLASS: Record<NonNullable<ModalProps["size"]>, string> = {
+  md: "max-w-md",
+  lg: "max-w-lg",
+};
+
+export function Modal({ open, title, onClose, children, footer, size = "md" }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -28,19 +35,19 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
       onMouseDown={onClose}
     >
       <div
-        className="card w-full max-w-md p-5"
+        className={`card flex max-h-[90vh] w-full flex-col ${SIZE_CLASS[size]} p-5`}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex shrink-0 items-center justify-between">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button className="btn btn-ghost px-2 py-1" onClick={onClose} aria-label="닫기">
             ✕
           </button>
         </div>
-        <div>{children}</div>
-        {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{children}</div>
+        {footer && <div className="mt-5 flex shrink-0 justify-end gap-2">{footer}</div>}
       </div>
     </div>
   );

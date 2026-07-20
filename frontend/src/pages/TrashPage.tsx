@@ -4,6 +4,7 @@ import { extractErrorMessage } from "@/api/client";
 import { listTrash, permanentDeleteFile, restoreFile } from "@/api/files";
 import type { FileNode } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import { FileIcon, FolderIcon, RestoreIcon, TrashIcon } from "@/components/icons";
@@ -63,8 +64,10 @@ export function TrashPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <h1 className="text-lg font-semibold">휴지통</h1>
-        <p className="mt-0.5 text-sm text-muted">삭제한 항목을 복구하거나 영구 삭제할 수 있습니다.</p>
+        <PageHeader>
+          <h1 className="text-lg font-semibold">휴지통</h1>
+          <p className="mt-0.5 text-sm text-muted">삭제한 항목을 복구하거나 영구 삭제할 수 있습니다.</p>
+        </PageHeader>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
