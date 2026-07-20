@@ -37,6 +37,28 @@ KEEPALIVE_SECONDS = 30.0
 EventType = str  # upload | version | folder | rename | move | delete | restore | permission
 
 
+async def _normalize_container(parent_folder_id: int | None) -> int | None:
+    """이벤트의 parent_folder_id 를 프론트/리스트 API 규약(개인 루트 = null)에 맞춘다.
+
+    개인 드라이브 루트는 실제로는 `parent_folder_id IS NULL` 인 폴더 행이지만, 프론트는 이를
+    `null` 로 표현하고 리스트 API 도 `parent_id=null` 로 받는다. 발행부는 컨테이너의 실제 id
+    (`get_root_folder().id`)를 실어 보내므로, 그대로면 프론트의 `parent_folder_id === 현재폴더`
+    매칭이 `숫자 === null` 로 어긋나 **루트에서 실시간 반영이 되지 않는다**. 컨테이너가 개인
+    루트(parent NULL & group NULL)면 null 로 정규화해 이 불일치를 없앤다.
+
+    그룹/공유 루트는 프론트가 실제 폴더 id 를 rootId 로 쓰므로 `group_id is None` 가드로 제외한다
+    (정규화하면 오히려 그쪽 매칭이 깨진다). 컨테이너 행은 항상 기존 커밋된 폴더라 별도 세션 조회로
+    안전하다. 루트가 아닌 일반 폴더는 그대로 둔다.
+    """
+    if parent_folder_id is None:
+        return None
+    async with SessionFactory() as session:
+        container = await session.get(File, parent_folder_id)
+    if container is not None and container.parent_folder_id is None and container.group_id is None:
+        return None
+    return parent_folder_id
+
+
 async def publish_file_event(
     *,
     type: EventType,
@@ -53,7 +75,7 @@ async def publish_file_event(
     payload: dict[str, Any] = {
         "type": type,
         "file_id": file_id,
-        "parent_folder_id": parent_folder_id,
+        "parent_folder_id": await _normalize_container(parent_folder_id),
         "actor_id": actor_id,
         "name": name,
         "ts": ts or datetime.now(UTC).isoformat(),
