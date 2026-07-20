@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import io
 import os
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Literal
 
 from sqlalchemy import Select, func, select, text, update
@@ -25,11 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers, UploadFile
 
 from app.core.metrics import observe_download_bytes
-from app.models import File, FileVersion, User
+from app.models import File, FileGroupPermission, FileVersion, Group, User
 from app.services import file_events as file_events_service
 from app.services import permissions as permissions_service
 from app.services import previews as previews_service
 from app.services import thumbnails as thumbnails_service
+from app.services.groups import get_user_group_ids
 from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
 
@@ -106,6 +109,135 @@ async def get_root_folder(session: AsyncSession, user_id: int) -> File:
 
 async def get_file(session: AsyncSession, file_id: int) -> File | None:
     return await session.get(File, file_id)
+
+
+async def annotate_location(
+    session: AsyncSession, user: User, files: list[File]
+) -> None:
+    """각 파일에 조상 폴더 경로 문자열 `location` 을 in-place 부착한다(최근·즐겨찾기 위치 표기용).
+
+    경로는 최상위부터 직속 부모까지 폴더명을 " / " 로 이은 것이다. 루트 폴더(name='root')는
+    실제 이름 대신 소유 여부에 따라 "내 드라이브"(내 파일) 또는 "내 드라이브 / 공유"(타인 공유)로
+    대체한다 — 통합 드라이브에서 "공유됨"이 내 드라이브 아래 가상 "공유" 폴더로 합쳐지므로 위치
+    문자열도 이에 맞춘다. 부모 체인은 필요한 폴더만 배치로 모아 조회하므로(레벨당 IN 1회) N+1 회피.
+    """
+    cache: dict[int, tuple[str, int | None]] = {}  # folder_id -> (name, parent_id)
+    need = {f.parent_folder_id for f in files if f.parent_folder_id is not None}
+    while need:
+        rows = (
+            await session.execute(
+                select(File.id, File.name, File.parent_folder_id).where(
+                    File.id.in_(need)
+                )
+            )
+        ).all()
+        for fid, name, pid in rows:
+            cache[fid] = (name, pid)
+        need = {
+            pid
+            for (_, pid) in cache.values()
+            if pid is not None and pid not in cache
+        }
+
+    for f in files:
+        names: list[str] = []
+        pid = f.parent_folder_id
+        while pid is not None and pid in cache:
+            name, parent = cache[pid]
+            if parent is None:  # 루트 폴더 도달 — 실제 이름은 넣지 않고 접두사로 대체
+                break
+            names.append(name)
+            pid = parent
+        names.reverse()
+        prefix = "내 드라이브" if f.user_id == user.id else "내 드라이브 / 공유"
+        f.location = " / ".join([prefix, *names])  # type: ignore[attr-defined]
+
+
+async def annotate_owner_names(
+    session: AsyncSession, files: Sequence[File]
+) -> None:
+    """각 파일에 소유자 표시명 `owner_name` 을 in-place 부착한다. 소유자 id 를 배치로 한 번에 조회.
+
+    소유자 표시명은 목록/공유 응답 공통으로 필요하므로 별도 헬퍼로 분리한다.
+    """
+    if not files:
+        return
+    owner_ids = {f.user_id for f in files}
+    rows = (
+        await session.execute(
+            select(User.id, User.display_name).where(User.id.in_(owner_ids))
+        )
+    ).all()
+    name_by_id = {uid: name for uid, name in rows}
+    for f in files:
+        f.owner_name = name_by_id.get(f.user_id, "")  # type: ignore[attr-defined]
+
+
+async def annotate_listing_meta(
+    session: AsyncSession, user: User, files: Sequence[File]
+) -> None:
+    """각 파일에 소유자/그룹/권한 파생 필드를 in-place 부착한다(통합 드라이브 목록 컬럼용).
+
+    부착 필드 (schemas.files.FileResponse):
+      - owner_name:  파일 소유자(files.user_id)의 표시명.
+      - permission:  요청자의 유효 권한 — 소유자면 "owner", 아니면 그룹 수준(read/write/manage).
+      - group_names: 소유 항목이면 이 파일에 직접 부여된(미만료) 그룹명들(내가 공유한 대상),
+                     공유받은 항목이면 접근을 부여한 그룹명들(직접 부여 우선, 없으면 상속 소스).
+
+    효율(핫패스 N+1 회피): 소유자명 1 배치, 파일들의 직접 부여 1 배치로 흔한 경로를 끝낸다.
+    상속으로만 접근하는 드문 항목만 항목당 상속 판정(get_effective_grant)으로 폴백한다.
+    """
+    if not files:
+        return
+
+    await annotate_owner_names(session, files)
+
+    # 파일들의 직접 부여(미만료)를 그룹명과 함께 한 번에 모은다 — 소유자의 "공유 대상" 표기와
+    # 공유받은 항목의 직접 부여 매칭에 공용으로 쓴다. 그룹명순으로 안정 정렬.
+    now = datetime.now(UTC)
+    file_ids = [f.id for f in files]
+    grant_rows = (
+        await session.execute(
+            select(
+                FileGroupPermission.file_id,
+                FileGroupPermission.group_id,
+                FileGroupPermission.permission,
+                Group.name,
+            )
+            .join(Group, Group.id == FileGroupPermission.group_id)
+            .where(
+                FileGroupPermission.file_id.in_(file_ids),
+                (FileGroupPermission.expires_at.is_(None))
+                | (FileGroupPermission.expires_at > now),
+            )
+            .order_by(Group.name.asc())
+        )
+    ).all()
+    directs_by_file: dict[int, list[tuple[int, str, str]]] = {}
+    for fid, gid, perm, gname in grant_rows:
+        directs_by_file.setdefault(fid, []).append((gid, perm, gname))
+
+    # 공유받은 항목의 직접 부여 매칭에 쓸 내 활성 그룹 id (한 번만 조회).
+    user_group_ids = await get_user_group_ids(session, user.id)
+    user_group_id_set = set(user_group_ids)
+
+    for f in files:
+        directs = directs_by_file.get(f.id, [])
+        if f.user_id == user.id:
+            # 소유 항목 — 전권. group_names 는 내가 공유한 그룹들(직접 부여 그룹명).
+            # (file,group) 는 UNIQUE 이므로 한 파일의 그룹명은 서로 다르다 — 중복 제거 불필요.
+            f.permission = "owner"  # type: ignore[attr-defined]
+            f.group_names = [gname for _, _, gname in directs]  # type: ignore[attr-defined]
+            continue
+        # 공유받은 항목 — 파일 자체의 직접 부여(내 그룹) 우선.
+        level, names = permissions_service.select_direct_grant(directs, user_group_id_set)
+        if level is None:
+            # 직접 부여가 없으면 상속으로 접근하는 항목 — 항목당 상속 판정으로 폴백.
+            level, names = await permissions_service.get_effective_grant(
+                session, user, f, group_ids=user_group_ids
+            )
+        f.permission = level.value if level is not None else "read"  # type: ignore[attr-defined]
+        f.group_names = names  # type: ignore[attr-defined]
 
 
 async def _resolve_parent(

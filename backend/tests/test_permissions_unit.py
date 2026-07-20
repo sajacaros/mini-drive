@@ -11,9 +11,12 @@ from datetime import UTC, datetime, timedelta
 
 from app.models.enums import GroupPermission
 from app.services.permissions import (
+    AncestorGrantRow,
     AncestorPermRow,
     permission_covers,
+    resolve_effective_grant,
     resolve_effective_permission,
+    select_direct_grant,
 )
 
 NOW = datetime(2026, 7, 18, tzinfo=UTC)
@@ -106,6 +109,102 @@ class TestExpiry:
                 _row(2, "read", file_id=20)]
         level, src = resolve_effective_permission(rows, NOW)
         assert level is GroupPermission.READ and src == 20
+
+
+def _grant(
+    depth: int,
+    group_id: int,
+    group_name: str,
+    permission: str,
+    *,
+    file_id: int = 0,
+    inherit: bool = True,
+    expires_at: datetime | None = None,
+) -> AncestorGrantRow:
+    return AncestorGrantRow(
+        depth=depth,
+        file_id=file_id or (100 + depth),
+        group_id=group_id,
+        group_name=group_name,
+        permission=permission,
+        inherit_to_children=inherit,
+        expires_at=expires_at,
+    )
+
+
+class TestSelectDirectGrant:
+    """리스팅 배치 경로 — 파일 자체의 직접 부여 중 내 그룹 것만으로 권한/그룹명 선택."""
+
+    def test_no_matching_group_returns_none(self) -> None:
+        # 직접 부여가 있어도 내 그룹이 아니면 (None, []) — 호출자가 상속 폴백.
+        level, names = select_direct_grant([(9, "write", "기획팀")], {1, 2})
+        assert level is None and names == []
+
+    def test_single_matching_grant(self) -> None:
+        level, names = select_direct_grant([(2, "read", "디자인팀")], {1, 2})
+        assert level is GroupPermission.READ and names == ["디자인팀"]
+
+    def test_highest_level_among_my_groups(self) -> None:
+        # 여러 내 그룹의 직접 부여 — 최고 수준(write) 적용, 그룹명은 매칭된 모두.
+        grants = [(1, "read", "A팀"), (2, "write", "B팀")]
+        level, names = select_direct_grant(grants, {1, 2})
+        assert level is GroupPermission.WRITE
+        assert names == ["A팀", "B팀"]
+
+    def test_ignores_non_member_groups_in_names(self) -> None:
+        # 소유자가 다른 그룹에도 공유했더라도 내 그룹명만 노출된다.
+        grants = [(1, "read", "내팀"), (9, "manage", "남의팀")]
+        level, names = select_direct_grant(grants, {1})
+        assert level is GroupPermission.READ and names == ["내팀"]
+
+
+class TestResolveEffectiveGrant:
+    """리스팅 상속 폴백 — 조상 경로에서 유효 권한 수준 + 부여 그룹명."""
+
+    def test_no_rows_returns_none(self) -> None:
+        level, names = resolve_effective_grant([], NOW)
+        assert level is None and names == []
+
+    def test_self_direct_grant(self) -> None:
+        level, names = resolve_effective_grant(
+            [_grant(0, 1, "내팀", "manage", file_id=5)], NOW
+        )
+        assert level is GroupPermission.MANAGE and names == ["내팀"]
+
+    def test_inherited_from_ancestor(self) -> None:
+        # 부모(depth1)의 상속 부여로 접근 — 그 그룹명을 돌려준다.
+        level, names = resolve_effective_grant(
+            [_grant(1, 3, "상위팀", "read", file_id=10)], NOW
+        )
+        assert level is GroupPermission.READ and names == ["상위팀"]
+
+    def test_closest_ancestor_wins_over_farther(self) -> None:
+        rows = [
+            _grant(2, 1, "조부팀", "manage", file_id=20),
+            _grant(1, 2, "부모팀", "read", file_id=10),
+        ]
+        level, names = resolve_effective_grant(rows, NOW)
+        assert level is GroupPermission.READ and names == ["부모팀"]
+
+    def test_same_depth_highest_level_all_names(self) -> None:
+        # 같은 소스(동거리)의 여러 그룹 — 최고 수준 + 그룹명 모두(그룹명순 정렬 입력).
+        rows = [
+            _grant(1, 1, "A팀", "read", file_id=10),
+            _grant(1, 2, "B팀", "manage", file_id=10),
+        ]
+        level, names = resolve_effective_grant(rows, NOW)
+        assert level is GroupPermission.MANAGE and names == ["A팀", "B팀"]
+
+    def test_non_inheriting_ancestor_ignored(self) -> None:
+        rows = [_grant(1, 1, "부모팀", "manage", file_id=10, inherit=False)]
+        level, names = resolve_effective_grant(rows, NOW)
+        assert level is None and names == []
+
+    def test_expired_ancestor_ignored(self) -> None:
+        past = NOW - timedelta(hours=1)
+        rows = [_grant(1, 1, "부모팀", "manage", file_id=10, expires_at=past)]
+        level, names = resolve_effective_grant(rows, NOW)
+        assert level is None and names == []
 
 
 class TestPermissionCovers:

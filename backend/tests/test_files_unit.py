@@ -12,6 +12,7 @@ import pytest
 from app.api.routes.files import _content_disposition
 from app.services.files import (
     FileServiceError,
+    annotate_location,
     build_file_key,
     build_version_key,
     ensure_file_access,
@@ -87,6 +88,26 @@ class TestEnsureFileAccess:
         with pytest.raises(FileServiceError) as exc:
             await ensure_file_access(None, user, None)  # type: ignore[arg-type]
         assert exc.value.status_code == 404
+
+
+class TestLocationPrefix:
+    """루트 직속(부모 없음) 항목의 위치 접두사 — 소유 여부에 따라 갈린다.
+
+    부모 폴더가 없으면(parent_folder_id is None) 조상 배치 조회가 일어나지 않으므로 session
+    없이 검증할 수 있다. 통합 드라이브에서 공유받은 항목은 "내 드라이브 / 공유" 아래로 합쳐진다.
+    """
+
+    async def test_owned_root_item_prefix(self) -> None:
+        user = SimpleNamespace(id=1)
+        file = SimpleNamespace(user_id=1, parent_folder_id=None)
+        await annotate_location(None, user, [file])  # type: ignore[arg-type]
+        assert file.location == "내 드라이브"
+
+    async def test_shared_root_item_prefix(self) -> None:
+        user = SimpleNamespace(id=1)
+        file = SimpleNamespace(user_id=2, parent_folder_id=None)  # 타인 소유
+        await annotate_location(None, user, [file])  # type: ignore[arg-type]
+        assert file.location == "내 드라이브 / 공유"
 
 
 class TestContentDisposition:

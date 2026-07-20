@@ -26,6 +26,16 @@ class FileResponse(BaseModel):
     deleted_at: datetime | None = None
     # 파생 필드 (Phase 8-2) — 서비스가 File 인스턴스에 부착하면 채워지고, 없으면 False.
     is_favorite: bool = False
+    # 파생 필드 — 조상 폴더 경로("내 드라이브 / A / B"). 최근·즐겨찾기 목록에서 위치 표기용.
+    # 서비스가 부착하지 않으면 빈 문자열(일반 목록 응답은 breadcrumb 로 위치를 알 수 있어 생략).
+    location: str = ""
+    # 파생 필드 (통합 드라이브 — Unix 유사 소유자/그룹/권한 컬럼). 서비스가 부착하지 않으면 기본값.
+    #  - owner_name:  파일 소유자(files.user_id)의 표시명.
+    #  - group_names: 소유 항목이면 내가 공유한 그룹명들, 공유받은 항목이면 접근을 부여한 그룹명들.
+    #  - permission:  요청자의 유효 권한. 소유자는 "owner", 그 외에는 read/write/manage.
+    owner_name: str = ""
+    group_names: list[str] = Field(default_factory=list)
+    permission: str = "owner"
 
 
 class FileListResponse(BaseModel):

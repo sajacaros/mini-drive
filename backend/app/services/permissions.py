@@ -113,6 +113,130 @@ def resolve_effective_permission(
     return best_level, best_file
 
 
+# --- 리스팅 메타 판정 (통합 드라이브 group_names/permission) ------------------
+#
+# 파일 목록의 Unix 유사 그룹/권한 컬럼을 채우기 위한 순수 판정 로직이다. 파일 자체의 직접
+# 부여(batch 조회)로 끝나는 흔한 경로와, 조상 상속을 따라가야 하는 드문 경로를 나눈다.
+
+
+@dataclass(frozen=True)
+class AncestorGrantRow:
+    """조상 경로에서 수집한 (그룹명 포함) 권한 행. depth 0 = 대상 파일 자신, 1 = 부모, …."""
+
+    depth: int
+    file_id: int
+    group_id: int
+    group_name: str
+    permission: str
+    inherit_to_children: bool
+    expires_at: datetime | None
+
+
+def _highest(levels: Iterable[GroupPermission]) -> GroupPermission:
+    """권한 수준들 중 최고(manage > write > read)."""
+    return max(levels, key=lambda p: _RANK[p])
+
+
+def _dedup(names: Iterable[str]) -> list[str]:
+    """순서를 보존하며 중복 제거."""
+    out: list[str] = []
+    for name in names:
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def select_direct_grant(
+    direct_grants: Iterable[tuple[int, str, str]],
+    user_group_ids: set[int],
+) -> tuple[GroupPermission | None, list[str]]:
+    """파일 자체의 직접 부여(미만료) 중 사용자 소속 그룹 것만으로 유효 권한/부여 그룹명을 고른다.
+
+    direct_grants 원소는 (group_id, permission, group_name). 파일 자신(depth 0)의 부여는
+    inherit_to_children 과 무관하게 항상 적용되므로, 만료 필터만 통과하면 유효하다.
+    반환: (유효 권한 수준, 부여 그룹명들). 내 그룹의 직접 부여가 없으면 (None, []) — 호출자가
+    상속 판정으로 폴백한다.
+    """
+    mine = [(perm, name) for gid, perm, name in direct_grants if gid in user_group_ids]
+    if not mine:
+        return None, []
+    best = _highest(GroupPermission(perm) for perm, _ in mine)
+    return best, _dedup(name for _, name in mine)
+
+
+def resolve_effective_grant(
+    rows: Iterable[AncestorGrantRow], now: datetime
+) -> tuple[GroupPermission | None, list[str]]:
+    """조상 경로 권한 행들에서 유효 권한 수준 + 부여 그룹명을 판정한다 (PRD 5.7, 상속 포함).
+
+    resolve_effective_permission 과 동일한 규칙(만료/inherit 필터 → 최근접 조상 → 동거리 최고
+    수준)을 쓰되, 접근을 부여한 최근접 소스의 그룹명들을 함께 돌려준다(그룹 컬럼 표기용).
+    반환: (유효 권한 수준, 부여 그룹명들). 없으면 (None, []).
+    """
+    applicable = [
+        r
+        for r in rows
+        if (r.expires_at is None or r.expires_at > now)
+        and (r.depth == 0 or r.inherit_to_children)
+    ]
+    if not applicable:
+        return None, []
+    min_depth = min(r.depth for r in applicable)
+    at_source = [r for r in applicable if r.depth == min_depth]
+    best = _highest(GroupPermission(r.permission) for r in at_source)
+    return best, _dedup(r.group_name for r in at_source)
+
+
+# 조상 경로에서 사용자 소속 그룹의 권한 행을 그룹명과 함께 모은다 (리스팅 상속 폴백용).
+_ANCESTOR_USER_GRANT_SQL = text(
+    """
+    WITH RECURSIVE ancestors AS (
+        SELECT id, parent_folder_id, 0 AS depth
+        FROM files WHERE id = :file_id
+        UNION ALL
+        SELECT f.id, f.parent_folder_id, a.depth + 1
+        FROM files f JOIN ancestors a ON f.id = a.parent_folder_id
+    )
+    SELECT a.depth AS depth, p.file_id AS file_id, p.group_id AS group_id,
+           g.name AS group_name, p.permission AS permission,
+           p.inherit_to_children AS inherit_to_children, p.expires_at AS expires_at
+    FROM ancestors a
+    JOIN file_group_permissions p ON p.file_id = a.id
+    JOIN groups g ON g.id = p.group_id
+    WHERE p.group_id IN :group_ids
+    """
+).bindparams(bindparam("group_ids", expanding=True))
+
+
+async def get_effective_grant(
+    session: AsyncSession, user: User, file: File, group_ids: list[int] | None = None
+) -> tuple[GroupPermission | None, list[str]]:
+    """상속 포함 유효 그룹 권한 수준 + 부여 그룹명 (리스팅 상속 폴백 — 항목당 1 쿼리).
+
+    group_ids 를 넘기면 재조회를 아낀다(리스팅 배치에서 한 번만 조회해 재사용).
+    """
+    if group_ids is None:
+        group_ids = await get_user_group_ids(session, user.id)
+    if not group_ids:
+        return None, []
+    result = await session.execute(
+        _ANCESTOR_USER_GRANT_SQL, {"file_id": file.id, "group_ids": group_ids}
+    )
+    rows = [
+        AncestorGrantRow(
+            depth=r.depth,
+            file_id=r.file_id,
+            group_id=r.group_id,
+            group_name=r.group_name,
+            permission=r.permission,
+            inherit_to_children=r.inherit_to_children,
+            expires_at=r.expires_at,
+        )
+        for r in result
+    ]
+    return resolve_effective_grant(rows, datetime.now(UTC))
+
+
 # --- CTE 판정 (사용자 소속 그룹 기준) ----------------------------------------
 
 # 대상 파일에서 루트까지 조상 경로를 훑어 사용자 소속 그룹의 권한 행을 모은다.

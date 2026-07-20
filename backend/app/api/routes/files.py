@@ -28,7 +28,7 @@ from app.api.download import content_disposition as _content_disposition
 from app.api.download import gateway_download_response, gateway_inline_response
 from app.api.preview import render_preview
 from app.core.config import settings
-from app.models.enums import UserStatus
+from app.models.enums import GroupPermission, UserStatus
 from app.schemas.files import (
     DownloadTicketResponse,
     FileListResponse,
@@ -115,6 +115,8 @@ async def list_favorites(
 ) -> FileListResponse:
     """내 즐겨찾기 목록 (Phase 8-2). 삭제·접근권 상실 파일은 숨긴다(조회 시 권한 재검증)."""
     items, total = await favorites_service.list_favorites(session, user, page, size)
+    await files_service.annotate_location(session, user, items)
+    await files_service.annotate_listing_meta(session, user, items)
     responses = [FileResponse.model_validate(f) for f in items]
     return FileListResponse(items=responses, total=total, page=page, size=size)
 
@@ -130,6 +132,8 @@ async def list_recent(
     """최근 이용 항목 (Phase 8-3, 최신순). 삭제·접근불가 제외."""
     items = await recents_service.list_recent(session, user, limit)
     await favorites_service.annotate_is_favorite(session, user, items)
+    await files_service.annotate_location(session, user, items)
+    await files_service.annotate_listing_meta(session, user, items)
     return [FileResponse.model_validate(f) for f in items]
 
 
@@ -137,6 +141,12 @@ async def list_recent(
 async def shared_with_me(user: CurrentUser, session: DbSession) -> SharedWithMeResponse:
     """내 소속 그룹에 공유된 항목(부여 지점) 목록 (PRD 3.1.3). 폴더로 진입해 하위 탐색."""
     items = await permissions_service.list_shared_with_me(session, user)
+    # 소유자명은 배치로, permission/group_names 는 이미 서비스가 돌려준 부여 행에서 그대로 채운다
+    # (공유받은 항목이므로 permission = 부여 수준, group_names = 부여 그룹명 한 건).
+    await files_service.annotate_owner_names(session, [item.file for item in items])
+    for item in items:
+        item.file.permission = item.permission  # type: ignore[attr-defined]
+        item.file.group_names = [item.group_name]  # type: ignore[attr-defined]
     return SharedWithMeResponse(
         items=[
             SharedItemResponse(
@@ -322,6 +332,7 @@ async def list_files(
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     await favorites_service.annotate_is_favorite(session, user, items)
+    await files_service.annotate_listing_meta(session, user, items)
     responses = [FileResponse.model_validate(f) for f in items]
     return FileListResponse(items=responses, total=total, page=page, size=size)
 
@@ -384,6 +395,7 @@ async def get_metadata(file_id: int, user: CurrentUser, session: DbSession) -> F
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     node.is_favorite = await favorites_service.is_favorite(session, user.id, node.id)  # type: ignore[attr-defined]
+    await files_service.annotate_listing_meta(session, user, [node])
     return FileResponse.model_validate(node)
 
 
@@ -690,7 +702,15 @@ async def grant_permission(
     user: CurrentUser,
     session: DbSession,
 ) -> DirectPermissionResponse:
-    """그룹 권한 부여 (PRD 6.5). 소유자/manage 권한자만. (file,group) 중복은 upsert."""
+    """그룹 권한 부여 (PRD 6.5). 소유자/manage 권한자만. (file,group) 중복은 upsert.
+
+    부여 가능한 수준은 읽기/쓰기로 제한한다 — manage 신규 부여는 정책상 중단(소유자는 이미 전권).
+    """
+    if payload.permission == GroupPermission.MANAGE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="관리 권한은 부여할 수 없습니다. 읽기 또는 쓰기만 부여할 수 있습니다.",
+        )
     try:
         row = await permissions_service.grant_permission(
             session,
@@ -756,7 +776,15 @@ async def update_permission(
     user: CurrentUser,
     session: DbSession,
 ) -> DirectPermissionResponse:
-    """그룹 권한 수정 (PRD 6.5). permission/inherit_to_children/expires_at 부분 갱신."""
+    """그룹 권한 수정 (PRD 6.5). permission/inherit_to_children/expires_at 부분 갱신.
+
+    수정 시에도 manage 로의 승격은 막는다(부여 정책과 일치). 기존 manage 는 읽기/쓰기로 강등 가능.
+    """
+    if payload.permission == GroupPermission.MANAGE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="관리 권한으로 변경할 수 없습니다. 읽기 또는 쓰기만 설정할 수 있습니다.",
+        )
     try:
         row = await permissions_service.update_permission(
             session,
