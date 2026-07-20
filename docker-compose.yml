@@ -36,6 +36,10 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       REDIS_URL: redis://redis:6379/0
+      # rate limiting 토글 — 기본 true(운영 안전). E2E 는 한 계정이 짧은 시간에 다수
+      # 업로드/로그인을 수행해 분당 한도에 걸리므로, 테스트 실행 시 RATE_LIMIT_ENABLED=false 로
+      # 기동해 비활성화한다 (config.py: "테스트 편의" 스위치).
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
       # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
     depends_on:
