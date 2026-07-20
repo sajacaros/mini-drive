@@ -5,14 +5,23 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.models.enums import UserRole, UserStatus
 from app.services.admin import (
     AdminActionError,
+    check_role_change_authorization,
     check_self_privilege_guard,
     check_status_update,
+    check_super_admin_target_guard,
 )
+
+
+def _u(user_id: int, role: UserRole) -> SimpleNamespace:
+    """가드가 읽는 최소 속성(id/role)만 가진 User 스텁."""
+    return SimpleNamespace(id=user_id, role=role)
 
 
 class TestStatusUpdate:
@@ -39,3 +48,66 @@ class TestSelfPrivilegeGuard:
         # 자기 자신이라도 admin/active 유지 변경은 허용 (예: max_storage 만 변경).
         check_self_privilege_guard(1, 1, UserStatus.ACTIVE, UserRole.ADMIN)
         check_self_privilege_guard(1, 1, None, None)
+
+    def test_self_super_admin_kept_allowed(self) -> None:
+        # super_admin 도 admin 계열 유지면 허용 (강등 아님).
+        check_self_privilege_guard(1, 1, None, UserRole.SUPER_ADMIN)
+
+
+class TestRoleChangeAuthorization:
+    def test_super_admin_can_grant_admin(self) -> None:
+        check_role_change_authorization(
+            _u(1, UserRole.SUPER_ADMIN), _u(2, UserRole.USER), UserRole.ADMIN
+        )
+
+    def test_super_admin_can_revoke_admin(self) -> None:
+        check_role_change_authorization(
+            _u(1, UserRole.SUPER_ADMIN), _u(2, UserRole.ADMIN), UserRole.USER
+        )
+
+    def test_regular_admin_cannot_change_role(self) -> None:
+        with pytest.raises(AdminActionError) as exc:
+            check_role_change_authorization(
+                _u(1, UserRole.ADMIN), _u(2, UserRole.USER), UserRole.ADMIN
+            )
+        assert exc.value.status_code == 403
+
+    def test_cannot_assign_super_admin_via_api(self) -> None:
+        with pytest.raises(AdminActionError) as exc:
+            check_role_change_authorization(
+                _u(1, UserRole.SUPER_ADMIN), _u(2, UserRole.ADMIN), UserRole.SUPER_ADMIN
+            )
+        assert exc.value.status_code == 400
+
+    def test_cannot_demote_super_admin(self) -> None:
+        with pytest.raises(AdminActionError) as exc:
+            check_role_change_authorization(
+                _u(1, UserRole.SUPER_ADMIN), _u(2, UserRole.SUPER_ADMIN), UserRole.ADMIN
+            )
+        assert exc.value.status_code == 400
+
+    def test_noop_when_role_unchanged_or_none(self) -> None:
+        # 같은 역할이거나 None 이면 인가 검사를 건너뛴다(권한 없어도 통과).
+        check_role_change_authorization(
+            _u(1, UserRole.ADMIN), _u(2, UserRole.ADMIN), UserRole.ADMIN
+        )
+        check_role_change_authorization(
+            _u(1, UserRole.ADMIN), _u(2, UserRole.USER), None
+        )
+
+
+class TestSuperAdminTargetGuard:
+    def test_other_actor_cannot_modify_super_admin(self) -> None:
+        with pytest.raises(AdminActionError) as exc:
+            check_super_admin_target_guard(
+                _u(1, UserRole.ADMIN), _u(2, UserRole.SUPER_ADMIN)
+            )
+        assert exc.value.status_code == 403
+
+    def test_super_admin_can_modify_self(self) -> None:
+        check_super_admin_target_guard(
+            _u(2, UserRole.SUPER_ADMIN), _u(2, UserRole.SUPER_ADMIN)
+        )
+
+    def test_non_super_admin_target_unrestricted(self) -> None:
+        check_super_admin_target_guard(_u(1, UserRole.ADMIN), _u(2, UserRole.USER))

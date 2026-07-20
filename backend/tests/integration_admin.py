@@ -247,6 +247,30 @@ async def scenario() -> None:
         assert r.status_code == 401, r.text
         _ok("GET /users/lookup — 정확 일치 200 / 정규화 / 부분·inactive·미인증 차단")
 
+        # 6b. search — 이름/이메일 부분 일치 목록 (그룹 초대 클릭 선택 UX).
+        # 부분 일치 200(active Bob), 자기 자신·inactive 제외, 최소 2자 강제, 미인증 401.
+        r = await c.get("/api/users/search", params={"q": "Bob"}, headers=alice_h)
+        assert r.status_code == 200, r.text
+        assert r.json() == [
+            {"id": ids["bob"], "email": BOB["email"], "display_name": "Bob"}
+        ]
+        # 이메일 조각으로도 부분 일치.
+        r = await c.get("/api/users/search", params={"q": "bob@ex"}, headers=alice_h)
+        assert r.status_code == 200 and [u["id"] for u in r.json()] == [ids["bob"]]
+        # 자기 자신은 결과에서 제외.
+        r = await c.get("/api/users/search", params={"q": "alice"}, headers=alice_h)
+        assert r.status_code == 200 and r.json() == [], r.text
+        # 비활성(inactive) 사용자는 검색되지 않음.
+        r = await c.get("/api/users/search", params={"q": "carol"}, headers=alice_h)
+        assert r.status_code == 200 and r.json() == [], r.text
+        # 최소 2자 미만은 422.
+        r = await c.get("/api/users/search", params={"q": "b"}, headers=alice_h)
+        assert r.status_code == 422, r.text
+        # 미인증 401.
+        r = await c.get("/api/users/search", params={"q": "bob"})
+        assert r.status_code == 401, r.text
+        _ok("GET /users/search — 부분 일치 200 / 자기·inactive 제외 / 최소 2자 / 미인증 차단")
+
         # 7. 로그인 rate limit — 6회째 429 (Retry-After), 다른 IP 독립.
         settings.rate_limit_login_per_min = 5
         await redis_client.flushdb()  # rl: 카운터 초기화.

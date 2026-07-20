@@ -7,7 +7,13 @@ import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 import { Badge, EmptyState, ErrorState, LoadingState, Pagination } from "@/components/ui";
 import { formatBytes, formatDateTime } from "@/lib/format";
-import { userStatusLabel, userStatusTone } from "@/lib/labels";
+import {
+  globalRoleLabel,
+  globalRoleTone,
+  userStatusLabel,
+  userStatusTone,
+} from "@/lib/labels";
+import { useAuthStore } from "@/store/auth";
 
 type Filter = "all" | "active" | "inactive";
 const FILTER_TO_STATUS: Record<Filter, UserStatus | undefined> = {
@@ -21,6 +27,9 @@ const GB = 1024 * 1024 * 1024;
 
 export function AdminUsersPage() {
   const toast = useToast();
+  const me = useAuthStore((s) => s.user);
+  // 관리자 권한 부여/회수는 최고 관리자(super_admin)만 가능.
+  const isSuperAdmin = me?.role === "super_admin";
   const [filter, setFilter] = useState<Filter>("all");
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
@@ -61,6 +70,18 @@ export function AdminUsersPage() {
       await load();
     } catch (err) {
       toast.error(extractErrorMessage(err, "상태 변경에 실패했습니다."));
+    }
+  };
+
+  // user ↔ admin 토글 (super_admin 전용). super_admin 계정은 대상이 되지 않는다.
+  const onToggleRole = async (u: AdminUser) => {
+    const next = u.role === "admin" ? "user" : "admin";
+    try {
+      await updateUser(u.id, { role: next });
+      toast.success(next === "admin" ? "관리자로 지정했습니다." : "관리자를 해제했습니다.");
+      await load();
+    } catch (err) {
+      toast.error(extractErrorMessage(err, "역할 변경에 실패했습니다."));
     }
   };
 
@@ -130,7 +151,11 @@ export function AdminUsersPage() {
                       </div>
                     </td>
                     <td className="px-4 py-2.5">
-                      {u.role === "admin" ? <Badge tone="accent">admin</Badge> : <span className="text-muted">user</span>}
+                      {u.role === "user" ? (
+                        <span className="text-muted">일반</span>
+                      ) : (
+                        <Badge tone={globalRoleTone(u.role)}>{globalRoleLabel(u.role)}</Badge>
+                      )}
                     </td>
                     <td className="px-4 py-2.5">
                       <Badge tone={userStatusTone(u.status)}>{userStatusLabel(u.status)}</Badge>
@@ -140,23 +165,35 @@ export function AdminUsersPage() {
                     </td>
                     <td className="px-4 py-2.5 text-muted">{formatDateTime(u.created_at)}</td>
                     <td className="px-4 py-2.5">
-                      <div className="flex flex-wrap justify-end gap-2">
-                        <button
-                          className="btn btn-secondary"
-                          onClick={() => {
-                            setQuotaTarget(u);
-                            setQuotaGb((u.max_storage / GB).toFixed(1));
-                          }}
-                        >
-                          할당량
-                        </button>
-                        <button
-                          className={u.status === "active" ? "btn btn-ghost text-danger" : "btn btn-secondary"}
-                          onClick={() => onToggleActive(u)}
-                        >
-                          {u.status === "active" ? "비활성화" : "활성화"}
-                        </button>
-                      </div>
+                      {u.role === "super_admin" ? (
+                        // 최고 관리자 계정은 다른 관리자가 수정할 수 없다(보호).
+                        <div className="flex justify-end">
+                          <span className="text-xs text-muted">보호된 계정</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => {
+                              setQuotaTarget(u);
+                              setQuotaGb((u.max_storage / GB).toFixed(1));
+                            }}
+                          >
+                            할당량
+                          </button>
+                          {isSuperAdmin && (
+                            <button className="btn btn-secondary" onClick={() => onToggleRole(u)}>
+                              {u.role === "admin" ? "관리자 해제" : "관리자 지정"}
+                            </button>
+                          )}
+                          <button
+                            className={u.status === "active" ? "btn btn-ghost text-danger" : "btn btn-secondary"}
+                            onClick={() => onToggleActive(u)}
+                          >
+                            {u.status === "active" ? "비활성화" : "활성화"}
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

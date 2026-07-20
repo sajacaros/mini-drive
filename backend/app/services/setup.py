@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password
 from app.models import AppSetting, SignupCode, User
-from app.models.enums import UserRole, UserStatus
+from app.models.enums import ADMIN_ROLES, UserRole, UserStatus
 from app.models.user import DEFAULT_MAX_STORAGE
 from app.services.signup_codes import create_signup_code
 from app.services.users import create_root_folder
@@ -35,9 +35,13 @@ class SetupError(Exception):
 
 
 async def admin_exists(session: AsyncSession) -> bool:
-    """활성 여부와 무관하게 admin role 사용자가 1명이라도 있으면 True."""
+    """활성 여부와 무관하게 admin/super_admin 사용자가 1명이라도 있으면 True.
+
+    셋업이 super_admin 만 만들 수도 있으므로 두 역할을 모두 센다 — 안 그러면 super_admin 만
+    있는 인스턴스에서 셋업이 재개방된다.
+    """
     result = await session.execute(
-        select(func.count()).select_from(User).where(User.role == UserRole.ADMIN)
+        select(func.count()).select_from(User).where(User.role.in_(ADMIN_ROLES))
     )
     return result.scalar_one() > 0
 
@@ -79,16 +83,18 @@ async def create_admin_account(
     password: str,
     *,
     display_name: str = "Administrator",
+    role: UserRole = UserRole.ADMIN,
 ) -> User:
-    """active/admin 계정 + 루트 폴더를 생성한다. flush 만 하고 커밋은 호출자가 한다.
+    """active 관리자 계정 + 루트 폴더를 생성한다. flush 만 하고 커밋은 호출자가 한다.
 
-    셋업 위저드와 CLI `create-admin`, 통합 테스트 부트스트랩이 공유하는 유일한 admin 생성 경로.
+    셋업 위저드와 CLI `create-admin`, 통합 테스트 부트스트랩이 공유하는 유일한 관리자 생성 경로.
+    셋업 위저드는 최초 계정을 super_admin 으로, CLI 는 기본 admin 으로 만든다.
     """
     admin = User(
         email=email,
         password_hash=hash_password(password),
         display_name=display_name,
-        role=UserRole.ADMIN,
+        role=role,
         status=UserStatus.ACTIVE,
     )
     session.add(admin)
@@ -102,6 +108,7 @@ async def perform_setup(
     *,
     admin_email: str,
     admin_password: str,
+    admin_display_name: str = "Administrator",
     signup_code: str | None,
     default_max_storage: int,
 ) -> tuple[User, SignupCode]:
@@ -124,7 +131,14 @@ async def perform_setup(
         # 다른 요청이 먼저 셋업을 잠갔다.
         raise SetupError(403, "이미 셋업이 완료되었습니다.")
 
-    admin = await create_admin_account(session, admin_email, admin_password)
+    # 최초 계정은 super_admin — 이후 다른 사용자에게 admin 권한을 부여/회수할 수 있다.
+    admin = await create_admin_account(
+        session,
+        admin_email,
+        admin_password,
+        display_name=admin_display_name or "Administrator",
+        role=UserRole.SUPER_ADMIN,
+    )
     await set_setting(session, DEFAULT_MAX_STORAGE_KEY, default_max_storage)
     code = await create_signup_code(
         session,

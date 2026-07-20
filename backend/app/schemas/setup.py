@@ -20,6 +20,8 @@ class SetupRequest(BaseModel):
 
     admin_email: Email
     admin_password: str = Field(min_length=8, max_length=128)
+    # 관리자 표시 이름. 비우면 서비스가 "Administrator" 로 대체한다.
+    admin_display_name: str = Field(default="", max_length=100)
     # None → 서버가 추측 불가 코드를 자동 생성한다.
     signup_code: str | None = Field(default=None, min_length=1, max_length=64)
     default_max_storage: int = Field(default=DEFAULT_MAX_STORAGE, ge=0)

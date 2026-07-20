@@ -40,6 +40,7 @@ async def setup(payload: SetupRequest, session: DbSession) -> SetupResponse:
             session,
             admin_email=payload.admin_email,
             admin_password=payload.admin_password,
+            admin_display_name=payload.admin_display_name.strip(),
             signup_code=payload.signup_code,
             default_max_storage=payload.default_max_storage,
         )

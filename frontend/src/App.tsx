@@ -16,6 +16,7 @@ import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPag
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
 import { GroupsPage } from "@/pages/GroupsPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { ProfilePage } from "@/pages/ProfilePage";
 import { PublicSharePage } from "@/pages/PublicSharePage";
 import { RecentPage } from "@/pages/RecentPage";
 import { RegisterPage } from "@/pages/RegisterPage";
@@ -76,6 +77,7 @@ function App() {
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
           </Route>
         </Route>
 

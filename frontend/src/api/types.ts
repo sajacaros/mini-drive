@@ -5,7 +5,8 @@
 
 // 가입 코드제 전환(Phase 6) 이후 사용자 상태는 active/inactive 뿐 (승인제 pending/rejected 제거).
 export type UserStatus = "active" | "inactive";
-export type UserRole = "user" | "admin";
+// super_admin: 셋업 최초 계정. 다른 사용자에게 admin 권한을 부여/회수할 수 있는 최상위 역할.
+export type UserRole = "user" | "admin" | "super_admin";
 
 /** GET /api/auth/me, 그리고 login/register 이후 사용자 정보. */
 export interface User {
@@ -385,6 +386,8 @@ export interface SetupStatusResponse {
 export interface SetupRequest {
   admin_email: string;
   admin_password: string;
+  /** 관리자 표시 이름. 비우면 서버가 "Administrator" 로 대체. */
+  admin_display_name?: string;
   /** 미지정(null/생략) 시 서버가 자동 생성. */
   signup_code?: string | null;
   default_max_storage?: number;

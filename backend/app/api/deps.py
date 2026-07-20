@@ -22,7 +22,7 @@ from app.core.ratelimit import check_rate_limit
 from app.core.redis import get_redis
 from app.core.security import TokenError, decode_token
 from app.models import User
-from app.models.enums import UserRole, UserStatus
+from app.models.enums import ADMIN_ROLES, UserStatus
 from app.services.users import get_user_by_id
 
 # auto_error=False 로 두어 누락 시 401(WWW-Authenticate) 을 직접 통일한다.
@@ -65,7 +65,8 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 async def require_admin(current_user: CurrentUser) -> User:
-    if current_user.role != UserRole.ADMIN:
+    # admin/super_admin 모두 관리자 라우터 통과 (super_admin 은 admin 의 상위).
+    if current_user.role not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="관리자 권한이 필요합니다.",

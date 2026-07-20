@@ -11,7 +11,7 @@ import {
   transferOwnership,
   updateGroup,
 } from "@/api/groups";
-import { lookupUserByEmail } from "@/api/users";
+import { searchUsers } from "@/api/users";
 import type { GroupDetail, GroupMember, GroupRole, UserLookup } from "@/api/types";
 import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
@@ -275,6 +275,7 @@ export function GroupDetailPage() {
       {inviteOpen && (
         <InviteMemberModal
           groupId={groupId}
+          existingMemberIds={new Set(group.members.map((m) => m.user_id))}
           onClose={() => setInviteOpen(false)}
           onInvited={() => {
             setInviteOpen(false);
@@ -439,54 +440,62 @@ function EditGroupModal({
 
 function InviteMemberModal({
   groupId,
+  existingMemberIds,
   onClose,
   onInvited,
 }: {
   groupId: number;
+  existingMemberIds: Set<number>;
   onClose: () => void;
   onInvited: () => void;
 }) {
   const toast = useToast();
-  const [email, setEmail] = useState("");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<UserLookup[]>([]);
+  // 클릭으로 확정한 초대 대상. null 이면 아직 검색 단계.
+  const [selected, setSelected] = useState<UserLookup | null>(null);
   const [role, setRole] = useState<Exclude<GroupRole, "owner">>("member");
-  // 이메일 조회 결과. 확정(초대) 전 표시명 미리보기에 사용한다.
-  const [found, setFound] = useState<UserLookup | null>(null);
-  const [lookupError, setLookupError] = useState<string | null>(null);
-  const [looking, setLooking] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const lookup = async () => {
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed) {
-      setLookupError("이메일을 입력하세요.");
+  // 검색어 입력 → 300ms 디바운스 후 이름/이메일 부분 일치 검색. 2자 미만이면 초기화.
+  useEffect(() => {
+    if (selected) return; // 선택을 확정한 뒤에는 재검색하지 않는다.
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setResults([]);
+      setSearchError(null);
+      setSearching(false);
       return;
     }
-    setLooking(true);
-    setLookupError(null);
-    setFound(null);
-    try {
-      setFound(await lookupUserByEmail(trimmed));
-    } catch (err) {
-      const status = errorStatus(err);
-      // 429 는 인터셉터가 Retry-After 토스트로 안내하므로 여기서는 별도 문구만.
-      setLookupError(
-        status === 404
-          ? "해당 이메일의 활성 사용자가 없습니다."
-          : status === 429
-            ? "조회 요청이 너무 잦습니다. 잠시 후 다시 시도하세요."
-            : extractErrorMessage(err, "사용자 조회에 실패했습니다."),
-      );
-    } finally {
-      setLooking(false);
-    }
-  };
+    setSearching(true);
+    setSearchError(null);
+    const handle = setTimeout(async () => {
+      try {
+        setResults(await searchUsers(trimmed));
+      } catch (err) {
+        const status = errorStatus(err);
+        // 429 는 인터셉터가 Retry-After 토스트로 안내하므로 여기서는 별도 문구만.
+        setSearchError(
+          status === 429
+            ? "검색 요청이 너무 잦습니다. 잠시 후 다시 시도하세요."
+            : extractErrorMessage(err, "사용자 검색에 실패했습니다."),
+        );
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [query, selected]);
 
   const invite = async () => {
-    if (!found) return;
+    if (!selected) return;
     setBusy(true);
     try {
-      await inviteMember(groupId, found.id, role);
-      toast.success(`${found.display_name}님을 초대했습니다.`);
+      await inviteMember(groupId, selected.id, role);
+      toast.success(`${selected.display_name}님을 초대했습니다.`);
       onInvited();
     } catch (err) {
       const status = errorStatus(err);
@@ -507,12 +516,8 @@ function InviteMemberModal({
     }
   };
 
-  // 이메일을 다시 편집하면 이전 조회 결과를 무효화한다.
-  const onEmailChange = (value: string) => {
-    setEmail(value);
-    setFound(null);
-    setLookupError(null);
-  };
+  // 이미 이 그룹의 멤버인 사용자는 후보에서 제외한다.
+  const candidates = results.filter((u) => !existingMemberIds.has(u.id));
 
   return (
     <Modal
@@ -524,46 +529,93 @@ function InviteMemberModal({
           <button className="btn btn-secondary" onClick={onClose}>
             취소
           </button>
-          {found ? (
-            <button className="btn btn-primary" onClick={invite} disabled={busy}>
-              {busy ? <Spinner className="h-4 w-4" /> : "초대"}
-            </button>
-          ) : (
-            <button className="btn btn-primary" onClick={lookup} disabled={looking}>
-              {looking ? <Spinner className="h-4 w-4" /> : "조회"}
-            </button>
-          )}
+          <button
+            className="btn btn-primary"
+            onClick={invite}
+            disabled={busy || !selected}
+          >
+            {busy ? <Spinner className="h-4 w-4" /> : "초대"}
+          </button>
         </>
       }
     >
       <div className="flex flex-col gap-4">
-        <div>
-          <label className="label" htmlFor="inviteEmail">
-            이메일
-          </label>
-          <input
-            id="inviteEmail"
-            className="input"
-            type="email"
-            inputMode="email"
-            placeholder="user@example.com"
-            value={email}
-            onChange={(e) => onEmailChange(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !found && lookup()}
-            autoFocus
-          />
-          {lookupError && (
-            <p className="mt-1.5 text-xs" style={{ color: "var(--danger)" }}>
-              {lookupError}
-            </p>
-          )}
-          {found && (
-            <div className="mt-2 flex items-center gap-2 rounded-lg bg-muted-token px-3 py-2 text-sm">
-              <span className="font-medium">{found.display_name}</span>
-              <span className="text-xs text-muted">{found.email}</span>
+        {selected ? (
+          <div>
+            <label className="label">초대할 구성원</label>
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-muted-token px-3 py-2">
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-sm font-medium">
+                  {selected.display_name}
+                </span>
+                <span className="truncate text-xs text-muted">{selected.email}</span>
+              </div>
+              <button
+                className="btn btn-ghost shrink-0"
+                onClick={() => {
+                  setSelected(null);
+                  setQuery("");
+                }}
+              >
+                다시 선택
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div>
+            <label className="label" htmlFor="memberSearch">
+              구성원 검색
+            </label>
+            <input
+              id="memberSearch"
+              className="input"
+              type="text"
+              placeholder="이름 또는 이메일 (2자 이상)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoFocus
+            />
+            {searchError && (
+              <p className="mt-1.5 text-xs" style={{ color: "var(--danger)" }}>
+                {searchError}
+              </p>
+            )}
+            <div className="mt-2">
+              {searching ? (
+                <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted">
+                  <Spinner className="h-4 w-4" /> 검색 중…
+                </div>
+              ) : query.trim().length < 2 ? (
+                <p className="px-1 py-3 text-xs text-muted">
+                  이름 또는 이메일을 2자 이상 입력하면 구성원이 표시됩니다.
+                </p>
+              ) : candidates.length === 0 ? (
+                <p className="px-1 py-3 text-xs text-muted">
+                  {results.length === 0
+                    ? "일치하는 구성원이 없습니다."
+                    : "일치하는 구성원이 모두 이미 이 그룹의 멤버입니다."}
+                </p>
+              ) : (
+                <ul className="max-h-60 overflow-auto rounded-lg border border-token">
+                  {candidates.map((u) => (
+                    <li key={u.id}>
+                      <button
+                        type="button"
+                        className="flex w-full flex-col border-b border-token px-3 py-2 text-left last:border-0 hover:bg-[color:var(--bg-muted)]"
+                        onClick={() => setSelected(u)}
+                      >
+                        <span className="truncate text-sm font-medium">
+                          {u.display_name}
+                        </span>
+                        <span className="truncate text-xs text-muted">{u.email}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
         <div>
           <label className="label" htmlFor="inviteRole">
             역할

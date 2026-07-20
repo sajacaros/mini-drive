@@ -50,7 +50,7 @@ export function Layout() {
           <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" />
           <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" />
 
-          {user?.role === "admin" && (
+          {(user?.role === "admin" || user?.role === "super_admin") && (
             <div className="mt-4">
               <div className="flex items-center gap-1.5 px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted">
                 <ShieldIcon width={13} height={13} />
@@ -90,10 +90,14 @@ export function Layout() {
           <div className="mb-3">
             <ThemePicker />
           </div>
-          <div className="mb-2 px-1">
+          <NavLink
+            to="/profile"
+            className="mb-2 block rounded-lg px-1 py-1 transition-colors hover:bg-[color:var(--bg-muted)]"
+            title="내 프로필"
+          >
             <p className="truncate text-sm font-medium">{user?.display_name || user?.email}</p>
             <p className="truncate text-xs text-muted">{user?.email}</p>
-          </div>
+          </NavLink>
           <button className="btn btn-ghost w-full justify-start" onClick={onLogout}>
             <LogoutIcon width={16} height={16} />
             로그아웃

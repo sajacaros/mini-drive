@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AuditLog, File, Group, GroupMember, Share, User
-from app.models.enums import UserRole, UserStatus
+from app.models.enums import ADMIN_ROLES, UserRole, UserStatus
 
 
 class AdminActionError(Exception):
@@ -44,13 +44,38 @@ def check_self_privilege_guard(
     new_status: UserStatus | None,
     new_role: UserRole | None,
 ) -> None:
-    """마지막 admin 잠금 방지 — 자기 자신의 admin 권한 해제/비활성화 거부."""
+    """마지막 admin 잠금 방지 — 자기 자신의 관리자 권한 해제/비활성화 거부."""
     if actor_id != target_id:
         return
-    if new_role is not None and new_role != UserRole.ADMIN:
+    if new_role is not None and new_role not in ADMIN_ROLES:
         raise AdminActionError(400, "자기 자신의 관리자 권한은 해제할 수 없습니다.")
     if new_status is not None and new_status != UserStatus.ACTIVE:
         raise AdminActionError(400, "자기 자신의 계정은 비활성화할 수 없습니다.")
+
+
+def check_role_change_authorization(
+    actor: User, target: User, new_role: UserRole | None
+) -> None:
+    """관리자 권한(role) 부여/회수 인가 — super_admin 만, super_admin 계정은 불변.
+
+    - role 변경은 super_admin 만 수행할 수 있다(일반 admin 은 나머지 관리 기능만).
+    - super_admin 권한은 API 로 부여할 수 없다(마이그레이션/CLI 전용) — 다중 super_admin 방지.
+    - super_admin 계정의 role 은 아무도 변경할 수 없다(강등/잠금 방지).
+    """
+    if new_role is None or new_role == target.role:
+        return
+    if actor.role != UserRole.SUPER_ADMIN:
+        raise AdminActionError(403, "관리자 권한 부여/회수는 최고 관리자만 할 수 있습니다.")
+    if new_role == UserRole.SUPER_ADMIN:
+        raise AdminActionError(400, "최고 관리자 권한은 부여할 수 없습니다.")
+    if target.role == UserRole.SUPER_ADMIN:
+        raise AdminActionError(400, "최고 관리자 계정의 역할은 변경할 수 없습니다.")
+
+
+def check_super_admin_target_guard(actor: User, target: User) -> None:
+    """super_admin 계정은 본인 외에는 수정(상태/할당량 포함) 불가 — 최상위 계정 보호."""
+    if target.role == UserRole.SUPER_ADMIN and actor.id != target.id:
+        raise AdminActionError(403, "최고 관리자 계정은 수정할 수 없습니다.")
 
 
 # --- 감사 로그 --------------------------------------------------------------
@@ -116,12 +141,17 @@ async def update_user(
     new_role: UserRole | None,
     new_max_storage: int | None,
 ) -> User:
-    """status/role/max_storage 변경 + 감사 로그. 자기 권한 해제/비활성화 거부 (PRD 6.7)."""
+    """status/role/max_storage 변경 + 감사 로그 (PRD 6.7).
+
+    인가: 자기 권한 해제/비활성화 거부, super_admin 계정 보호, role 부여/회수는 super_admin 만.
+    """
     if new_status is not None:
         check_status_update(new_status)
     check_self_privilege_guard(actor.id, user_id, new_status, new_role)
 
     user = await _get_target(session, user_id)
+    check_super_admin_target_guard(actor, user)
+    check_role_change_authorization(actor, user, new_role)
 
     changes: dict[str, Any] = {}
     if new_status is not None and user.status != new_status:

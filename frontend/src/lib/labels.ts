@@ -59,6 +59,28 @@ export function permissionCovers(level: string, need: GroupPermissionLevel): boo
   return (PERMISSION_RANK[level] ?? 0) >= (PERMISSION_RANK[need] ?? 99);
 }
 
+// --- 전역 역할 (user/admin/super_admin, 그룹 role 과 별개 축) ----------------
+
+const GLOBAL_ROLE_LABELS: Record<string, string> = {
+  user: "일반",
+  admin: "관리자",
+  super_admin: "최고 관리자",
+};
+
+const GLOBAL_ROLE_TONES: Record<string, Tone> = {
+  user: "neutral",
+  admin: "accent",
+  super_admin: "warning",
+};
+
+export function globalRoleLabel(role: string): string {
+  return GLOBAL_ROLE_LABELS[role] ?? role;
+}
+
+export function globalRoleTone(role: string): Tone {
+  return GLOBAL_ROLE_TONES[role] ?? "neutral";
+}
+
 // --- 사용자 상태 (admin UI 공용) -------------------------------------------
 
 const USER_STATUS_LABELS: Record<string, string> = {

@@ -21,6 +21,9 @@ export function AdminRoute() {
 
   if (!initialized) return <LoadingState label="세션 확인 중..." />;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (user?.role !== "admin") return <Navigate to="/" replace />;
+  // admin/super_admin 모두 관리 화면 접근 허용.
+  if (user?.role !== "admin" && user?.role !== "super_admin") {
+    return <Navigate to="/" replace />;
+  }
   return <Outlet />;
 }

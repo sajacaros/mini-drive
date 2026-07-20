@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import File, User
@@ -34,6 +34,48 @@ async def get_active_user_by_email(session: AsyncSession, email: str) -> User | 
         select(User).where(User.email == email, User.status == UserStatus.ACTIVE)
     )
     return result.scalar_one_or_none()
+
+
+async def search_active_users(
+    session: AsyncSession,
+    query: str,
+    *,
+    limit: int = 20,
+    exclude_user_id: int | None = None,
+) -> list[User]:
+    """이름(display_name) 또는 이메일 부분 일치 active 사용자 검색 (그룹 초대 UX용).
+
+    최소 검색어 길이는 라우트에서 강제한다. 이메일 열거를 제한하기 위해 결과에 상한(limit)을
+    두고, 표시명 오름차순으로 정렬한다. LIKE 와일드카드(%, _)는 이스케이프해 리터럴로 취급한다.
+    """
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = f"%{escaped}%"
+    stmt = (
+        select(User)
+        .where(
+            User.status == UserStatus.ACTIVE,
+            or_(
+                User.display_name.ilike(like, escape="\\"),
+                User.email.ilike(like, escape="\\"),
+            ),
+        )
+        .order_by(User.display_name.asc())
+        .limit(limit)
+    )
+    if exclude_user_id is not None:
+        stmt = stmt.where(User.id != exclude_user_id)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def update_display_name(
+    session: AsyncSession, user: User, display_name: str
+) -> User:
+    """현재 사용자의 표시 이름을 변경한다(프로필 편집). 호출자 트랜잭션에서 커밋한다."""
+    user.display_name = display_name.strip()
+    await session.commit()
+    await session.refresh(user)
+    return user
 
 
 async def has_root_folder(session: AsyncSession, user_id: int) -> bool:

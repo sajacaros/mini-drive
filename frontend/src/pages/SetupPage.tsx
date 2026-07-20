@@ -23,6 +23,7 @@ export function SetupPage() {
   const toast = useToast();
   const markSetupComplete = useAuthStore((s) => s.markSetupComplete);
 
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
@@ -58,6 +59,8 @@ export function SetupPage() {
       const res = await performSetup({
         admin_email: email.trim(),
         admin_password: password,
+        // 비우면 서버가 "Administrator" 로 대체한다.
+        admin_display_name: displayName.trim(),
         // 비우면 서버가 추측 불가 코드를 자동 생성한다.
         signup_code: trimmedCode || null,
         default_max_storage: Math.round(gb * GB),
@@ -135,6 +138,23 @@ export function SetupPage() {
         관리자 계정을 만들고 구성원 가입에 쓸 초기 가입 코드를 발급합니다. 이 화면은 최초 1회만 표시됩니다.
       </p>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
+        <div>
+          <label className="label" htmlFor="admin-name">
+            관리자 이름
+          </label>
+          <input
+            id="admin-name"
+            type="text"
+            className="input"
+            maxLength={100}
+            placeholder="예: 홍길동"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+          />
+          <p className="mt-1.5 text-xs text-muted">
+            비우면 &quot;Administrator&quot; 로 설정됩니다. 나중에 프로필에서 바꿀 수 있습니다.
+          </p>
+        </div>
         <div>
           <label className="label" htmlFor="admin-email">
             관리자 이메일

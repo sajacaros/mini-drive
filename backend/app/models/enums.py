@@ -8,10 +8,20 @@ from enum import StrEnum
 
 
 class UserRole(StrEnum):
-    """시스템 전역 역할 (users.role). 그룹 역할과는 별개 축 (PRD 3.6.1)."""
+    """시스템 전역 역할 (users.role). 그룹 역할과는 별개 축 (PRD 3.6.1).
+
+    SUPER_ADMIN 은 셋업 위저드로 만들어지는 최초 계정에만 부여되며(마이그레이션/CLI 외에는
+    API 로 부여 불가), 다른 사용자에게 admin 권한을 부여/회수할 수 있다. ADMIN 은 그 외 모든
+    관리 기능을 수행하되 역할(권한) 부여/회수는 하지 못한다.
+    """
 
     USER = "user"
     ADMIN = "admin"
+    SUPER_ADMIN = "super_admin"
+
+
+# admin 권한을 가진 역할 집합 — require_admin/셋업 존재 판정 등 "관리자인가?" 검사에 쓴다.
+ADMIN_ROLES = frozenset({UserRole.ADMIN, UserRole.SUPER_ADMIN})
 
 
 class UserStatus(StrEnum):
