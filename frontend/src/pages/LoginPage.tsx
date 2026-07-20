@@ -99,7 +99,7 @@ export function AuthShell({
           <span className="text-[color:var(--accent)]">
             <DriveIcon width={32} height={32} />
           </span>
-          <h1 className="text-xl font-semibold">Mini Drive</h1>
+          <h1 className="text-xl font-semibold">Flex Drive</h1>
           <p className="text-sm text-muted">{subtitle}</p>
         </div>
         <div className="card p-6">{children}</div>

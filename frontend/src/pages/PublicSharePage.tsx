@@ -71,7 +71,7 @@ export function PublicSharePage() {
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center justify-center gap-2 text-[color:var(--accent)]">
           <DriveIcon width={24} height={24} />
-          <span className="text-lg font-semibold text-[color:var(--text-primary)]">Mini Drive</span>
+          <span className="text-lg font-semibold text-[color:var(--text-primary)]">Flex Drive</span>
         </div>
 
         <div className="card p-6">

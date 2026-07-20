@@ -1,6 +1,6 @@
 /** 인증 사용자 공통 레이아웃 — 사이드 네비 + 저장 용량 표시 + 상단 바. */
 
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
@@ -34,12 +34,16 @@ export function Layout() {
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-60 shrink-0 flex-col border-r border-token bg-[color:var(--bg-secondary)]">
-        <div className="flex items-center gap-2 px-5 py-5">
+        <Link
+          to="/"
+          className="flex items-center gap-2 px-5 py-5 transition-opacity hover:opacity-80"
+          aria-label="홈으로"
+        >
           <span className="text-[color:var(--accent)]">
             <DriveIcon width={22} height={22} />
           </span>
-          <span className="font-pixel text-lg font-semibold">Mini Drive</span>
-        </div>
+          <span className="font-pixel text-lg font-semibold">Flex Drive</span>
+        </Link>
 
         <nav className="flex flex-1 flex-col gap-1 px-3">
           <NavItem to="/" icon={<DriveIcon />} label="내 드라이브" end />
