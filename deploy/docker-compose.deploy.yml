@@ -4,14 +4,13 @@
 #   - 호스트에 이미 80/443(TLS)를 처리하는 nginx 가 있고, 그 nginx 가 https://host/drive 를
 #     이 스택의 게이트웨이로 리버스 프록시한다(설정 예시는 nginx-snippet.conf 참고).
 #   - 따라서 이 스택은 TLS 를 하지 않는다(certbot·443 없음). 게이트웨이는 평문 HTTP 로
-#     내부 포트(127.0.0.1:8080)에만 노출한다.
-#   - backend/frontend 는 build 하지 않고 Docker Hub 이미지를 pull 한다.
+#     내부 포트(127.0.0.1:7755)에만 노출한다.
+#   - backend/frontend 는 이 호스트에서 직접 build 한다(레지스트리 없음). 나머지는 공식 이미지 pull.
 #   - 프론트는 BASE_PATH=/drive/ 로 시작 → 에셋/API/라우터가 /drive 아래로. (이미지는 경로에 무관)
 #
 # 기동(호스트에서):
-#   cd /opt/flex-drive/deploy
-#   export IMAGE_TAG=<git-sha>          # Jenkins 가 주입, 수동 시 latest
-#   docker compose -f docker-compose.deploy.yml pull
+#   cd /var/local/flex-drive/deploy
+#   docker compose -f docker-compose.deploy.yml build
 #   docker compose -f docker-compose.deploy.yml up -d
 
 x-logging: &default-logging
@@ -31,7 +30,7 @@ services:
     # 기존 nginx 가 "컨테이너"라 loopback 에 못 닿으면, 아래 ports 를 지우고
     # networks 에 외부 공유망을 추가해 컨테이너명(flexdrive-gateway:80)으로 붙인다(DEPLOY.md 참고).
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:7755:80"
     volumes:
       # 리포 루트의 기존 HTTP 게이트웨이 설정을 그대로 재사용(listen 80, /api·/_minio·/).
       - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -42,9 +41,11 @@ services:
     networks:
       - minidrive
 
-  # ── 백엔드 (FastAPI) — Docker Hub 이미지 ─────────────
+  # ── 백엔드 (FastAPI) — 호스트에서 빌드 ───────────────
   backend:
-    image: ${DOCKERHUB_USER}/flex-drive-backend:${IMAGE_TAG:-latest}
+    image: flex-drive-backend:latest
+    build:
+      context: ../backend
     restart: unless-stopped
     logging: *default-logging
     expose:
@@ -79,9 +80,11 @@ services:
     networks:
       - minidrive
 
-  # ── 프론트엔드 (React SPA) — Docker Hub 이미지 ───────
+  # ── 프론트엔드 (React SPA) — 호스트에서 빌드 ─────────
   frontend:
-    image: ${DOCKERHUB_USER}/flex-drive-frontend:${IMAGE_TAG:-latest}
+    image: flex-drive-frontend:latest
+    build:
+      context: ../frontend
     restart: unless-stopped
     logging: *default-logging
     expose:

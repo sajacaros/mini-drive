@@ -1,10 +1,10 @@
 # Mini Drive 서버 배포 가이드 (기존 nginx 뒤 서브패스 `/drive`)
 
 이미 80/443(TLS)를 처리하는 **기존 host nginx** 뒤에 `https://<host>/drive` 로 붙이는 구성.
-CI 는 Docker Hub 로 이미지를 빌드·푸시하고, 배포는 SSH 로 호스트에서 compose 를 실행한다.
+CI(Jenkins)는 SSH 로 배포 호스트에 접속해 **거기서 이미지를 빌드하고** compose 로 띄운다(레지스트리 없음).
 
 ```
-GitHub push → Jenkins(build+push to Docker Hub) → SSH → 호스트에서 docker compose pull & up
+GitHub push → Jenkins ──SSH──▶ 호스트: git pull → docker compose build → up -d (빌드는 호스트에서)
 브라우저 → 기존 nginx(443/TLS) → /drive/ 프록시 → flexdrive-gateway(:80) → backend/frontend/...
 ```
 
@@ -19,11 +19,11 @@ GitHub push → Jenkins(build+push to Docker Hub) → SSH → 호스트에서 do
 ### 0-1. 리포 체크아웃 + 시크릿
 설정 파일(compose·nginx)만 필요하다. 앱은 이미지로 온다.
 ```bash
-sudo mkdir -p /opt/flex-drive && sudo chown "$USER" /opt/flex-drive
-git clone <repo-url> /opt/flex-drive
-cd /opt/flex-drive/deploy
+sudo mkdir -p /var/local/flex-drive && sudo chown "$USER" /var/local/flex-drive
+git clone <repo-url> /var/local/flex-drive
+cd /var/local/flex-drive/deploy
 cp .env.deploy.example .env && chmod 600 .env
-# BASE_PATH=/drive/, DOCKERHUB_USER 채우고, 아래 셋은 강한 랜덤값으로 교체:
+# BASE_PATH=/drive/ 확인하고, 아래 셋은 강한 랜덤값으로 교체:
 openssl rand -hex 32   # JWT_SECRET
 openssl rand -hex 24   # POSTGRES_PASSWORD
 openssl rand -hex 24   # MINIO_ROOT_PASSWORD
@@ -31,13 +31,13 @@ openssl rand -hex 24   # MINIO_ROOT_PASSWORD
 
 ### 0-2. 스택 기동
 ```bash
-docker compose -f docker-compose.deploy.yml pull
+docker compose -f docker-compose.deploy.yml build   # backend/frontend 를 호스트에서 빌드
 docker compose -f docker-compose.deploy.yml up -d
 docker compose -f docker-compose.deploy.yml ps
 ```
-게이트웨이가 `127.0.0.1:8080` 에서 대기한다. 확인:
+게이트웨이가 `127.0.0.1:7755` 에서 대기한다. 확인:
 ```bash
-curl -fsS http://127.0.0.1:8080/health && echo OK
+curl -fsS http://127.0.0.1:7755/health && echo OK
 ```
 
 ### 0-3. 기존 nginx 에 프록시 추가
@@ -61,13 +61,13 @@ docker exec <기존nginx컨테이너> nginx -t && docker exec <기존nginx컨테
 우리 게이트웨이(`flexdrive-gateway`)에 기존 nginx 가 어떻게 닿느냐가 핵심.
 
 ### (A) 기존 nginx 가 호스트 프로세스거나 host 네트워크
-그대로 `proxy_pass http://127.0.0.1:8080/;` (스니펫 기본값). 끝.
+그대로 `proxy_pass http://127.0.0.1:7755/;` (스니펫 기본값). 끝.
 
 ### (B) 기존 nginx 가 브리지 네트워크의 컨테이너  ← 흔함
-컨테이너는 호스트의 `127.0.0.1:8080`(loopback)에 **닿지 못한다.** 두 컨테이너를 같은
+컨테이너는 호스트의 `127.0.0.1:7755`(loopback)에 **닿지 못한다.** 두 컨테이너를 같은
 도커 네트워크에 붙이고 컨테이너명으로 프록시하는 게 가장 깔끔하고 안전하다:
 
-1. `docker-compose.deploy.yml` 의 `nginx.ports` (`127.0.0.1:8080:80`) 를 **삭제**(포트 노출 불필요).
+1. `docker-compose.deploy.yml` 의 `nginx.ports` (`127.0.0.1:7755:80`) 를 **삭제**(포트 노출 불필요).
 2. 기존 nginx 가 속한 외부 네트워크를 우리 게이트웨이에도 붙인다. 예: 기존 네트워크명이 `web` 이면
    `docker-compose.deploy.yml` 하단에 추가:
    ```yaml
@@ -97,49 +97,49 @@ docker exec <기존nginx컨테이너> nginx -t && docker exec <기존nginx컨테
 
 ## 1. Jenkins 설정 (1회)
 
-### 1-1. Jenkins 컨테이너의 docker 접근
-빌드하려면 Jenkins 컨테이너에 **docker CLI + 호스트 소켓 마운트**가 필요:
-`-v /var/run/docker.sock:/var/run/docker.sock`.
+빌드가 배포 호스트에서 일어나므로 Jenkins 는 **SSH 만** 하면 된다.
+Jenkins 컨테이너에 docker CLI·소켓 마운트·Docker Hub 계정이 **필요 없다.**
 
-### 1-2. 자격증명 (Manage Jenkins → Credentials)
+### 1-1. 플러그인 + 자격증명 (Manage Jenkins → Credentials)
+- 플러그인: **SSH Agent** (`sshagent` 스텝용).
+
 | ID | 종류 | 내용 |
 |----|------|------|
-| `dockerhub` | Username with password | Docker Hub 계정 (push 권한) |
 | `deploy-ssh` | SSH Username with private key | 호스트 배포 계정 개인키 |
 
-호스트 배포 계정:
+호스트 배포 계정(빌드·compose 를 실행하므로 docker 그룹 필요):
 ```bash
 sudo useradd -m -s /bin/bash deploy && sudo usermod -aG docker deploy
-sudo -u deploy mkdir -p /home/deploy/.ssh   # 공개키를 authorized_keys 에 (chmod 600)
-sudo chown -R deploy /opt/flex-drive
+sudo -u deploy mkdir -p /home/deploy/.ssh   # Jenkins 공개키를 authorized_keys 에 (chmod 600)
+sudo chown -R deploy /var/local/flex-drive
 ```
 
-### 1-3. Jenkinsfile 값 수정
+### 1-2. Jenkinsfile 값 수정
 리포 루트 `Jenkinsfile` 상단 `environment`:
-- `DOCKERHUB_USER` → 실제 Docker Hub 계정
-- `DEPLOY_HOST`    → `deploy@<호스트IP>`
+- `DEPLOY_HOST` → `deploy@<호스트IP>`
 
-### 1-4. 파이프라인 잡 + 웹훅
+### 1-3. 파이프라인 잡 + 웹훅
 New Item → Pipeline → "Pipeline script from SCM" → 이 리포 → `Jenkinsfile`. GitHub 웹훅 연결.
 
 ---
 
 ## 2. 이후 배포 흐름 (자동)
 
-`main` push → Jenkins 가:
-1. 커밋 SHA 태그로 backend/frontend 이미지 빌드 → Docker Hub push (`:sha`, `:latest`)
-2. SSH 로 호스트 → `git pull` → `compose pull` → `up -d`
-3. backend 컨테이너가 기동 시 `alembic upgrade head` 자동 실행 (마이그레이션 스텝 불필요)
-4. `http://127.0.0.1:8080/health` 스모크 테스트
+`main` push → Jenkins 가 SSH 로 호스트에 접속해:
+1. `git fetch` + `git reset --hard origin/main` (origin 과 정확히 일치)
+2. `docker compose -f docker-compose.deploy.yml build` (호스트에서 backend/frontend 빌드)
+3. `up -d` → dangling 이미지 prune
+4. backend 컨테이너가 기동 시 `alembic upgrade head` 자동 실행 (마이그레이션 스텝 불필요)
+5. `http://127.0.0.1:7755/health` 헬스체크(20회×3초 재시도)
 
-프론트 이미지는 경로 무관하므로, 서버 `.env` 의 `BASE_PATH` 만 바꾸면 배포 경로가 바뀐다(재빌드 X).
+프론트는 경로 무관하게 빌드되므로, 서버 `.env` 의 `BASE_PATH` 만 바꾸면 배포 경로가 바뀐다.
 
 ---
 
 ## 3. 운영
 
 ```bash
-cd /opt/flex-drive/deploy
+cd /var/local/flex-drive/deploy
 DC="docker compose -f docker-compose.deploy.yml"
 $DC ps                # 상태
 $DC logs -f backend   # 로그(JSON)
@@ -153,9 +153,12 @@ $DC exec -T db pg_dump -U postgres -F c minidrive > backup.dump
 ```
 
 ### 롤백
+호스트 빌드이므로 소스를 되돌리고 재빌드한다:
 ```bash
-cd /opt/flex-drive/deploy
-export IMAGE_TAG=<이전-git-sha>
+cd /var/local/flex-drive
+git reset --hard <이전-git-sha>          # 되돌릴 커밋
+cd deploy
+docker compose -f docker-compose.deploy.yml build backend frontend
 docker compose -f docker-compose.deploy.yml up -d backend frontend
 ```
 
