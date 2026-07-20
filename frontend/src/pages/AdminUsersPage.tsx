@@ -38,6 +38,8 @@ export function AdminUsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [quotaTarget, setQuotaTarget] = useState<AdminUser | null>(null);
   const [quotaGb, setQuotaGb] = useState("");
+  const [nameTarget, setNameTarget] = useState<AdminUser | null>(null);
+  const [nameValue, setNameValue] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,6 +101,27 @@ export function AdminUsersPage() {
       await load();
     } catch (err) {
       toast.error(extractErrorMessage(err, "할당량 변경에 실패했습니다."));
+    }
+  };
+
+  const submitName = async () => {
+    if (!nameTarget) return;
+    const trimmed = nameValue.trim();
+    if (!trimmed) {
+      toast.error("이름을 입력하세요.");
+      return;
+    }
+    if (trimmed === nameTarget.display_name) {
+      setNameTarget(null);
+      return;
+    }
+    try {
+      await updateUser(nameTarget.id, { display_name: trimmed });
+      toast.success("이름을 변경했습니다.");
+      setNameTarget(null);
+      await load();
+    } catch (err) {
+      toast.error(extractErrorMessage(err, "이름 변경에 실패했습니다."));
     }
   };
 
@@ -172,6 +195,17 @@ export function AdminUsersPage() {
                         </div>
                       ) : (
                         <div className="flex flex-wrap justify-end gap-2">
+                          {isSuperAdmin && (
+                            <button
+                              className="btn btn-secondary"
+                              onClick={() => {
+                                setNameTarget(u);
+                                setNameValue(u.display_name);
+                              }}
+                            >
+                              이름 수정
+                            </button>
+                          )}
                           <button
                             className="btn btn-secondary"
                             onClick={() => {
@@ -235,6 +269,37 @@ export function AdminUsersPage() {
           />
           <span className="text-sm text-muted">GB</span>
         </div>
+      </Modal>
+
+      <Modal
+        open={nameTarget !== null}
+        title="이름 수정"
+        onClose={() => setNameTarget(null)}
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setNameTarget(null)}>
+              취소
+            </button>
+            <button className="btn btn-primary" onClick={submitName}>
+              저장
+            </button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-muted">
+          {nameTarget?.email} 의 표시 이름을 변경합니다.
+        </p>
+        <input
+          type="text"
+          className="input"
+          maxLength={100}
+          value={nameValue}
+          onChange={(e) => setNameValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void submitName();
+          }}
+          autoFocus
+        />
       </Modal>
     </div>
   );

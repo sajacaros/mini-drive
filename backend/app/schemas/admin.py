@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from app.models.enums import UserRole, UserStatus
 
@@ -34,15 +34,28 @@ class AdminUserListResponse(BaseModel):
     size: int
 
 
+def _validate_optional_display_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        raise ValueError("이름을 입력하세요.")
+    return value
+
+
 class UserUpdateRequest(BaseModel):
-    """활성/비활성 전환, 할당량 조정, role 변경 (부분 갱신).
+    """활성/비활성 전환, 할당량 조정, role 변경, 표시 이름 변경 (부분 갱신).
 
     status 는 active/inactive 만 허용한다 (pending→active 는 approve, →rejected 는 reject 전용).
+    display_name 은 최고 관리자만 변경할 수 있다(서비스 계층에서 인가).
     """
 
     status: UserStatus | None = None
     role: UserRole | None = None
     max_storage: int | None = Field(default=None, ge=0)
+    display_name: Annotated[
+        str | None, Field(max_length=100), AfterValidator(_validate_optional_display_name)
+    ] = None
 
 
 # --- 전체 그룹 조회 (PRD 6.7) ------------------------------------------------

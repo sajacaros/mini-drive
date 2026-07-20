@@ -28,6 +28,7 @@ export interface UserUpdatePayload {
   status?: UserStatus;
   role?: UserRole;
   max_storage?: number;
+  display_name?: string;
 }
 
 export async function updateUser(id: number, payload: UserUpdatePayload): Promise<AdminUser> {

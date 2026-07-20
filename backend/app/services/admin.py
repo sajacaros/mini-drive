@@ -78,6 +78,12 @@ def check_super_admin_target_guard(actor: User, target: User) -> None:
         raise AdminActionError(403, "최고 관리자 계정은 수정할 수 없습니다.")
 
 
+def check_display_name_authorization(actor: User, new_display_name: str | None) -> None:
+    """표시 이름 변경은 최고 관리자 전용 — 일반 admin 은 상태/할당량만 조정할 수 있다."""
+    if new_display_name is not None and actor.role != UserRole.SUPER_ADMIN:
+        raise AdminActionError(403, "사용자 이름 변경은 최고 관리자만 할 수 있습니다.")
+
+
 # --- 감사 로그 --------------------------------------------------------------
 
 
@@ -140,14 +146,17 @@ async def update_user(
     new_status: UserStatus | None,
     new_role: UserRole | None,
     new_max_storage: int | None,
+    new_display_name: str | None = None,
 ) -> User:
-    """status/role/max_storage 변경 + 감사 로그 (PRD 6.7).
+    """status/role/max_storage/display_name 변경 + 감사 로그 (PRD 6.7).
 
-    인가: 자기 권한 해제/비활성화 거부, super_admin 계정 보호, role 부여/회수는 super_admin 만.
+    인가: 자기 권한 해제/비활성화 거부, super_admin 계정 보호, role 부여/회수·이름 변경은
+    super_admin 만.
     """
     if new_status is not None:
         check_status_update(new_status)
     check_self_privilege_guard(actor.id, user_id, new_status, new_role)
+    check_display_name_authorization(actor, new_display_name)
 
     user = await _get_target(session, user_id)
     check_super_admin_target_guard(actor, user)
@@ -163,6 +172,11 @@ async def update_user(
     if new_max_storage is not None and user.max_storage != new_max_storage:
         changes["max_storage"] = {"from": user.max_storage, "to": new_max_storage}
         user.max_storage = new_max_storage
+    if new_display_name is not None:
+        stripped = new_display_name.strip()
+        if stripped and user.display_name != stripped:
+            changes["display_name"] = {"from": user.display_name, "to": stripped}
+            user.display_name = stripped
 
     if changes:
         _record_audit(session, actor.id, "user.update", user.id, changes)

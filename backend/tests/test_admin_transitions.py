@@ -12,6 +12,7 @@ import pytest
 from app.models.enums import UserRole, UserStatus
 from app.services.admin import (
     AdminActionError,
+    check_display_name_authorization,
     check_role_change_authorization,
     check_self_privilege_guard,
     check_status_update,
@@ -111,3 +112,17 @@ class TestSuperAdminTargetGuard:
 
     def test_non_super_admin_target_unrestricted(self) -> None:
         check_super_admin_target_guard(_u(1, UserRole.ADMIN), _u(2, UserRole.USER))
+
+
+class TestDisplayNameAuthorization:
+    def test_super_admin_can_change_name(self) -> None:
+        check_display_name_authorization(_u(1, UserRole.SUPER_ADMIN), "새 이름")
+
+    def test_regular_admin_cannot_change_name(self) -> None:
+        with pytest.raises(AdminActionError) as exc:
+            check_display_name_authorization(_u(1, UserRole.ADMIN), "새 이름")
+        assert exc.value.status_code == 403
+
+    def test_none_skips_authorization(self) -> None:
+        # 이름을 지정하지 않은 요청(상태/할당량만)은 admin 도 통과.
+        check_display_name_authorization(_u(1, UserRole.ADMIN), None)

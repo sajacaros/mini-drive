@@ -134,7 +134,7 @@ async def patch_user(
     admin: AdminUser,
     session: DbSession,
 ) -> AdminUserResponse:
-    """활성/비활성 전환, 할당량 조정, role 변경 (PRD 6.7)."""
+    """활성/비활성 전환, 할당량 조정, role 변경, 이름 변경 (PRD 6.7)."""
     try:
         user = await update_user(
             session,
@@ -143,6 +143,7 @@ async def patch_user(
             new_status=payload.status,
             new_role=payload.role,
             new_max_storage=payload.max_storage,
+            new_display_name=payload.display_name,
         )
     except AdminActionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
