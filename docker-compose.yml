@@ -59,6 +59,10 @@ services:
       dockerfile: Dockerfile
     expose:
       - "80"
+    environment:
+      # 서브패스 배포용 런타임 베이스 경로. 기본 "/"(로컬/루트). 서버에서 /drive 로 띄우려면
+      # BASE_PATH=/drive/ 로 오버라이드(docker-compose.deploy.yml). 이미지는 경로에 무관.
+      BASE_PATH: ${BASE_PATH:-/}
     volumes:
       - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:

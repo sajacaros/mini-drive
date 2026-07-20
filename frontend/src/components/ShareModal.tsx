@@ -5,14 +5,15 @@ import { useState } from "react";
 import { extractErrorMessage } from "@/api/client";
 import { createShare } from "@/api/shares";
 import type { FileNode, Share, SharePermission } from "@/api/types";
+import { withBase } from "@/lib/basePath";
 import { Modal } from "./Modal";
 import { Spinner } from "./ui";
 import { CopyIcon } from "./icons";
 import { useToast } from "./Toast";
 
-/** share_url 로 사용자에게 보여줄 공개 링크를 만든다 (PRD: {origin}/s/{share_url}). */
+/** share_url 로 사용자에게 보여줄 공개 링크를 만든다 (PRD: {origin}<base>/s/{share_url}). */
 export function buildShareLink(shareUrl: string): string {
-  return `${window.location.origin}/s/${shareUrl}`;
+  return `${window.location.origin}${withBase(`/s/${shareUrl}`)}`;
 }
 
 export function ShareModal({

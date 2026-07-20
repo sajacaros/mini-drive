@@ -1,5 +1,6 @@
 /** 공유 링크 API (PRD 6.3). */
 
+import { withBase } from "@/lib/basePath";
 import apiClient from "./client";
 import type { Share, ShareCreateRequest, SharePublicMeta, ShareStats } from "./types";
 
@@ -36,7 +37,7 @@ export class ShareMetaError extends Error {
 }
 
 export async function fetchPublicShareMeta(shareUrl: string): Promise<SharePublicMeta> {
-  const res = await fetch(`/api/public/shares/${shareUrl}`);
+  const res = await fetch(withBase(`/api/public/shares/${shareUrl}`));
   if (!res.ok) {
     let detail = "공유 정보를 불러오지 못했습니다.";
     try {

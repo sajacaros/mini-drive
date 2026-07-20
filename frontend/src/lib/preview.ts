@@ -15,6 +15,7 @@
 
 import { errorStatus } from "@/api/client";
 import apiClient from "@/api/client";
+import { withBase } from "@/lib/basePath";
 
 export type PreviewResult =
   | { kind: "image"; url: string }
@@ -78,7 +79,7 @@ export async function fetchPublicSharePreview(
   shareUrl: string,
   password?: string,
 ): Promise<PreviewResult> {
-  const res = await fetch(`/api/public/shares/${shareUrl}/preview`, {
+  const res = await fetch(withBase(`/api/public/shares/${shareUrl}/preview`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: password ?? null }),

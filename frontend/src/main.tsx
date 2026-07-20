@@ -18,7 +18,8 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <ThemeProvider>
-      <BrowserRouter>
+      {/* basename: 서브패스 배포(예 /drive) 지원. 런타임 치환된 BASE_URL 을 그대로 쓴다("/" 면 무효과). */}
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <App />
       </BrowserRouter>
     </ThemeProvider>

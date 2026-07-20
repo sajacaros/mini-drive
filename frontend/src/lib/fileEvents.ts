@@ -11,6 +11,7 @@
  * 새 토큰을 자연히 이어받는다(독립 refresh 를 하지 않아 회전 경합을 피한다).
  */
 
+import { withBase } from "@/lib/basePath";
 import { getAccessToken } from "@/lib/tokenStore";
 
 /** SSE 페이로드 (backend file_events.publish_file_event 와 1:1). */
@@ -75,7 +76,7 @@ export function subscribeFileEvents(handlers: FileEventsHandlers): () => void {
     controller = new AbortController();
     const token = getAccessToken();
     try {
-      const res = await fetch("/api/files/events", {
+      const res = await fetch(withBase("/api/files/events"), {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       });

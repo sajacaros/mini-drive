@@ -5,23 +5,25 @@ import axios, {
 } from "axios";
 
 import { showToast } from "@/components/Toast";
+import { withBase } from "@/lib/basePath";
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from "@/lib/tokenStore";
 import type { TokenResponse } from "./types";
 
 /*
- * 게이트웨이(nginx) 경유 시 프론트와 API 는 동일 오리진이므로 baseURL 은 /api.
+ * 게이트웨이(nginx) 경유 시 프론트와 API 는 동일 오리진이므로 baseURL 은 <base>/api.
+ * 서브패스 배포(예: /drive)에서도 withBase 가 런타임 베이스를 앞에 붙인다.
  * 인터셉터: (1) access 토큰 자동 첨부, (2) 401 시 refresh 회전 후 원 요청 재시도.
  * refresh 는 회전(rotation)이므로 동시 401 이 여러 개 떠도 refresh 는 한 번만 수행하고,
  * 나머지 요청은 큐에 대기시켰다가 새 토큰으로 재시도한다.
  */
 export const apiClient: AxiosInstance = axios.create({
-  baseURL: "/api",
+  baseURL: withBase("/api"),
   headers: { "Content-Type": "application/json" },
 });
 
 /** refresh 토큰으로 새 토큰 쌍을 받는다. 인터셉터 루프를 피하려고 순수 axios 로 호출한다. */
 async function requestRefresh(refreshToken: string): Promise<TokenResponse> {
-  const { data } = await axios.post<TokenResponse>("/api/auth/refresh", {
+  const { data } = await axios.post<TokenResponse>(withBase("/api/auth/refresh"), {
     refresh_token: refreshToken,
   });
   return data;

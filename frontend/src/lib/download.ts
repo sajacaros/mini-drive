@@ -14,11 +14,16 @@ import {
   issueVersionDownloadTicket,
 } from "@/api/files";
 import type { DownloadTicketResponse } from "@/api/types";
+import { withBase } from "@/lib/basePath";
 
-/** 티켓 URL 로 브라우저 네이티브 다운로드를 트리거한다 (숨김 a[href] 네비게이션). */
+/**
+ * 티켓 URL 로 브라우저 네이티브 다운로드를 트리거한다 (숨김 a[href] 네비게이션).
+ * 백엔드가 돌려준 url 은 "/api/files/download?ticket=..." 같은 절대경로이므로, 서브패스
+ * 배포에서 게이트웨이에 닿도록 런타임 베이스를 앞에 붙인다(base "/" 면 그대로).
+ */
 function navigateToDownload(url: string): void {
   const a = document.createElement("a");
-  a.href = url;
+  a.href = url.startsWith("/") ? withBase(url) : url;
   a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
@@ -52,7 +57,7 @@ export class ShareDownloadError extends Error {
 }
 
 export async function downloadSharedFile(shareUrl: string, password?: string): Promise<void> {
-  const res = await fetch(`/api/public/shares/${shareUrl}/download-ticket`, {
+  const res = await fetch(withBase(`/api/public/shares/${shareUrl}/download-ticket`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: password ?? null }),

@@ -2,8 +2,12 @@
 .env
 .env.*
 !.env.example
+!.env.deploy.example
 *.pem
 *.key
+
+# 서버 배포 시 호스트에 생성되는 TLS 인증서/챌린지 (커밋 금지)
+deploy/certbot/
 secrets/
 
 # ── Python (backend) ──────────────────────────────────
@@ -54,8 +58,10 @@ backups/
 .DS_Store
 Thumbs.db
 
-# ── Claude Code ───────────────────────────────────────
-.claude/settings.local.json
+# ── Claude Code / 로컬 도구 설정 (커밋 금지) ──────────
+.claude/
+.mcp.json
+.playwright-mcp/
 
 # 로컬 전용 접속 정보 (커밋 금지)
 env
