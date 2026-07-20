@@ -33,7 +33,7 @@ export function AdminDashboardPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <PageHeader>
+        <PageHeader align="start">
           <h1 className="text-lg font-semibold">대시보드</h1>
           <p className="mt-0.5 text-sm text-muted">인스턴스 사용 현황 (메타데이터 집계)</p>
         </PageHeader>

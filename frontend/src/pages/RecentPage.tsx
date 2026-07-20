@@ -69,7 +69,7 @@ export function RecentPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <PageHeader>
+        <PageHeader align="start">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <span className="text-[color:var(--accent)]">
             <HistoryIcon width={18} height={18} />

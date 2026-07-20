@@ -76,7 +76,7 @@ export function AdminSharesPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 pt-4">
-        <PageHeader>
+        <PageHeader align="start">
           <h1 className="text-lg font-semibold">공유 링크</h1>
           <div className="mt-3 flex gap-1">
             <FilterTab active={filter === "all"} onClick={() => switchFilter("all")}>

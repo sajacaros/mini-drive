@@ -4,20 +4,28 @@
  * 그대로 소유하고, 그 안의 콘텐츠만 이 래퍼로 감싼다. 이렇게 하면 전용 헤더 줄 없이 프로필 칩이
  * 페이지 첫 줄 우측에 자연스럽게 붙는다.
  *
- * children 은 페이지가 원래 쓰던 그대로 넘기면 된다:
- *  - 제목 + 부제(블록 요소들) → 세로로 쌓이고 칩은 우상단.
- *  - 브레드크럼 + 툴바(justify-between 한 줄) → 그 줄 오른쪽 끝에 칩.
+ * align:
+ *  - "center"(기본) — 한 줄형(브레드크럼/툴바/버튼) 헤더. 칩이 그 줄과 수직 중앙 정렬돼
+ *    좌측 버튼(높이 ~36px)과 중심이 맞는다.
+ *  - "start" — 제목+부제/필터·탭처럼 세로로 여러 줄 쌓이는 헤더. 칩을 첫 줄(제목)에 맞춰
+ *    상단 정렬한다.
  */
 
 import type { ReactNode } from "react";
 
 import { ProfileMenu } from "./ProfileMenu";
 
-export function PageHeader({ children }: { children: ReactNode }) {
+export function PageHeader({
+  children,
+  align = "center",
+}: {
+  children: ReactNode;
+  align?: "center" | "start";
+}) {
   return (
-    <div className="flex items-start gap-4">
+    <div className={`flex gap-4 ${align === "start" ? "items-start" : "items-center"}`}>
       <div className="min-w-0 flex-1">{children}</div>
-      <div className="shrink-0 pt-0.5">
+      <div className="shrink-0">
         <ProfileMenu />
       </div>
     </div>

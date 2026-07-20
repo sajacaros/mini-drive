@@ -149,7 +149,7 @@ export function GroupDetailPage() {
     <div className="flex h-screen flex-col">
       {/* 헤더: breadcrumb + 그룹명 */}
       <div className="border-b border-token px-6 py-4">
-        <PageHeader>
+        <PageHeader align="start">
         <nav className="mb-1 flex items-center gap-1 text-sm text-muted">
           <button className="hover:text-[color:var(--text-primary)]" onClick={() => navigate("/groups")}>
             그룹

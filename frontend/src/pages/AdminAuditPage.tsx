@@ -75,7 +75,7 @@ export function AdminAuditPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <PageHeader>
+        <PageHeader align="start">
         <h1 className="text-lg font-semibold">감사 로그</h1>
         <div className="mt-3 flex flex-wrap items-end gap-3">
           <div>

@@ -64,7 +64,7 @@ export function TrashPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <PageHeader>
+        <PageHeader align="start">
           <h1 className="text-lg font-semibold">휴지통</h1>
           <p className="mt-0.5 text-sm text-muted">삭제한 항목을 복구하거나 영구 삭제할 수 있습니다.</p>
         </PageHeader>

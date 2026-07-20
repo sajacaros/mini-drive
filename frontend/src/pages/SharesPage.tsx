@@ -54,7 +54,7 @@ export function SharesPage() {
   return (
     <div className="flex h-screen flex-col">
       <div className="border-b border-token px-6 py-4">
-        <PageHeader>
+        <PageHeader align="start">
         <h1 className="text-lg font-semibold">공유 링크</h1>
         <p className="mt-0.5 text-sm text-muted">
           내가 만든 공유 링크를 관리합니다. 조회수·마지막 접근은 근사치입니다.
