@@ -1,11 +1,12 @@
 # Mini Drive 서버 배포 가이드 (기존 nginx 뒤 서브패스 `/drive`)
 
 이미 80/443(TLS)를 처리하는 **기존 host nginx** 뒤에 `https://<host>/drive` 로 붙이는 구성.
-CI(Jenkins)는 SSH 로 배포 호스트에 접속해 **거기서 이미지를 빌드하고** compose 로 띄운다(레지스트리 없음).
+배포 호스트에 SSH 로 접속해 **거기서 이미지를 빌드하고** compose 로 띄운다(레지스트리 없음).
+평소엔 **수동 배포**(1장)로 충분하고, 원하면 **Jenkins 로 자동화**(2장)할 수 있다.
 
 ```
-GitHub push → Jenkins ──SSH──▶ 호스트: git pull → docker compose build → up -d (빌드는 호스트에서)
-브라우저 → 기존 nginx(443/TLS) → /drive/ 프록시 → flexdrive-gateway(:80) → backend/frontend/...
+(수동) SSH 접속 → 호스트: git pull → docker compose build → up -d
+브라우저 → 기존 nginx(443/TLS) → /drive/ 프록시 → flexdrive-gateway(:7755) → backend/frontend/...
 ```
 
 **핵심 설계 — 경로를 이미지에 굽지 않는다.** 프론트 이미지는 Vite `base=/__BASE__/` 플레이스홀더로
@@ -16,10 +17,22 @@ GitHub push → Jenkins ──SSH──▶ 호스트: git pull → docker compos
 
 ## 0. 서버 준비 (1회)
 
-### 0-1. 리포 체크아웃 + 시크릿
-설정 파일(compose·nginx)만 필요하다. 앱은 이미지로 온다.
+### 0-1. 배포 계정 생성 (관리자 sudo 로)
+빌드·compose 를 실행할 전용 계정 `drive-deployer` 를 만든다.
 ```bash
-sudo mkdir -p /var/local/flex-drive && sudo chown "$USER" /var/local/flex-drive
+sudo useradd -m -s /bin/bash drive-deployer
+sudo passwd drive-deployer                       # 로그인 비밀번호 설정
+sudo usermod -aG docker drive-deployer           # sudo 없이 docker/compose 실행 (새 세션부터 적용)
+
+sudo mkdir -p /var/local/flex-drive
+sudo chown -R drive-deployer:drive-deployer /var/local/flex-drive
+```
+> 🔐 비밀번호 로그인은 간단하지만, 서버가 인터넷에 노출돼 있으면 무차별 대입 위험이 있다.
+> 공개 서버이거나 Jenkins 자동화를 붙일 거면 **SSH 키 로그인**을 권장한다(2-1 참고).
+
+### 0-2. 리포 + 시크릿 (`drive-deployer` 로 로그인해서)
+PuTTY 등으로 `drive-deployer` 계정에 접속한 뒤:
+```bash
 git clone <repo-url> /var/local/flex-drive
 cd /var/local/flex-drive/deploy
 cp .env.deploy.example .env && chmod 600 .env
@@ -29,8 +42,9 @@ openssl rand -hex 24   # POSTGRES_PASSWORD
 openssl rand -hex 24   # MINIO_ROOT_PASSWORD
 ```
 
-### 0-2. 스택 기동
+### 0-3. 스택 기동
 ```bash
+cd /var/local/flex-drive/deploy
 docker compose -f docker-compose.deploy.yml build   # backend/frontend 를 호스트에서 빌드
 docker compose -f docker-compose.deploy.yml up -d
 docker compose -f docker-compose.deploy.yml ps
@@ -40,7 +54,7 @@ docker compose -f docker-compose.deploy.yml ps
 curl -fsS http://127.0.0.1:7755/health && echo OK
 ```
 
-### 0-3. 기존 nginx 에 프록시 추가
+### 0-4. 기존 nginx 에 프록시 추가
 `deploy/nginx-snippet.conf` 의 location 블록을 기존 nginx 의 **443 server 블록 안**에 넣고 reload.
 `proxy_pass` 대상은 아래 "기존 nginx 연결" 절 참고.
 ```bash
@@ -50,7 +64,7 @@ sudo nginx -t && sudo systemctl reload nginx
 docker exec <기존nginx컨테이너> nginx -t && docker exec <기존nginx컨테이너> nginx -s reload
 ```
 
-### 0-4. 첫 관리자 셋업
+### 0-5. 첫 관리자 셋업
 브라우저에서 `https://<host>/drive/setup` → 셋업 위저드로 첫 관리자 생성.
 (비상 복구: `docker compose -f docker-compose.deploy.yml exec backend python -m app.cli create-admin --email you@example.com`)
 
@@ -95,44 +109,66 @@ docker exec <기존nginx컨테이너> nginx -t && docker exec <기존nginx컨테
 
 ---
 
-## 1. Jenkins 설정 (1회)
+## 1. 배포 / 재배포 (수동)
 
-빌드가 배포 호스트에서 일어나므로 Jenkins 는 **SSH 만** 하면 된다.
-Jenkins 컨테이너에 docker CLI·소켓 마운트·Docker Hub 계정이 **필요 없다.**
+코드가 바뀔 때마다 `drive-deployer` 로 접속해 아래를 실행한다:
+```bash
+cd /var/local/flex-drive
+git pull --ff-only                    # 최신 코드
+cd deploy
+DC="docker compose -f docker-compose.deploy.yml"
+$DC build                             # 바뀐 소스로 재빌드
+$DC up -d                             # 변경된 컨테이너만 재생성
+docker image prune -f                 # dangling 이미지 정리
+curl -fsS http://127.0.0.1:7755/health && echo OK
+```
+> 프론트는 경로 무관하게 빌드되므로, 배포 경로를 바꾸려면 `.env` 의 `BASE_PATH` 만 바꾸고 재기동하면 된다.
 
-### 1-1. 플러그인 + 자격증명 (Manage Jenkins → Credentials)
+---
+
+## 2. (선택) Jenkins 자동화
+
+`main` push → 자동 배포까지 원하면 Jenkins 를 붙인다. 빌드는 호스트에서 하므로
+Jenkins 는 **SSH 만** 하면 되고, docker CLI·소켓 마운트·Docker Hub 계정이 **필요 없다.**
+단, Jenkins 자동화는 비밀번호가 아니라 **SSH 키**가 필요하다.
+
+### 2-1. `drive-deployer` 에 SSH 키 등록
+접속할 클라이언트(Jenkins)에서 키쌍을 만들고, 공개키만 호스트에 등록한다.
+```bash
+# (클라이언트에서) 키쌍 생성 — 개인키는 Jenkins Credentials 로, 공개키는 아래로
+ssh-keygen -t ed25519 -C jenkins-deploy -f ./jenkins_deploy_key -N ''
+
+# (호스트에서) 공개키를 restrict 붙여 등록 — 포트포워딩·PTY 차단(명령 실행엔 지장 없음)
+sudo -u drive-deployer mkdir -p /home/drive-deployer/.ssh
+sudo -u drive-deployer chmod 700 /home/drive-deployer/.ssh
+echo 'restrict ssh-ed25519 AAAA...실제공개키... jenkins-deploy' \
+  | sudo -u drive-deployer tee -a /home/drive-deployer/.ssh/authorized_keys
+sudo -u drive-deployer chmod 600 /home/drive-deployer/.ssh/authorized_keys
+```
+> 검증: `ssh -i jenkins_deploy_key drive-deployer@<호스트IP> 'whoami && docker ps'` → `drive-deployer` + 권한 에러 없이 컨테이너 목록.
+> ⚠️ `docker` 그룹은 실질 root 권한이니 개인키 관리에 유의.
+
+### 2-2. 플러그인 + 자격증명 (Manage Jenkins → Credentials)
 - 플러그인: **SSH Agent** (`sshagent` 스텝용).
 
 | ID | 종류 | 내용 |
 |----|------|------|
-| `deploy-ssh` | SSH Username with private key | 호스트 배포 계정 개인키 |
+| `deploy-ssh` | SSH Username with private key | `drive-deployer` 개인키(위 `jenkins_deploy_key`) |
 
-호스트 배포 계정(빌드·compose 를 실행하므로 docker 그룹 필요):
-```bash
-sudo useradd -m -s /bin/bash deploy && sudo usermod -aG docker deploy
-sudo -u deploy mkdir -p /home/deploy/.ssh   # Jenkins 공개키를 authorized_keys 에 (chmod 600)
-sudo chown -R deploy /var/local/flex-drive
-```
-
-### 1-2. Jenkinsfile 값 수정
+### 2-3. Jenkinsfile 값 수정
 리포 루트 `Jenkinsfile` 상단 `environment`:
-- `DEPLOY_HOST` → `deploy@<호스트IP>`
+- `DEPLOY_HOST` → `drive-deployer@<호스트IP>`
 
-### 1-3. 파이프라인 잡 + 웹훅
+### 2-4. 파이프라인 잡 + 웹훅
 New Item → Pipeline → "Pipeline script from SCM" → 이 리포 → `Jenkinsfile`. GitHub 웹훅 연결.
 
----
-
-## 2. 이후 배포 흐름 (자동)
-
+### 자동 배포 흐름
 `main` push → Jenkins 가 SSH 로 호스트에 접속해:
 1. `git fetch` + `git reset --hard origin/main` (origin 과 정확히 일치)
 2. `docker compose -f docker-compose.deploy.yml build` (호스트에서 backend/frontend 빌드)
 3. `up -d` → dangling 이미지 prune
 4. backend 컨테이너가 기동 시 `alembic upgrade head` 자동 실행 (마이그레이션 스텝 불필요)
 5. `http://127.0.0.1:7755/health` 헬스체크(20회×3초 재시도)
-
-프론트는 경로 무관하게 빌드되므로, 서버 `.env` 의 `BASE_PATH` 만 바꾸면 배포 경로가 바뀐다.
 
 ---
 
