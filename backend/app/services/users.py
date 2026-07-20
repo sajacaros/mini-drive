@@ -9,6 +9,11 @@ from __future__ import annotations
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import (
+    PasswordPolicyError,
+    validate_password_policy,
+    verify_password,
+)
 from app.models import File, User
 from app.models.enums import UserStatus
 
@@ -76,6 +81,32 @@ async def update_display_name(
     await session.commit()
     await session.refresh(user)
     return user
+
+
+class PasswordChangeError(Exception):
+    """본인 비밀번호 변경 실패. HTTP 상태 코드를 함께 전달한다."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def check_password_change(
+    current_hash: str, current_password: str, new_password: str
+) -> None:
+    """본인 비밀번호 변경 검증 (DB 무관, 단위 테스트 대상).
+
+    현재 비밀번호가 일치하지 않으면 400, 새 비밀번호가 정책을 위반하면 422 로
+    PasswordChangeError 를 발생시킨다. 통과 시 아무것도 반환하지 않는다 — 실제 해시 갱신과
+    세션 폐기는 라우트가 수행한다.
+    """
+    if not verify_password(current_password, current_hash):
+        raise PasswordChangeError(400, "현재 비밀번호가 올바르지 않습니다.")
+    try:
+        validate_password_policy(new_password)
+    except PasswordPolicyError as exc:
+        raise PasswordChangeError(422, str(exc)) from exc
 
 
 async def has_root_folder(session: AsyncSession, user_id: int) -> bool:

@@ -30,3 +30,20 @@ class MeUpdateRequest(BaseModel):
     display_name: Annotated[
         str, Field(min_length=1, max_length=100), AfterValidator(_validate_display_name)
     ]
+
+
+class PasswordChangeRequest(BaseModel):
+    """본인 비밀번호 변경 (PUT /api/users/me/password).
+
+    new_password 의 상세 정책(영문+숫자+특수문자)은 라우트에서 validate_password_policy 로
+    검증한다 — 여기서는 길이 상한만 둔다(argon2 입력 폭주 방지, register 요청과 동일 규약).
+    """
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class AvatarResponse(BaseModel):
+    """아바타 업로드 결과 (POST /api/users/me/avatar). 저장된 조회 API 경로를 돌려준다."""
+
+    avatar_url: str
