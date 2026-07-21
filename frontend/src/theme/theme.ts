@@ -30,7 +30,7 @@ export const THEME_META: Record<Theme, ThemeMeta> = {
     label: "모던 라이트",
     mode: "modern",
     scheme: "light",
-    preview: { bg: "#f8fafc", surface: "#e2e8f0", accent: "#3b82f6", text: "#0f172a" },
+    preview: { bg: "#f1f5f9", surface: "#ffffff", accent: "#3b82f6", text: "#0f172a" },
   },
   "gameboy-dark": {
     id: "gameboy-dark",

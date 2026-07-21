@@ -183,17 +183,26 @@ nginx (Reverse Proxy / Gateway)
 
 | 토큰 | 다크 모던 | 라이트 모던 | 다크 게임보이 | 라이트 게임보이 |
 |---|---|---|---|---|
-| `bg-primary` | `#0f172a` (slate-900) | `#f8fafc` (slate-50) | `#0a0a0a` (near-black) | `#f0ead6` (cream) |
-| `bg-secondary` | `#1e293b` (slate-800) | `#e2e8f0` (slate-200) | `#1a1a1a` | `#d4c9a8` |
+| `bg-primary` | `#0f172a` (slate-900) | `#f1f5f9` (slate-100) | `#0a0a0a` (near-black) | `#f0ead6` (cream) |
+| `bg-secondary` | `#1e293b` (slate-800) | `#ffffff` (white) | `#1a1a1a` | `#d4c9a8` |
 | `bg-accent` | `#3b82f6` (blue-500) | `#3b82f6` | `#00ff41` (green) | `#8bac0f` |
 | `text-primary` | `#f1f5f9` (slate-100) | `#0f172a` (slate-900) | `#00ff41` | `#303030` |
-| `text-secondary` | `#94a3b8` (slate-400) | `#64748b` (slate-500) | `#8bac0f` | `#5a5a3a` |
-| `border-color` | `#334155` (slate-700) | `#e2e8f0` (slate-200) | `#333333` | `#c4b896` |
+| `text-secondary` | `#94a3b8` (slate-400) | `#475569` (slate-600) | `#8bac0f` | `#5a5a3a` |
+| `border-color` | `#334155` (slate-700) | `#cbd5e1` (slate-300) | `#333333` | `#c4b896` |
 | `font-family` | `Inter, sans-serif` | `Inter, sans-serif` | `Press Start 2P, monospace` | `Press Start 2P, monospace` |
 | `border-radius` | `8px~12px` | `8px~12px` | `0px~4px` (sharp) | `0px~4px` |
 | `shadow` | `soft shadow` | `soft shadow` | `none` (flat) | `none` (flat) |
 | `icon-style` | `Heroicons / Lucide` | `Heroicons / Lucide` | `8-bit pixel icons` | `8-bit pixel icons` |
 | `transition` | `150ms ease` | `150ms ease` | `0ms` (instant) | `0ms` (instant) |
+
+**토큰 불변식** — 표의 값을 바꿀 때 아래를 함께 만족해야 한다. 어느 하나라도 깨지면 특정 테마에서
+UI 요소가 배경에 묻혀 보이지 않는다.
+
+1. **표면 고도:** `bg-secondary`(카드 등 떠 있는 면)는 `bg-primary`(페이지)보다 **밝다**. 다크·라이트 공통.
+2. **테두리 분리:** `border-color` 는 `bg-primary`·`bg-secondary` 어느 쪽과도 **같은 값이면 안 된다**.
+   테두리만으로 형태를 알리는 요소(체크박스, `.btn-secondary`, `.input`)가 사라진다.
+3. **호버 분리:** `bg-muted`(호버 면)는 `bg-primary`·`bg-secondary` 와 모두 달라야 한다.
+4. **본문 대비:** `text-secondary` 는 `bg-secondary` 위에서 **4.5:1 이상**.
 
 #### 3.1.4.3 테마 적용 방식 (Tailwind CSS)
 

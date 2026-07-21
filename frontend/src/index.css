@@ -42,16 +42,23 @@
 }
 
 /* ── 모던 라이트 ─────────────────────────────────────── */
+/*
+ * 표면 고도는 다크와 같은 규칙을 따른다: 떠 있는 면(secondary)이 페이지(primary)보다 밝다.
+ * 초기 PRD 표는 라이트에서만 이 관계가 뒤집혀(페이지 slate-50 < 카드 slate-200) 카드가
+ * 움푹 팬 회색 블록이 됐고, 카드 위 전경색 대비가 일괄로 깎였다. 더해서 border-color 가
+ * bg-secondary 와 같은 slate-200 이라 카드 위 테두리가 전부 소멸했다 —
+ * .btn-secondary 는 채움·테두리가 모두 카드와 같아져 버튼으로 보이지 않았다.
+ */
 .theme-modern-light {
-  --bg-primary: #f8fafc; /* slate-50 */
-  --bg-secondary: #e2e8f0; /* slate-200 (PRD 표 값) */
-  --bg-muted: #f1f5f9; /* slate-100 */
+  --bg-primary: #f1f5f9; /* slate-100 (페이지) */
+  --bg-secondary: #ffffff; /* 흰색 (카드 = 상승면, 페이지보다 밝게) */
+  --bg-muted: #e2e8f0; /* slate-200 (호버) */
   --accent: #3b82f6; /* blue-500 */
   --accent-hover: #2563eb; /* blue-600 */
   --accent-fg: #ffffff;
   --text-primary: #0f172a; /* slate-900 */
-  --text-secondary: #64748b; /* slate-500 */
-  --border-color: #e2e8f0; /* slate-200 */
+  --text-secondary: #475569; /* slate-600 — slate-500 은 카드 위 4.5:1 미달 */
+  --border-color: #cbd5e1; /* slate-300 — 표면과 분리되어야 테두리가 보인다 */
   --danger: #dc2626; /* red-600 */
   --success: #16a34a; /* green-600 */
   --warning: #d97706; /* amber-600 */
