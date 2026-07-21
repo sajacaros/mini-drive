@@ -15,7 +15,6 @@ Phase 1 결정: v1 스냅샷은 별도 복사본을 만들지 않고 file_versio
 
 from __future__ import annotations
 
-import io
 import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -24,7 +23,7 @@ from typing import Literal
 from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.datastructures import Headers, UploadFile
+from starlette.datastructures import UploadFile
 
 from app.core.metrics import observe_download_bytes
 from app.models import File, FileGroupPermission, FileVersion, Group, User
@@ -504,59 +503,6 @@ async def _safe_delete_object(storage: StorageService, key: str) -> None:
         pass
 
 
-# --- 서버 생성 텍스트 파일 (위키 페이지, PRD 3.7.1) --------------------------
-
-
-async def find_active_child(
-    session: AsyncSession, parent_id: int, name: str
-) -> File | None:
-    """부모 폴더 하위의 활성(미삭제) 동명 항목을 찾는다(없으면 None). 위키 페이지 upsert 용."""
-    return (
-        await session.execute(
-            select(File).where(
-                File.parent_folder_id == parent_id,
-                File.name == name,
-                File.is_deleted.is_(False),
-            )
-        )
-    ).scalar_one_or_none()
-
-
-def _bytes_upload(name: str, content: bytes, mime: str) -> UploadFile:
-    """바이트를 Starlette UploadFile 로 감싼다(기존 업로드/버전 경로 재사용용)."""
-    return UploadFile(
-        file=io.BytesIO(content),
-        size=len(content),
-        filename=name,
-        headers=Headers({"content-type": mime}),
-    )
-
-
-async def write_text_file_as(
-    session: AsyncSession,
-    storage: StorageService,
-    owner: User,
-    *,
-    parent_id: int,
-    name: str,
-    content: bytes,
-    mime: str = "text/markdown",
-) -> File:
-    """서버 생성 텍스트 파일(위키 페이지 등)을 owner 자격으로 쓴다 (PRD 3.7.1).
-
-    같은 폴더에 동명 활성 파일이 있으면 새 버전으로(내용 갱신, file_versions 보존), 없으면 새
-    파일로 만든다. 기존 업로드/재업로드 경로를 그대로 재사용하므로 저장 시 7-1 훅으로 자동
-    임베딩된다(위키 페이지도 검색 대상, PRD 5.13). owner 는 root_folder 소유자(=스페이스 생성자).
-    """
-    existing = await find_active_child(session, parent_id, name)
-    upload = _bytes_upload(name, content, mime)
-    if existing is not None and not existing.is_folder:
-        return await reupload_file(
-            session, storage, owner, existing.id, upload, base_version=None
-        )
-    return await upload_file(session, storage, owner, upload, parent_id)
-
-
 # --- 다운로드 (게이트웨이 모델) ---------------------------------------------
 
 
@@ -975,9 +921,7 @@ async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File
         raise FileServiceError(409, "휴지통에 있는 항목만 복구할 수 있습니다.")
 
     # 재부착 대상 부모 결정: 원래 부모가 사라졌으면(삭제됐으면) 루트로.
-    # NOTE(7-3): 복구 시 부모가 바뀌는 것은 일종의 이동이다. 이동은 내용 불변이라 청크 재작성은
-    # 불필요하지만(7-1), 상속 권한·폴더 재귀 소스 범위를 바꿀 수 있어 위키 소스 범위 재평가가
-    # 필요하다(PRD 3.7.2 자동 재인덱싱 — 이동 훅). 7-3(위키)에서 소스 stale 마킹을 추가한다.
+    # 부모가 바뀌면 상속 권한 판정 대상 경로도 함께 바뀐다(조회 시 판정이라 별도 갱신은 불필요).
     target_parent_id = file.parent_folder_id
     if target_parent_id is not None:
         parent = await get_file(session, target_parent_id)
