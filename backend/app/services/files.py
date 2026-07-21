@@ -1013,17 +1013,23 @@ async def permanent_delete(
     # 썸네일 오브젝트도 함께 제거한다 (thumbnails/{fileId}.png). 할당량에는 포함하지 않는다.
     keys.update(r.thumbnail_key for r in file_rows if r.thumbnail_key)
 
+    #    회수 대상 용량은 **파일 소유자별로** 집계한다 — 폴더 하위에는 협업자가 올린(소유자가
+    #    다른) 파일이 섞일 수 있고, 그 바이트는 소유자의 storage_used 에 잡혀 있기 때문이다.
+    #    지우는 사람 기준으로 되돌리면 실제 소유자의 사용량이 영원히 부풀어 남는다.
     version_rows = (
         await session.execute(
             text(
                 _SUBTREE_CTE
-                + " SELECT object_key, size FROM file_versions "
-                "WHERE file_id IN (SELECT id FROM sub)"
+                + " SELECT f.user_id AS owner_id, v.object_key, v.size FROM file_versions v "
+                "JOIN files f ON f.id = v.file_id "
+                "WHERE v.file_id IN (SELECT id FROM sub)"
             ),
             {"root": file.id},
         )
     ).all()
-    total_size = sum(r.size for r in version_rows)
+    size_by_owner: dict[int, int] = {}
+    for r in version_rows:
+        size_by_owner[r.owner_id] = size_by_owner.get(r.owner_id, 0) + r.size
     keys.update(r.object_key for r in version_rows if r.object_key)
 
     # 2) DB 확정 — 행 삭제(versions CASCADE) + storage_used 감소.
@@ -1038,8 +1044,9 @@ async def permanent_delete(
         text(_SUBTREE_CTE + " DELETE FROM files WHERE id IN (SELECT id FROM sub)"),
         {"root": file.id},
     )
-    if total_size:
-        await _release_quota(session, user.id, total_size)
+    for owner_id, size in size_by_owner.items():
+        if size:
+            await _release_quota(session, owner_id, size)
     await session.commit()
 
     # 3) 오브젝트 정리 — best-effort (실패해도 DB 는 이미 일관).
