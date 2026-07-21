@@ -183,17 +183,37 @@ nginx (Reverse Proxy / Gateway)
 
 | 토큰 | 다크 모던 | 라이트 모던 | 다크 게임보이 | 라이트 게임보이 |
 |---|---|---|---|---|
-| `bg-primary` | `#0f172a` (slate-900) | `#f8fafc` (slate-50) | `#0a0a0a` (near-black) | `#f0ead6` (cream) |
-| `bg-secondary` | `#1e293b` (slate-800) | `#e2e8f0` (slate-200) | `#1a1a1a` | `#d4c9a8` |
-| `bg-accent` | `#3b82f6` (blue-500) | `#3b82f6` | `#00ff41` (green) | `#8bac0f` |
+| `bg-primary` | `#0f172a` (slate-900) | `#f1f5f9` (slate-100) | `#0a0a0a` (near-black) | `#d4c9a8` (tan) |
+| `bg-secondary` | `#1e293b` (slate-800) | `#ffffff` (white) | `#1a1a1a` | `#f0ead6` (cream) |
+| `bg-accent` | `#2563eb` (blue-600) | `#2563eb` | `#00ff41` (green) | `#8bac0f` |
+| `accent-text` | `#93c5fd` (blue-300) | `#1d4ed8` (blue-700) | `#00ff41` | `#333f05` (dark olive) |
 | `text-primary` | `#f1f5f9` (slate-100) | `#0f172a` (slate-900) | `#00ff41` | `#303030` |
-| `text-secondary` | `#94a3b8` (slate-400) | `#64748b` (slate-500) | `#8bac0f` | `#5a5a3a` |
-| `border-color` | `#334155` (slate-700) | `#e2e8f0` (slate-200) | `#333333` | `#c4b896` |
+| `text-secondary` | `#94a3b8` (slate-400) | `#475569` (slate-600) | `#8bac0f` | `#4f4f30` |
+| `border-color` | `#334155` (slate-700) | `#cbd5e1` (slate-300) | `#333333` | `#a89c78` |
 | `font-family` | `Inter, sans-serif` | `Inter, sans-serif` | `Press Start 2P, monospace` | `Press Start 2P, monospace` |
 | `border-radius` | `8px~12px` | `8px~12px` | `0px~4px` (sharp) | `0px~4px` |
 | `shadow` | `soft shadow` | `soft shadow` | `none` (flat) | `none` (flat) |
 | `icon-style` | `Heroicons / Lucide` | `Heroicons / Lucide` | `8-bit pixel icons` | `8-bit pixel icons` |
 | `transition` | `150ms ease` | `150ms ease` | `0ms` (instant) | `0ms` (instant) |
+
+**토큰 불변식** — 표의 값을 바꿀 때 아래를 함께 만족해야 한다. 어느 하나라도 깨지면 특정 테마에서
+UI 요소가 배경에 묻혀 보이지 않는다.
+
+1. **표면 고도:** `bg-secondary`(카드 등 떠 있는 면)는 `bg-primary`(페이지)보다 **밝다**. 다크·라이트 공통.
+2. **테두리 분리:** `border-color` 는 `bg-primary`·`bg-secondary` 어느 쪽과도 **같은 값이면 안 된다**.
+   테두리만으로 형태를 알리는 요소(체크박스, `.btn-secondary`, `.input`)가 사라진다.
+3. **호버 분리:** `bg-muted`(호버 면)는 `bg-primary`·`bg-secondary` 와 모두 달라야 한다.
+   호버로 배경을 `bg-muted` 로 바꾸는 요소는 **글씨도 `text-primary` 로 함께 올린다** —
+   `text-secondary` 를 그대로 두면 `bg-muted` 위에서 4.5:1 을 못 넘는 테마가 있다.
+4. **본문 대비:** `text-secondary` 는 `bg-secondary`·`bg-primary` **양쪽에서** 4.5:1 이상.
+   보조 텍스트는 카드 안과 페이지 배경 위에 모두 놓인다 — 한쪽만 보면 놓친다.
+5. **채움색과 글씨색 분리:** `bg-accent` 는 채움 전용이다. 흰 글씨(`accent-fg`)를 얹으므로
+   그 조합이 **4.5:1 이상**이어야 하고, 같은 색을 표면 위 글씨로 재사용하면 대비가 모자란다.
+   accent 를 글씨로 쓸 때는 `accent-text`(유틸 `.text-accent`)를 쓴다. `accent-text` 는
+   `bg-secondary`·`bg-primary` 뿐 아니라 **`bg-muted` 위에서도** 4.5:1 을 넘어야 한다
+   (활성 내비 항목이 호버면 위에 얹힌다).
+6. **틴트 칩:** 톤 색을 옅게 깐 배경(`Badge` 등) 위의 글씨는 톤 색 그대로가 아니라
+   `text-primary` 쪽으로 당겨서(톤 25%) 쓴다. 같은 색의 옅은 틴트 위 같은 색 글씨는 AA 를 못 넘는다.
 
 #### 3.1.4.3 테마 적용 방식 (Tailwind CSS)
 

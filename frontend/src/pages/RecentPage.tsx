@@ -71,7 +71,7 @@ export function RecentPage() {
       <div className="border-b border-token px-6 py-4">
         <PageHeader align="start">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
-          <span className="text-[color:var(--accent)]">
+          <span className="text-accent">
             <HistoryIcon width={18} height={18} />
           </span>
           최근

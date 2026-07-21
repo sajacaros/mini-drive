@@ -189,7 +189,7 @@ export function TodoPage() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="flex items-center gap-2 text-lg font-semibold">
-                <span className="text-[color:var(--accent)]">
+                <span className="text-accent">
                   <CalendarIcon width={18} height={18} />
                 </span>
                 할 일
@@ -233,7 +233,7 @@ export function TodoPage() {
               <div className="text-base font-semibold">{formatDayLabel(date)}</div>
               {!isToday && (
                 <button
-                  className="text-xs text-[color:var(--accent)] hover:underline"
+                  className="text-xs text-accent hover:underline"
                   onClick={() => setDate(todayStr())}
                 >
                   오늘로 이동
@@ -371,11 +371,13 @@ function TodoRow({
         <GripIcon width={16} height={16} />
       </span>
 
-      {/* 체크 (완료) */}
+      {/* 체크 (완료) — 미완료 상태는 채움 없이 테두리만으로 존재를 알리므로, 장식용인
+          --border-color 로는 부족하다(카드 위 1.4:1). 컨트롤 경계에 요구되는 3:1 을
+          넘기려면 --text-secondary 를 써야 한다 (4테마 최저 3.07:1). */}
       <button
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors"
         style={{
-          borderColor: done ? "var(--success)" : "var(--border-color)",
+          borderColor: done ? "var(--success)" : "var(--text-secondary)",
           background: done ? "var(--success)" : "transparent",
           color: done ? "var(--bg-primary)" : "transparent",
         }}
@@ -399,7 +401,7 @@ function TodoRow({
           {item.title}
         </div>
         {item.routine_id !== null && (
-          <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-[color:var(--accent)]">
+          <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
             <RepeatIcon width={11} height={11} />
             루틴
           </span>

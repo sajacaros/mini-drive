@@ -322,7 +322,7 @@ function FilterTab({
       onClick={onClick}
       className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
         active
-          ? "border-[color:var(--accent)] text-[color:var(--accent)]"
+          ? "border-[color:var(--accent)] text-accent"
           : "border-transparent text-muted hover:text-[color:var(--text-primary)]"
       }`}
     >

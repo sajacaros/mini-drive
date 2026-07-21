@@ -105,7 +105,7 @@ export function SharedWithMePage() {
                           onClick={() => onOpen(item)}
                           disabled={!f.is_folder}
                         >
-                          <span className={f.is_folder ? "text-[color:var(--accent)]" : "text-muted"}>
+                          <span className={f.is_folder ? "text-accent" : "text-muted"}>
                             {f.is_folder ? <FolderIcon /> : <FileIcon />}
                           </span>
                           <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>

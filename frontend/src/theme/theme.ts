@@ -30,7 +30,7 @@ export const THEME_META: Record<Theme, ThemeMeta> = {
     label: "모던 라이트",
     mode: "modern",
     scheme: "light",
-    preview: { bg: "#f8fafc", surface: "#e2e8f0", accent: "#3b82f6", text: "#0f172a" },
+    preview: { bg: "#f1f5f9", surface: "#ffffff", accent: "#3b82f6", text: "#0f172a" },
   },
   "gameboy-dark": {
     id: "gameboy-dark",
@@ -44,7 +44,7 @@ export const THEME_META: Record<Theme, ThemeMeta> = {
     label: "게임보이 라이트",
     mode: "gameboy",
     scheme: "light",
-    preview: { bg: "#f0ead6", surface: "#d4c9a8", accent: "#8bac0f", text: "#303030" },
+    preview: { bg: "#d4c9a8", surface: "#f0ead6", accent: "#8bac0f", text: "#303030" },
   },
 };
 

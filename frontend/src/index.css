@@ -24,9 +24,10 @@
   --bg-primary: #0f172a; /* slate-900 */
   --bg-secondary: #1e293b; /* slate-800 */
   --bg-muted: #334155; /* slate-700 */
-  --accent: #3b82f6; /* blue-500 */
-  --accent-hover: #2563eb; /* blue-600 */
+  --accent: #2563eb; /* blue-600 — blue-500 은 흰 글씨(accent-fg)와 3.68:1 로 AA 미달 */
+  --accent-hover: #1d4ed8; /* blue-700 */
   --accent-fg: #ffffff;
+  --accent-text: #93c5fd; /* blue-300 — accent 를 "글씨색"으로 쓸 때 (채움용과 분리) */
   --text-primary: #f1f5f9; /* slate-100 */
   --text-secondary: #94a3b8; /* slate-400 */
   --border-color: #334155; /* slate-700 */
@@ -42,16 +43,24 @@
 }
 
 /* ── 모던 라이트 ─────────────────────────────────────── */
+/*
+ * 표면 고도는 다크와 같은 규칙을 따른다: 떠 있는 면(secondary)이 페이지(primary)보다 밝다.
+ * 초기 PRD 표는 라이트에서만 이 관계가 뒤집혀(페이지 slate-50 < 카드 slate-200) 카드가
+ * 움푹 팬 회색 블록이 됐고, 카드 위 전경색 대비가 일괄로 깎였다. 더해서 border-color 가
+ * bg-secondary 와 같은 slate-200 이라 카드 위 테두리가 전부 소멸했다 —
+ * .btn-secondary 는 채움·테두리가 모두 카드와 같아져 버튼으로 보이지 않았다.
+ */
 .theme-modern-light {
-  --bg-primary: #f8fafc; /* slate-50 */
-  --bg-secondary: #e2e8f0; /* slate-200 (PRD 표 값) */
-  --bg-muted: #f1f5f9; /* slate-100 */
-  --accent: #3b82f6; /* blue-500 */
-  --accent-hover: #2563eb; /* blue-600 */
+  --bg-primary: #f1f5f9; /* slate-100 (페이지) */
+  --bg-secondary: #ffffff; /* 흰색 (카드 = 상승면, 페이지보다 밝게) */
+  --bg-muted: #e2e8f0; /* slate-200 (호버) */
+  --accent: #2563eb; /* blue-600 — blue-500 은 흰 글씨(accent-fg)와 3.68:1 로 AA 미달 */
+  --accent-hover: #1d4ed8; /* blue-700 */
   --accent-fg: #ffffff;
+  --accent-text: #1d4ed8; /* blue-700 — accent 를 "글씨색"으로 쓸 때 (채움용과 분리) */
   --text-primary: #0f172a; /* slate-900 */
-  --text-secondary: #64748b; /* slate-500 */
-  --border-color: #e2e8f0; /* slate-200 */
+  --text-secondary: #475569; /* slate-600 — slate-500 은 카드 위 4.5:1 미달 */
+  --border-color: #cbd5e1; /* slate-300 — 표면과 분리되어야 테두리가 보인다 */
   --danger: #dc2626; /* red-600 */
   --success: #16a34a; /* green-600 */
   --warning: #d97706; /* amber-600 */
@@ -71,6 +80,7 @@
   --accent: #00ff41; /* green */
   --accent-hover: #00cc34;
   --accent-fg: #0a0a0a;
+  --accent-text: #00ff41; /* 검정 위 형광 초록 — 채움용과 같아도 대비 충분 */
   --text-primary: #00ff41;
   --text-secondary: #8bac0f;
   --border-color: #333333;
@@ -86,16 +96,21 @@
 }
 
 /* ── 게임보이 라이트 (크림/올리브 8비트) ─────────────── */
+/*
+ * 모던 라이트와 같은 고도 역전이 있어(페이지 크림 > 카드 탠) 두 색의 역할을 맞바꿨다.
+ * 팔레트는 그대로 두고 어느 쪽이 "떠 있는 면"인지만 정정한 것이라 레트로 톤은 유지된다.
+ */
 .theme-gameboy-light {
-  --bg-primary: #f0ead6; /* cream */
-  --bg-secondary: #d4c9a8;
+  --bg-primary: #d4c9a8; /* tan (페이지) */
+  --bg-secondary: #f0ead6; /* cream (카드 = 상승면, 페이지보다 밝게) */
   --bg-muted: #c4b896;
   --accent: #8bac0f; /* olive green */
   --accent-hover: #6d8709;
   --accent-fg: #0f380f; /* darkest gameboy green */
+  --accent-text: #333f05; /* 어두운 올리브 — 크림 위에서 8bac0f 는 2.2:1 로 판독 불가 */
   --text-primary: #303030;
-  --text-secondary: #5a5a3a;
-  --border-color: #c4b896;
+  --text-secondary: #4f4f30; /* 페이지(탠) 위 4.5:1 확보 — 5a5a3a 는 4.30 */
+  --border-color: #a89c78; /* 크림·탠 양쪽과 분리되는 어두운 탠 */
   --danger: #9b2226;
   --success: #556b0f;
   --warning: #ae7b18;
@@ -215,6 +230,11 @@ body {
 /* ── 유틸: 토큰 색상 ─────────────────────────────────── */
 .text-muted {
   color: var(--text-secondary);
+}
+/* accent 를 글씨색으로 쓸 때는 반드시 이 유틸을 쓴다.
+   --accent 는 채움(버튼·프로그레스)용이라 표면 위 글씨로는 대비가 모자란다. */
+.text-accent {
+  color: var(--accent-text);
 }
 .text-danger {
   color: var(--danger);

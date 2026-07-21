@@ -184,7 +184,7 @@ export function AdminAuditPage() {
                         {hasDetail ? (
                           <div>
                             <button
-                              className="text-xs text-[color:var(--accent)] hover:underline"
+                              className="text-xs text-accent hover:underline"
                               onClick={() => setExpanded(isOpen ? null : log.id)}
                             >
                               {isOpen ? "접기" : "펼치기"}

@@ -149,7 +149,7 @@ export function RoutinesPage() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <h1 className="flex items-center gap-2 text-lg font-semibold">
-                <span className="text-[color:var(--accent)]">
+                <span className="text-accent">
                   <RepeatIcon width={18} height={18} />
                 </span>
                 반복 루틴
@@ -202,7 +202,9 @@ export function RoutinesPage() {
                               key={d}
                               className="inline-flex h-5 w-5 items-center justify-center rounded text-xs font-medium"
                               style={{
-                                color: "var(--accent)",
+                                // Badge 와 같은 틴트 칩 — 글씨를 text-primary 쪽으로 당겨야 AA 를 넘는다.
+                                color:
+                                  "color-mix(in srgb, var(--accent) 25%, var(--text-primary))",
                                 background:
                                   "color-mix(in srgb, var(--accent) 16%, transparent)",
                               }}
@@ -224,7 +226,7 @@ export function RoutinesPage() {
                     활성
                   </label>
                   <button
-                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted transition-colors hover:text-[color:var(--accent)]"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted transition-colors hover:text-accent"
                     title="수정"
                     aria-label="수정"
                     onClick={() => openEdit(r)}
