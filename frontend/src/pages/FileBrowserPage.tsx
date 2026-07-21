@@ -900,7 +900,6 @@ export function FileBrowserPage({
         ) : (
           (() => {
             const rowProps = {
-              shared: inSharedSubtree,
               canWrite,
               canManage,
               onOpenFolder: openFolder,
@@ -1158,7 +1157,6 @@ export function SharedFolderBrowserPage() {
 
 /** 목록/그리드가 공유하는 행 동작 핸들러. */
 interface FileRowProps {
-  shared: boolean;
   canWrite: boolean;
   canManage: boolean;
   onOpenFolder: (f: FileNode) => void;
@@ -1227,8 +1225,9 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
           <IconAction title="버전 기록" onClick={() => p.onVersions(f)}>
             <HistoryIcon width={16} height={16} />
           </IconAction>
-          {/* 공유 링크 생성은 소유자 전용 — 공유 폴더 탐색 중에는 숨긴다. */}
-          {!p.shared && (
+          {/* 공유 링크 생성은 소유자 또는 write 이상 — 백엔드 create_share 와 같은 기준으로
+              게이팅한다(컨테이너가 공유 트리인지가 아니라 항목 자체의 유효 권한). */}
+          {canWrite && (
             <IconAction title="공유" onClick={() => p.onShare(f)}>
               <ShareIcon width={16} height={16} />
             </IconAction>
