@@ -64,6 +64,29 @@ export interface FileNode {
   permission?: "owner" | "read" | "write" | "manage";
 }
 
+/** POST /api/files/batch 의 항목별 결과. 성공이면 file, 실패면 code/detail 이 채워진다. */
+export interface BatchUploadItem {
+  path: string;
+  status: "created" | "error";
+  file: FileNode | null;
+  code: number | null;
+  detail: string | null;
+}
+
+/**
+ * POST /api/files/batch (배치 업로드).
+ *
+ * 부분 실패가 정상 경로라 항목이 전부 실패해도 HTTP 200 이다.
+ * `folders` 는 개수가 아니라 경로 → 폴더 id 맵으로, 배치에 담지 않은 큰 파일을
+ * 단일/재개 업로드로 보낼 때 parent_id 를 여기서 꺼낸다.
+ */
+export interface BatchUploadResponse {
+  items: BatchUploadItem[];
+  folders: Record<string, number>;
+  succeeded: number;
+  failed: number;
+}
+
 /** GET /api/files (페이지네이션). */
 export interface FileListResponse {
   items: FileNode[];

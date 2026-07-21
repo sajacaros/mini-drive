@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     resumable_part_size: int = 8 * 1024 * 1024        # 8 MiB
     resumable_session_ttl_seconds: int = 24 * 60 * 60  # 24h
 
+    # 배치 업로드 (폴더 업로드). 작은 파일을 한 요청에 묶어 요청 수를 줄이기 위한 상한이며,
+    # 파일 1개 크기 상한(MAX_FILE_SIZE=10GB)과는 무관하다 — max_batch_bytes 는 요청 본문 **합계**다.
+    # 이 값을 넘는 파일은 클라이언트가 배치에 담지 않고 기존 단일/재개 업로드 경로로 보낸다.
+    max_batch_files: int = 200
+    max_batch_bytes: int = 64 * 1024 * 1024           # 64 MiB
+
 
 @lru_cache
 def get_settings() -> Settings:

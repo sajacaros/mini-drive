@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.database import engine
 from app.core.logging import configure_logging, get_logger
 from app.core.metrics import render_metrics
-from app.core.middleware import RequestContextMiddleware
+from app.core.middleware import BatchBodyLimitMiddleware, RequestContextMiddleware
 from app.core.redis import redis_client
 
 # import 시점에 로깅을 구성해 uvicorn/테스트 어느 진입점에서도 일관 포맷을 보장한다.
@@ -39,6 +39,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # 배치 본문 상한 — 라우트가 multipart 를 파싱하기 전에 걸러야 하므로 미들웨어에 둔다.
+    # add 순서상 RequestContextMiddleware 안쪽이라 거부 응답도 정상적으로 로깅/계측된다.
+    app.add_middleware(BatchBodyLimitMiddleware)
     # 요청 로깅/메트릭 미들웨어 — CORS 보다 먼저 add 하여 실행 순서상 바깥(가장 먼저)에 둔다.
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(

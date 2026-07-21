@@ -32,6 +32,15 @@ export const FileIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 폴더 업로드 — 폴더 위로 향하는 화살표. */
+export const FolderUploadIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M22 12V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2h8" />
+    <path d="M18 22v-7" />
+    <path d="M15 18l3-3 3 3" />
+  </svg>
+);
+
 export const UploadIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />

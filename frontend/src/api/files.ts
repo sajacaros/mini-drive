@@ -4,6 +4,7 @@ import type { AxiosProgressEvent } from "axios";
 
 import apiClient from "./client";
 import type {
+  BatchUploadResponse,
   DownloadTicketResponse,
   FileListResponse,
   FileNode,
@@ -44,6 +45,34 @@ export async function uploadFile(
         onProgress(Math.round((event.loaded / event.total) * 100));
       }
     },
+  });
+  return data;
+}
+
+/**
+ * 배치 업로드 — 여러 파일을 각자의 상대 경로대로 한 요청에 올린다(폴더 업로드).
+ *
+ * `entries` 를 비우고 `dirs` 만 보내면 폴더 트리만 만들고 `folders` 맵을 받아온다.
+ * 부분 실패가 정상 경로라 HTTP 는 200 이고 성패는 항목별 `items` 가 말한다.
+ */
+export async function batchUpload(
+  entries: { path: string; file: File }[],
+  dirs: string[],
+  parentId: number | null,
+  onProgress?: (loaded: number) => void,
+): Promise<BatchUploadResponse> {
+  const form = new FormData();
+  for (const { path, file } of entries) {
+    // 파일명은 서버가 paths 의 마지막 세그먼트로 덮어쓰므로 여기서는 참고값이다.
+    form.append("files", file, file.name);
+    form.append("paths", path);
+  }
+  for (const dir of dirs) form.append("dirs", dir);
+  if (parentId != null) form.append("parent_id", String(parentId));
+
+  const { data } = await apiClient.post<BatchUploadResponse>("/files/batch", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+    onUploadProgress: (event: AxiosProgressEvent) => onProgress?.(event.loaded),
   });
   return data;
 }

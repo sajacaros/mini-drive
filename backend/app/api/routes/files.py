@@ -30,6 +30,8 @@ from app.api.preview import render_preview
 from app.core.config import settings
 from app.models.enums import UserStatus
 from app.schemas.files import (
+    BatchUploadItem,
+    BatchUploadResponse,
     DownloadTicketResponse,
     FileListResponse,
     FileRenameRequest,
@@ -180,6 +182,63 @@ async def upload(
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return FileResponse.model_validate(created)
+
+
+@router.post(
+    "/batch",
+    response_model=BatchUploadResponse,
+    dependencies=[Depends(rate_limit_user("upload", "rate_limit_upload_per_min"))],
+)
+async def batch_upload(
+    user: CurrentUser,
+    session: DbSession,
+    files: Annotated[list[UploadFile], FileParam()] = [],  # noqa: B006 - FastAPI 기본값
+    paths: Annotated[list[str], Form()] = [],  # noqa: B006
+    dirs: Annotated[list[str], Form()] = [],  # noqa: B006
+    parent_id: Annotated[int | None, Form()] = None,
+) -> BatchUploadResponse:
+    """배치 업로드 — 여러 파일을 각자의 상대 경로대로 저장한다 (폴더 업로드).
+
+    `paths[i]` 는 `files[i]` 의 파일명을 포함한 상대 경로("docs/img/a.png")다. 중간 폴더는
+    없으면 만들고 있으면 재사용한다. `dirs` 만 보내고 `files` 를 비우면 폴더 트리만 확정하며,
+    응답 `folders` 맵으로 상위 경로의 폴더 id 를 받아갈 수 있다.
+
+    부분 실패는 정상이다 — 항목별 성패를 `items` 로 돌려주고 HTTP 는 200 이다.
+
+    본문 크기 상한은 BatchBodyLimitMiddleware 가 파싱 전에 Content-Length 로 건다.
+    여기서는 파싱 후에 알 수 있는 개수/합계를 이중으로 확인한다.
+    """
+    if len(files) != len(paths):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="files 와 paths 의 개수가 다릅니다.",
+        )
+    if len(files) > settings.max_batch_files:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"한 배치에 담을 수 있는 파일은 {settings.max_batch_files}개까지입니다.",
+        )
+    total = sum(files_service._upload_size(f) for f in files)
+    if total > settings.max_batch_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="요청 본문이 배치 상한을 초과했습니다.",
+        )
+
+    try:
+        items, folders = await files_service.batch_upload(
+            session, get_storage(), user, files, paths, dirs, parent_id
+        )
+    except FileServiceError as exc:
+        # 최상위 parent_id 해석 실패 등 배치 전체가 성립하지 않는 경우만 여기로 온다.
+        raise _http_error(exc) from exc
+
+    return BatchUploadResponse(
+        items=[BatchUploadItem.model_validate(it) for it in items],
+        folders=folders,
+        succeeded=sum(1 for it in items if it["status"] == "created"),
+        failed=sum(1 for it in items if it["status"] == "error"),
+    )
 
 
 # --- 재개 가능 업로드 (PRD 3.2) — 고정 prefix /uploads 로 /{file_id} 충돌 회피 ---

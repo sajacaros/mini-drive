@@ -20,11 +20,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import Select, func, select, text, update
+from sqlalchemy import Select, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
+from app.core.logging import get_logger
 from app.core.metrics import observe_download_bytes
 from app.models import File, FileGroupPermission, FileVersion, Group, User
 from app.services import file_events as file_events_service
@@ -34,6 +35,8 @@ from app.services import thumbnails as thumbnails_service
 from app.services.groups import get_user_group_ids
 from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
+
+_log = get_logger("app.files")
 
 AccessNeed = Literal["read", "write", "manage"]
 
@@ -499,6 +502,11 @@ async def upload_file(
     await session.refresh(file)
     # 이미지면 썸네일 생성 (best-effort, 실패해도 업로드는 성공 상태 유지) — PRD 3.2.
     await thumbnails_service.maybe_generate(session, storage, file)
+    # maybe_generate 는 실패 시 내부에서 rollback 한다(SVG·깨진 이미지 등). 그러면 세션의
+    # 인스턴스가 전부 expire 되므로, 이어서 읽는 것들을 되살린다 — 이게 없으면 아래 user.id 가
+    # MissingGreenlet 을 던져 "업로드는 성공 상태 유지"라는 약속이 깨지고 500 이 된다.
+    await revive(session, user)
+    await revive(session, file)
     await file_events_service.publish_file_event(
         type="upload",
         file_id=file.id,
@@ -514,6 +522,249 @@ async def _safe_delete_object(storage: StorageService, key: str) -> None:
         await storage.delete_async(key)
     except Exception:  # noqa: BLE001 - best-effort 정리, 실패해도 무시
         pass
+
+
+# --- 배치 업로드 (폴더 업로드) ----------------------------------------------
+#
+# 한 요청에 여러 파일 + 각자의 상대 경로를 받아 폴더 트리를 만들며 저장한다.
+# 파일 저장 자체는 upload_file 을 그대로 재사용한다 — upload_file 이 **파일마다 독립적으로
+# commit** 하므로(위 함수 참조) 한 파일의 실패/rollback 이 이미 커밋된 앞선 파일에 영향을
+# 주지 않는다. 덕분에 할당량 선점·MinIO 스트리밍·v1 버전 기록·썸네일·SSE 가 전부 재사용된다.
+#
+# 부분 성공은 예외가 아니라 정상 경로다. 200개 중 3개가 409 로 실패해도 나머지는 저장된다.
+
+
+MAX_PATH_DEPTH = 32       # 경로 세그먼트 수 상한
+MAX_PATH_LENGTH = 4096    # 상대 경로 문자열 길이 상한
+MAX_NAME_LENGTH = 255     # 세그먼트(파일/폴더 이름) 길이 상한
+
+
+def _is_control_char(ch: str) -> bool:
+    return ch < "\x20" or ch == "\x7f"
+
+
+def normalize_relpath(raw: str) -> list[str]:
+    """상대 경로를 세그먼트 리스트로 정규화한다. **이 함수가 유일한 신뢰 경계다.**
+
+    반환된 세그먼트는 그대로 create_folder 의 이름과 파일명이 된다. 오브젝트 키는
+    build_file_key(user_id, file_id) 로 id 기반이라 사용자 경로가 스토리지 키에 들어가지
+    않지만, DB 이름 컬럼에는 들어가므로 여기서 전부 걸러야 한다.
+
+    프론트엔드 `lib/fileTree.ts` 의 검증이 이 규칙과 일치해야 한다 — 어긋나면 클라이언트가
+    통과시킨 항목을 서버가 거부하는 상황이 생긴다.
+
+    실패 시 FileServiceError(422) 를 던진다. 호출자(batch_upload)가 항목별로 잡아
+    부분 실패로 기록하므로, 경로 하나가 배치 전체를 중단시키지는 않는다.
+    """
+    if len(raw) > MAX_PATH_LENGTH:
+        raise FileServiceError(422, "경로가 너무 깁니다.")
+
+    unified = raw.replace("\\", "/")  # Windows 클라이언트
+    if unified.startswith("/"):
+        raise FileServiceError(422, "절대 경로는 사용할 수 없습니다.")
+    # 드라이브 문자(C:, d:) — 세그먼트 검사만으로는 걸리지 않으므로 선행 차단.
+    head = unified.split("/", 1)[0]
+    if len(head) >= 2 and head[1] == ":":
+        raise FileServiceError(422, "절대 경로는 사용할 수 없습니다.")
+
+    segments: list[str] = []
+    for raw_seg in unified.split("/"):
+        if raw_seg in ("", "."):
+            continue  # 중복 슬래시·현재 디렉터리는 무시
+        if raw_seg == "..":
+            # 상쇄 계산을 하지 않고 즉시 거부한다 — "a/../b" 도 막는다.
+            raise FileServiceError(422, "상위 경로(..)는 사용할 수 없습니다.")
+        seg = raw_seg.strip()
+        if not seg:
+            raise FileServiceError(422, "이름이 비어 있습니다.")
+        if len(seg) > MAX_NAME_LENGTH:
+            raise FileServiceError(422, "이름이 255자를 넘습니다.")
+        if any(_is_control_char(ch) for ch in seg):
+            raise FileServiceError(422, "이름에 쓸 수 없는 문자가 있습니다.")
+        segments.append(seg)
+
+    if not segments:
+        raise FileServiceError(422, "경로가 비어 있습니다.")
+    if len(segments) > MAX_PATH_DEPTH:
+        raise FileServiceError(422, "폴더 깊이가 32단계를 넘습니다.")
+    return segments
+
+
+async def revive(session: AsyncSession, instance: object) -> None:
+    """rollback 으로 expire 된 ORM 인스턴스를 되살린다.
+
+    session.rollback() 은 세션에 붙어 있는 인스턴스를 **전부** expire 시킨다. 그 뒤 속성을
+    읽으면 비동기 컨텍스트 밖에서 지연 로드가 일어나 MissingGreenlet 으로 죽는다.
+    rollback 이후에도 계속 쓰는 객체가 있으면 여기서 명시적으로 다시 읽어야 한다.
+
+    이 경로로 실제 사고가 두 번 났다.
+      - 배치 업로드: 한 파일이 409 로 실패한 뒤 다음 파일에서 ensure_file_access 가 user.id 를
+        읽다 죽었다. 요청당 파일이 하나인 단일 업로드에서는 rollback 직후 요청이 끝나 안 보인다.
+      - 썸네일 생성 실패(SVG·깨진 이미지): maybe_generate 가 내부에서 rollback 하는데 file 만
+        되살려서, 호출자가 이어서 읽는 user 가 expire 상태로 남았다.
+    """
+    if inspect(instance).expired:
+        await session.refresh(instance)
+
+
+async def _lookup_child(
+    session: AsyncSession, parent_id: int, name: str
+) -> File | None:
+    """부모 폴더 안의 활성(비삭제) 동명 항목. 없으면 None."""
+    return (
+        await session.execute(
+            select(File).where(
+                File.parent_folder_id == parent_id,
+                File.name == name,
+                File.is_deleted.is_(False),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _ensure_folder_path(
+    session: AsyncSession,
+    user: User,
+    root_id: int,
+    segments: Sequence[str],
+    cache: dict[tuple[int, str], int],
+) -> list[int]:
+    """root_id 아래로 segments 경로의 폴더를 확보하고 세그먼트별 폴더 id 를 반환한다.
+
+    기존 폴더가 있으면 재사용한다(= 기존 트리에 병합). 같은 이름의 *파일*이 있으면 409.
+
+    ORM 인스턴스가 아니라 int id 만 들고 다니는 게 중요하다 — 뒤이은 파일 업로드가 실패해
+    session.rollback() 이 돌면 세션에 남은 ORM 객체는 expire 되고, 그 뒤 속성 접근이
+    비동기 컨텍스트 밖 lazy load 를 유발한다(MissingGreenlet).
+    """
+    ids: list[int] = []
+    parent_id = root_id
+    for seg in segments:
+        # 앞선 항목/세그먼트의 실패가 rollback 을 남겼을 수 있다.
+        await revive(session, user)
+        key = (parent_id, seg)
+        cached = cache.get(key)
+        if cached is not None:
+            ids.append(cached)
+            parent_id = cached
+            continue
+
+        existing = await _lookup_child(session, parent_id, seg)
+        if existing is not None:
+            if not existing.is_folder:
+                raise FileServiceError(409, f"'{seg}' 은(는) 파일이라 폴더로 쓸 수 없습니다.")
+            folder_id = existing.id
+        else:
+            try:
+                folder_id = (await create_folder(session, user, seg, parent_id)).id
+            except FileServiceError as exc:
+                if exc.status_code != 409:
+                    raise
+                # 동시 생성 경합 — uq_files_sibling_name 이 한쪽을 떨궜다. 재조회해 재사용한다.
+                # 이 복구가 없으면 두 배치가 같은 폴더를 만들 때 산발적으로 실패한다.
+                raced = await _lookup_child(session, parent_id, seg)
+                if raced is None or not raced.is_folder:
+                    raise
+                folder_id = raced.id
+
+        cache[key] = folder_id
+        ids.append(folder_id)
+        parent_id = folder_id
+    return ids
+
+
+async def batch_upload(
+    session: AsyncSession,
+    storage: StorageService,
+    user: User,
+    uploads: Sequence[UploadFile],
+    paths: Sequence[str],
+    dirs: Sequence[str],
+    parent_id: int | None,
+) -> tuple[list[dict], dict[str, int]]:
+    """여러 파일을 상대 경로대로 저장한다. (항목별 결과, 경로→폴더 id 맵) 을 반환한다.
+
+    uploads 가 비고 dirs 만 있는 요청도 유효하다 — 폴더 트리만 먼저 확정하는 용도로,
+    클라이언트가 64MB 초과 파일을 단일 업로드 경로로 보낼 때 parent_id 를 얻는 데 쓴다.
+
+    권한은 최상위 parent_id 에서 한 번만 검증한다. 그 아래 폴더는 전부 우리가 부모 id 를
+    지정해 만들거나 부모 id 로 조회한 것이라 후손임이 구조적으로 보장된다.
+    """
+    root_id = (await _resolve_parent(session, user, parent_id, need="write")).id
+
+    cache: dict[tuple[int, str], int] = {}
+    folders: dict[str, int] = {}
+    items: list[dict] = []
+
+    async def resolve_dir(segments: Sequence[str]) -> int:
+        """디렉터리 경로 → 폴더 id. 조상 경로도 folders 맵에 함께 기록한다."""
+        if not segments:
+            return root_id
+        joined = "/".join(segments)
+        hit = folders.get(joined)
+        if hit is not None:
+            return hit
+        ids = await _ensure_folder_path(session, user, root_id, segments, cache)
+        for depth, folder_id in enumerate(ids, start=1):
+            folders["/".join(segments[:depth])] = folder_id
+        return ids[-1]
+
+    def record_error(path: str, exc: FileServiceError) -> None:
+        items.append(
+            {
+                "path": path,
+                "status": "error",
+                "code": exc.status_code,
+                "detail": exc.detail,
+            }
+        )
+
+    # 1) 디렉터리 먼저 — 파일이 하나도 없는 폴더도 id 를 얻게 한다.
+    for raw_dir in dirs:
+        try:
+            await resolve_dir(normalize_relpath(raw_dir))
+        except FileServiceError as exc:
+            record_error(raw_dir, exc)
+
+    # 2) 파일 — 실패해도 다음 파일로 계속 진행한다(부분 성공).
+    for upload, raw_path in zip(uploads, paths, strict=True):
+        # 직전 항목이 실패하며 rollback 했다면 user 가 expire 되어 있다(_revive_user 참조).
+        await revive(session, user)
+        try:
+            segments = normalize_relpath(raw_path)
+            *dir_segments, filename = segments
+            folder_id = await resolve_dir(dir_segments)
+        except FileServiceError as exc:
+            record_error(raw_path, exc)
+            continue
+
+        # 파일명은 정규화된 경로의 마지막 세그먼트를 쓴다. multipart 의 filename 은
+        # 클라이언트가 경로 전체를 넣어 보내기도 해 신뢰하지 않는다.
+        upload.filename = filename
+        try:
+            created = await upload_file(session, storage, user, upload, folder_id)
+        except FileServiceError as exc:
+            record_error(raw_path, exc)
+            continue
+        except Exception as exc:  # noqa: BLE001
+            # 예상 못 한 예외(썸네일 생성 경로의 버그 등)로 요청 전체가 500 이 되면, 이미
+            # 저장된 앞선 파일들까지 클라이언트에서 실패로 처리된다. 배치는 부분 성공이
+            # 정상 경로이므로 이 파일만 실패로 남기고 계속 진행한다.
+            _log.exception("batch_item_failed", path=raw_path, error=str(exc))
+            record_error(raw_path, FileServiceError(500, "파일을 저장하지 못했습니다."))
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001 - 세션이 이미 끊겼을 수 있다.
+                pass
+            continue
+
+        # 세션에서 떼어낸다 — 이후 파일이 실패해 rollback 이 돌면 세션에 남은 인스턴스는
+        # expire 되고, 라우트에서 응답을 만들 때 속성 접근이 lazy load 를 유발한다.
+        # upload_file 이 마지막에 refresh 해 둔 상태 그대로 detached 로 보존한다.
+        session.expunge(created)
+        items.append({"path": raw_path, "status": "created", "file": created})
+
+    return items, folders
 
 
 # --- 다운로드 (게이트웨이 모델) ---------------------------------------------
@@ -686,6 +937,7 @@ async def _commit_new_version(
     await session.refresh(file)
     # 새 버전 내용으로 썸네일 갱신 (재업로드/복구 공통, best-effort) — PRD 3.2.
     await thumbnails_service.maybe_generate(session, storage, file)
+    await revive(session, file)  # 실패 시 rollback 으로 expire 된다(revive 주석 참조).
     # 재업로드/버전 복구/재개 업로드(version)가 모두 이 경로를 지난다 — 단일 발행 지점.
     await file_events_service.publish_file_event(
         type="version",

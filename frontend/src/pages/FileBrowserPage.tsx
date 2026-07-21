@@ -32,6 +32,7 @@ import {
   EyeIcon,
   FileIcon,
   FolderIcon,
+  FolderUploadIcon,
   GridIcon,
   HistoryIcon,
   InboxIcon,
@@ -62,6 +63,20 @@ import {
   type ResumableController,
   type UploadStatus,
 } from "@/lib/resumable";
+import {
+  collectFromEntries,
+  collectFromInput,
+  dropHasDirectory,
+  entriesFromDrop,
+  type CollectedTree,
+} from "@/lib/fileTree";
+import {
+  preflight,
+  runFolderUpload,
+  type PreflightResult,
+  type SkippedEntry,
+} from "@/lib/folderUpload";
+import { uploadErrorFromException } from "@/lib/uploadError";
 import { useAuthStore } from "@/store/auth";
 
 const PAGE_SIZE = 50;
@@ -91,6 +106,11 @@ interface UploadTask {
   status: UploadStatus;
   /** 재개 가능 업로드일 때만 존재 — 일시정지/재개/취소 제어에 사용. */
   controller?: ResumableController;
+  /**
+   * 폴더 업로드에서 실패한 항목들. 완료 직후 뜨는 모달을 닫아도 다시 볼 수 있어야 하므로
+   * 태스크에 보관한다(모달 상태에만 두면 닫는 순간 사유를 영영 확인할 수 없다).
+   */
+  failures?: SkippedEntry[];
 }
 
 let uploadSeq = 0;
@@ -114,6 +134,7 @@ export function FileBrowserPage({
 }: FileBrowserPageProps) {
   const toast = useToast();
   const refreshUser = useAuthStore((s) => s.refreshUser);
+  const me = useAuthStore((s) => s.user);
 
   const [path, setPath] = useState<Crumb[]>(
     () => initialPath ?? [{ id: rootId, name: rootName }],
@@ -160,7 +181,14 @@ export function FileBrowserPage({
   const [versionTarget, setVersionTarget] = useState<FileNode | null>(null);
   const [conflict, setConflict] = useState<{ target: FileNode; file: File } | null>(null);
 
+  // 폴더 업로드: 사전 검사 결과(확인 다이얼로그) 와 완료 후 실패 목록.
+  const [folderPlan, setFolderPlan] = useState<{ tree: CollectedTree; plan: PreflightResult } | null>(
+    null,
+  );
+  const [folderFailures, setFolderFailures] = useState<SkippedEntry[] | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const versionInputRef = useRef<HTMLInputElement>(null);
   const current = path[path.length - 1];
   const parentId = current.id;
@@ -567,10 +595,93 @@ export function FileBrowserPage({
     }
   };
 
+  // --- 폴더 업로드 ----------------------------------------------------------
+
+  /**
+   * 남은 저장 용량. 사전 검사에서 총량과 비교한다(강제는 서버가 한다).
+   * 사용자 정보가 아직 없으면 무한대로 둔다 — 모르는 상태를 "용량 0"으로 오해해
+   * 정상 업로드를 막는 것보다, 서버 판정에 맡기는 편이 낫다.
+   */
+  const remainingBytes = me ? Math.max(0, me.max_storage - me.storage_used) : Infinity;
+
+  /** 트리 수집 → 사전 검사 → 확인 다이얼로그. 바이트 하나 보내기 전에 전부 검증한다. */
+  const planFolderUpload = (tree: CollectedTree) => {
+    if (tree.files.length === 0) {
+      toast.error("업로드할 파일이 없습니다.");
+      return;
+    }
+    const plan = preflight(tree, remainingBytes);
+    if (plan.entries.length === 0) {
+      toast.error("업로드할 수 있는 파일이 없습니다.");
+      setFolderPlan({ tree, plan }); // 사유는 다이얼로그에서 보여준다.
+      return;
+    }
+    setFolderPlan({ tree, plan });
+  };
+
+  const startFolderUpload = async () => {
+    const current = folderPlan;
+    setFolderPlan(null);
+    if (!current) return;
+    const { plan } = current;
+
+    const id = ++uploadSeq;
+    const label = plan.entries[0]?.path.split("/")[0] ?? "폴더";
+    const total = plan.entries.length;
+    setUploads((u) => [
+      ...u,
+      { id, name: `${label} (0/${total})`, percent: 0, status: "uploading" },
+    ]);
+
+    let result;
+    try {
+      result = await runFolderUpload(plan, parentId, {
+        onProgress: (bytes) =>
+          patchTask(id, {
+            percent: plan.totalBytes > 0 ? Math.min(100, Math.round((bytes / plan.totalBytes) * 100)) : 100,
+          }),
+        onCount: (done) => patchTask(id, { name: `${label} (${done}/${total})` }),
+      });
+    } catch (err) {
+      const msg = uploadErrorFromException(err);
+      patchTask(id, { error: msg, status: "error" });
+      toast.error(`${label}: ${msg}`);
+      return;
+    }
+
+    // 사전 검사에서 건너뛴 항목도 실패로 함께 보고한다.
+    const failures = [...plan.skipped, ...result.failed];
+    patchTask(id, {
+      percent: 100,
+      status: failures.length > 0 ? "error" : "completed",
+      name: `${label} (${result.succeeded}/${total})`,
+      error: failures.length > 0 ? `${failures.length}개 실패` : undefined,
+      failures: failures.length > 0 ? failures : undefined,
+    });
+
+    if (failures.length === 0) {
+      toast.success(`${result.succeeded}개 파일을 업로드했습니다.`);
+    } else if (result.succeeded > 0) {
+      toast.error(`${result.succeeded}개 완료 · ${failures.length}개 실패`);
+    } else {
+      toast.error("업로드에 실패했습니다.");
+    }
+    if (failures.length > 0) setFolderFailures(failures);
+
+    // 파일마다 갱신하지 않고 전체가 끝난 뒤 한 번만 새로고침한다(SSE 이벤트 폭주 회피).
+    await afterUpload();
+  };
+
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     if (!canWrite) return;
+    // dataTransfer 는 핸들러가 반환되면 무효화되므로 await 전에 동기적으로 꺼낸다.
+    const entries = entriesFromDrop(e.dataTransfer);
+    if (dropHasDirectory(entries)) {
+      void collectFromEntries(entries).then(planFolderUpload);
+      return;
+    }
     if (e.dataTransfer.files.length > 0) void runUpload(e.dataTransfer.files);
   };
 
@@ -698,6 +809,13 @@ export function FileBrowserPage({
                 <PlusIcon width={16} height={16} />
                 새 폴더
               </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => folderInputRef.current?.click()}
+              >
+                <FolderUploadIcon width={16} height={16} />
+                폴더 업로드
+              </button>
               <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
                 <UploadIcon width={16} height={16} />
                 업로드
@@ -711,6 +829,22 @@ export function FileBrowserPage({
             className="hidden"
             onChange={(e) => {
               if (e.target.files) void runUpload(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          {/*
+            폴더 선택 전용 input — webkitdirectory 를 위 input 에 붙이면 개별 파일 선택이
+            불가능해지므로 반드시 분리한다.
+          */}
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            // @ts-expect-error - webkitdirectory 는 React 타입 정의에 없는 비표준 속성이다.
+            webkitdirectory=""
+            onChange={(e) => {
+              if (e.target.files) planFolderUpload(collectFromInput(e.target.files));
               e.target.value = "";
             }}
           />
@@ -741,6 +875,9 @@ export function FileBrowserPage({
       {/* 본문: 드롭존 */}
       <div
         className="relative flex-1 overflow-auto p-6"
+        // 드래그 앤 드롭 경로는 E2E 에서만 재현 가능하다(FileSystem API 는 합성 이벤트로만
+        // 주입된다). 안정적인 드롭 대상 선택자를 남겨 둔다.
+        data-testid="dropzone"
         onDragOver={(e) => {
           if (!canWrite) return;
           e.preventDefault();
@@ -754,7 +891,14 @@ export function FileBrowserPage({
             className="pointer-events-none absolute inset-4 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-[color:var(--accent)]"
             style={{ background: "color-mix(in srgb, var(--accent) 12%, var(--bg-primary))" }}
           >
-            <p className="font-medium text-accent">여기에 놓아 업로드</p>
+            <div className="text-center">
+              <p className="font-medium text-accent">여기에 놓아 업로드</p>
+              {/* 실제로 존재하는 제약만 알린다 — 배치 크기/개수는 내부 분할 사정이라 숨긴다. */}
+              <p className="mt-1 text-xs text-muted">
+                폴더도 가능 · 파일 1개 최대 10GB
+                {Number.isFinite(remainingBytes) && ` · 남은 용량 ${formatBytes(remainingBytes)}`}
+              </p>
+            </div>
           </div>
         )}
 
@@ -802,6 +946,15 @@ export function FileBrowserPage({
                             ? "완료"
                             : `${t.percent}%`)}
                     </span>
+                    {/* 폴더 업로드 실패 목록 다시 보기 — 완료 직후 모달을 닫아도 사유를 확인할 수 있어야 한다. */}
+                    {t.failures && t.failures.length > 0 && (
+                      <button
+                        className="btn btn-ghost px-2 py-0.5 text-xs"
+                        onClick={() => setFolderFailures(t.failures ?? null)}
+                      >
+                        자세히
+                      </button>
+                    )}
                     {/* 재개 가능 업로드만 일시정지/재개/취소 컨트롤 노출 */}
                     {t.controller && !t.error && t.status !== "completed" && (
                       <div className="flex items-center gap-1">
@@ -949,6 +1102,86 @@ export function FileBrowserPage({
           </div>
         )}
       </div>
+
+      {/*
+        폴더 업로드 사전 검사 — 바이트 하나 보내기 전에 요약과 건너뛸 항목을 보여준다.
+        용량 부족일 때만 업로드를 막고, 그 밖의 위반은 해당 항목만 빼고 진행한다.
+      */}
+      <Modal
+        open={folderPlan !== null}
+        title="폴더 업로드"
+        size="lg"
+        onClose={() => setFolderPlan(null)}
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setFolderPlan(null)}>
+              취소
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={!folderPlan || folderPlan.plan.entries.length === 0 || folderPlan.plan.quotaShortfall > 0}
+              onClick={() => void startFolderUpload()}
+            >
+              {folderPlan ? `${folderPlan.plan.entries.length}개 업로드` : "업로드"}
+            </button>
+          </>
+        }
+      >
+        {folderPlan && (
+          <div className="space-y-3 text-sm">
+            <p>
+              파일 {folderPlan.plan.entries.length}개 · 폴더 {folderPlan.plan.dirs.length}개 · 총{" "}
+              {formatBytes(folderPlan.plan.totalBytes)}
+            </p>
+            {folderPlan.plan.quotaShortfall > 0 ? (
+              <p className="text-danger">
+                남은 용량이 부족합니다 (남은 용량 {formatBytes(remainingBytes)}).{" "}
+                {formatBytes(folderPlan.plan.quotaShortfall)}을 확보하거나 일부만 선택해 주세요.
+              </p>
+            ) : (
+              Number.isFinite(remainingBytes) && (
+                <p className="text-muted">
+                  남은 용량 {formatBytes(remainingBytes)} → 업로드 후{" "}
+                  {formatBytes(remainingBytes - folderPlan.plan.totalBytes)}
+                </p>
+              )
+            )}
+            {folderPlan.plan.skipped.length > 0 && (
+              <div>
+                <p className="font-medium">{folderPlan.plan.skipped.length}개를 건너뜁니다</p>
+                <ul className="mt-1 max-h-48 space-y-1 overflow-auto text-muted">
+                  {folderPlan.plan.skipped.map((s) => (
+                    <li key={s.path}>
+                      <span className="break-all">{s.path}</span> — {s.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* 폴더 업로드 실패 목록 — 개별 토스트 대신 완료 후 한 번에 보여준다. */}
+      <Modal
+        open={folderFailures !== null}
+        title="업로드하지 못한 항목"
+        size="lg"
+        onClose={() => setFolderFailures(null)}
+        footer={
+          <button className="btn btn-secondary" onClick={() => setFolderFailures(null)}>
+            닫기
+          </button>
+        }
+      >
+        <ul className="max-h-80 space-y-1 overflow-auto text-sm text-muted">
+          {(folderFailures ?? []).map((f) => (
+            <li key={f.path}>
+              <span className="break-all">{f.path}</span> — {f.reason}
+            </li>
+          ))}
+        </ul>
+      </Modal>
 
       {/* 새 폴더 모달 */}
       <Modal

@@ -77,6 +77,37 @@ def _route_template(request: Request) -> str:
     return leaf
 
 
+BATCH_UPLOAD_PATH = "/api/files/batch"
+
+
+class BatchBodyLimitMiddleware(BaseHTTPMiddleware):
+    """배치 업로드 본문 크기를 **파싱 전에** Content-Length 로 차단한다.
+
+    FastAPI 는 라우트 의존성을 풀기 전에 multipart 본문을 먼저 읽으므로, 핸들러나 Depends 로는
+    파싱을 선점할 수 없다. 상한을 넘는 본문을 다 받고 나서 거부하면 상한의 의미가 없어
+    미들웨어에서 막는다.
+
+    운영에서는 nginx 가 같은 상한을 먼저 적용하지만(1차 방어), 게이트웨이를 거치지 않는
+    경로(테스트, 다른 배포 형태)에서도 앱이 스스로 안전하도록 여기서 이중으로 건다.
+    """
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        if request.method == "POST" and request.url.path == BATCH_UPLOAD_PATH:
+            raw = request.headers.get("content-length")
+            try:
+                declared = int(raw) if raw is not None else 0
+            except ValueError:
+                declared = 0
+            if declared > settings.max_batch_bytes:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "요청 본문이 배치 상한을 초과했습니다."},
+                )
+        return await call_next(request)
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint

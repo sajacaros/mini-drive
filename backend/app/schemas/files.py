@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,6 +53,33 @@ class FolderCreateRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=255)
     parent_id: int | None = None
+
+
+class BatchUploadItem(BaseModel):
+    """배치 업로드 항목별 결과. 성공이면 file, 실패면 code/detail 이 채워진다."""
+
+    path: str
+    status: Literal["created", "error"]
+    file: FileResponse | None = None
+    code: int | None = None
+    detail: str | None = None
+
+
+class BatchUploadResponse(BaseModel):
+    """배치 업로드 결과 (POST /api/files/batch).
+
+    부분 실패가 정상 경로이므로 항목이 전부 실패해도 HTTP 200 이다. HTTP 상태는 "배치 요청이
+    처리됐는가"를 뜻하고 개별 성패는 items 가 말한다.
+
+    folders 는 개수가 아니라 **경로 → 폴더 id 맵**이며, 이번에 만든 것과 기존 것을 가리지 않고
+    이 요청이 해석한 전 경로를 담는다. 클라이언트가 배치에 담지 않은 큰 파일을 단일/재개
+    업로드 경로로 보낼 때 parent_id 를 여기서 꺼낸다.
+    """
+
+    items: list[BatchUploadItem]
+    folders: dict[str, int]
+    succeeded: int
+    failed: int
 
 
 class FileRenameRequest(BaseModel):
