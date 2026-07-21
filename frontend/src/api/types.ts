@@ -449,3 +449,88 @@ export interface SignupCodeUpdateRequest {
   expires_at?: string | null;
   max_uses?: number | null;
 }
+
+// --- 데일리 투두 + 반복 루틴 -------------------------------------------------
+
+export type TodoStatus = "pending" | "done" | "skipped";
+export type RoutineFrequency = "daily" | "weekly";
+
+export interface Routine {
+  id: number;
+  title: string;
+  frequency: RoutineFrequency;
+  /** 월=0 .. 일=6. weekly 일 때만 채워짐. */
+  days_of_week: number[];
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface RoutineListResponse {
+  items: Routine[];
+}
+
+export interface RoutineCreateRequest {
+  title: string;
+  frequency: RoutineFrequency;
+  days_of_week: number[];
+}
+
+export interface RoutineUpdateRequest {
+  title?: string;
+  frequency?: RoutineFrequency;
+  days_of_week?: number[];
+  is_active?: boolean;
+  sort_order?: number;
+}
+
+export interface TodoItem {
+  id: number;
+  date: string;
+  title: string;
+  status: TodoStatus;
+  routine_id: number | null;
+  routine_title: string | null;
+  sort_order: number;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface TodoDayResponse {
+  date: string;
+  items: TodoItem[];
+  total: number;
+  done: number;
+  skipped: number;
+  pending: number;
+}
+
+export interface DailyPoint {
+  date: string;
+  total: number;
+  done: number;
+  skipped: number;
+  pending: number;
+}
+
+export interface RoutineStat {
+  routine_id: number | null;
+  title: string;
+  done: number;
+  actionable: number;
+  rate: number;
+}
+
+export interface TodoReport {
+  range_start: string;
+  range_end: string;
+  total: number;
+  done: number;
+  skipped: number;
+  pending: number;
+  completion_rate: number;
+  current_streak: number;
+  longest_streak: number;
+  daily: DailyPoint[];
+  routines: RoutineStat[];
+}

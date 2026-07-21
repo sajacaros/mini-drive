@@ -6,10 +6,15 @@ import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
 import { ThemePicker } from "./ThemePicker";
 import {
+  CalendarIcon,
+  ChartIcon,
+  CheckCircleIcon,
   DriveIcon,
+  FolderIcon,
   HistoryIcon,
   LinkIcon,
   LockIcon,
+  RepeatIcon,
   ShieldIcon,
   StarIcon,
   TrashIcon,
@@ -38,19 +43,26 @@ export function Layout() {
         </Link>
 
         <nav className="flex flex-1 flex-col gap-1 px-3">
-          <NavItem to="/" icon={<DriveIcon />} label="내 드라이브" end />
+          {/* 드라이브 */}
+          <SectionLabel icon={<DriveIcon width={13} height={13} />} label="드라이브" />
+          <NavItem to="/" icon={<FolderIcon />} label="내 드라이브" end />
           <NavItem to="/favorites" icon={<StarIcon />} label="즐겨찾기" />
           <NavItem to="/recent" icon={<HistoryIcon />} label="최근" />
           <NavItem to="/groups" icon={<UsersIcon />} label="그룹" />
           <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" />
           <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" />
 
+          {/* 할 일 */}
+          <div className="mt-4">
+            <SectionLabel icon={<CheckCircleIcon width={13} height={13} />} label="할 일" />
+            <NavItem to="/todo" icon={<CalendarIcon />} label="오늘 할 일" end />
+            <NavItem to="/routines" icon={<RepeatIcon />} label="반복 루틴" />
+            <NavItem to="/todo/reports" icon={<ChartIcon />} label="리포트" />
+          </div>
+
           {(user?.role === "admin" || user?.role === "super_admin") && (
             <div className="mt-4">
-              <div className="flex items-center gap-1.5 px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted">
-                <ShieldIcon width={13} height={13} />
-                관리
-              </div>
+              <SectionLabel icon={<ShieldIcon width={13} height={13} />} label="관리" />
               <NavItem to="/admin" icon={<DriveIcon />} label="대시보드" end />
               <NavItem to="/admin/users" icon={<UsersIcon />} label="사용자" />
               <NavItem to="/admin/signup-codes" icon={<LockIcon />} label="가입 코드" />
@@ -89,6 +101,16 @@ export function Layout() {
       <main className="min-w-0 flex-1">
         <Outlet />
       </main>
+    </div>
+  );
+}
+
+/** 네비 섹션 구분 라벨 (드라이브 / 할 일 / 관리). */
+function SectionLabel({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+      {icon}
+      {label}
     </div>
   );
 }

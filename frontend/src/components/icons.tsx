@@ -218,3 +218,83 @@ export const StarIcon = ({ filled, ...p }: IconProps & { filled?: boolean }) => 
   </svg>
 );
 
+
+export const CheckIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M20 6 9 17l-5-5" />
+  </svg>
+);
+
+export const CheckCircleIcon = ({ filled, ...p }: IconProps & { filled?: boolean }) => (
+  <svg {...base(p)} fill={filled ? "currentColor" : "none"}>
+    {filled ? (
+      <>
+        <circle cx="12" cy="12" r="10" stroke="none" />
+        <path d="m8 12 3 3 5-6" stroke="var(--bg-primary)" fill="none" />
+      </>
+    ) : (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <path d="m8 12 3 3 5-6" />
+      </>
+    )}
+  </svg>
+);
+
+export const CircleIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="9" />
+  </svg>
+);
+
+export const CalendarIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M8 2v4M16 2v4M3 10h18" />
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+  </svg>
+);
+
+export const ChartIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 3v18h18" />
+    <path d="M7 15l3-4 3 2 4-6" />
+  </svg>
+);
+
+export const RepeatIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="m17 2 4 4-4 4" />
+    <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+    <path d="m7 22-4-4 4-4" />
+    <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+  </svg>
+);
+
+export const ChevronLeftIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="m15 18-6-6 6-6" />
+  </svg>
+);
+
+export const ChevronRightIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+);
+
+export const FlameIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5Z" />
+  </svg>
+);
+
+export const GripIcon = (p: IconProps) => (
+  <svg {...base(p)} fill="currentColor" stroke="none">
+    <circle cx="9" cy="6" r="1.4" />
+    <circle cx="9" cy="12" r="1.4" />
+    <circle cx="9" cy="18" r="1.4" />
+    <circle cx="15" cy="6" r="1.4" />
+    <circle cx="15" cy="12" r="1.4" />
+    <circle cx="15" cy="18" r="1.4" />
+  </svg>
+);

@@ -10,7 +10,9 @@ from app.models.audit import AuditLog
 from app.models.enums import (
     GroupPermission,
     GroupRole,
+    RoutineFrequency,
     SharePermission,
+    TodoStatus,
     UserRole,
     UserStatus,
 )
@@ -20,6 +22,7 @@ from app.models.group import Group, GroupMember
 from app.models.permission import FileGroupPermission
 from app.models.share import Share
 from app.models.signup_code import SignupCode
+from app.models.todo import Routine, TodoItem
 from app.models.upload_session import UploadSession
 from app.models.user import User
 
@@ -39,10 +42,14 @@ __all__ = [
     "UploadSession",
     "SignupCode",
     "AppSetting",
+    "Routine",
+    "TodoItem",
     # 열거형
     "UserRole",
     "UserStatus",
     "GroupRole",
     "SharePermission",
     "GroupPermission",
+    "TodoStatus",
+    "RoutineFrequency",
 ]

@@ -57,3 +57,25 @@ class GroupPermission(StrEnum):
     READ = "read"
     WRITE = "write"
     MANAGE = "manage"
+
+
+class TodoStatus(StrEnum):
+    """데일리 투두 항목 상태 (todo_items.status).
+
+    - PENDING: 미완료(기본). DONE: 완료(체크). SKIPPED: 건너뜀(X — 오늘은 안 함).
+    달성률 계산에서 skipped 는 분모(actionable)에서 제외한다.
+    """
+
+    PENDING = "pending"
+    DONE = "done"
+    SKIPPED = "skipped"
+
+
+class RoutineFrequency(StrEnum):
+    """반복 루틴 주기 (routines.frequency).
+
+    - DAILY: 매일. WEEKLY: 특정 요일(days_of_week 에 월=0..일=6 저장).
+    """
+
+    DAILY = "daily"
+    WEEKLY = "weekly"

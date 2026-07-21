@@ -8,6 +8,7 @@ from app.api.routes import (
     permissions,
     setup,
     shares,
+    todos,
     users,
 )
 
@@ -27,3 +28,4 @@ api_router.include_router(
     permissions.router, prefix="/permissions", tags=["permissions"]
 )
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
+api_router.include_router(todos.router, prefix="/todos", tags=["todos"])

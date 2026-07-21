@@ -19,8 +19,11 @@ import { LoginPage } from "@/pages/LoginPage";
 import { PublicSharePage } from "@/pages/PublicSharePage";
 import { RecentPage } from "@/pages/RecentPage";
 import { RegisterPage } from "@/pages/RegisterPage";
+import { RoutinesPage } from "@/pages/RoutinesPage";
 import { SetupPage } from "@/pages/SetupPage";
 import { SharesPage } from "@/pages/SharesPage";
+import { TodoPage } from "@/pages/TodoPage";
+import { TodoReportsPage } from "@/pages/TodoReportsPage";
 import { TrashPage } from "@/pages/TrashPage";
 import { useAuthStore } from "@/store/auth";
 
@@ -67,6 +70,9 @@ function App() {
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
             <Route path="/" element={<FileBrowserPage />} />
+            <Route path="/todo" element={<TodoPage />} />
+            <Route path="/routines" element={<RoutinesPage />} />
+            <Route path="/todo/reports" element={<TodoReportsPage />} />
             <Route path="/favorites" element={<FavoritesPage />} />
             <Route path="/recent" element={<RecentPage />} />
             <Route path="/trash" element={<TrashPage />} />
