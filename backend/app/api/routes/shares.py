@@ -48,7 +48,10 @@ def _http_error(exc: ShareServiceError) -> HTTPException:
 async def create_share(
     payload: ShareCreateRequest, user: CurrentUser, session: DbSession
 ) -> ShareResponse:
-    """공유 링크 생성 (PRD 6.3). 소유자만, 폴더 불가(400)."""
+    """공유 링크 생성 (PRD 6.3). 소유자 또는 write 이상 권한자, 폴더 불가(400).
+
+    접근 불가 404 / 읽기만 가능하면 403(권한 부족) / 폴더 400.
+    """
     try:
         share, file_name = await shares_service.create_share(
             session,

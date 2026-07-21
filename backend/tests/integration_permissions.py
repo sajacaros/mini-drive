@@ -4,8 +4,8 @@
   A 가 root/depth1/depth2/file + depth1/depth2b 트리 구성 → 그룹 G 생성, B 를 member 로
   → 부여 전 B 접근 404/none
   → depth1 에 G read 부여 → B 가 depth2 하위 file 다운로드 성공(상속) + depth2b 상속 접근
-  → B 쓰기 시도 차단(403/404) + manage 시도 403 + 공유 링크 생성 차단
-  → depth2 에 G write 부여(재정의) → B 업로드(새 버전) 성공
+  → B 쓰기 시도 차단(403/404) + manage 시도 403 + read 만으로는 공유 링크 생성 403
+  → depth2 에 G write 부여(재정의) → B 업로드(새 버전) 성공 + 비소유자 공유 링크 생성 성공
   → depth1 권한 inherit_to_children=FALSE → depth2b 상속 소실(404), depth1·file 유지(재정의)
   → 회수 직전 접근으로 캐시 적재 후 depth2 권한 회수 → B 접근 즉시 차단(캐시 무효화)
   → 만료 권한 무효(과거 expires_at) → 미래로 갱신 시 접근 회복
@@ -161,9 +161,10 @@ async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
             json={"group_id": gid, "permission": "read"},
         )
         assert r.status_code == 403, r.text
+        # read 만 있으면 공유 링크 생성 불가 — 볼 수는 있으므로 404(존재 은닉)가 아니라 403.
         r = await c.post("/api/shares", headers=bob_h, json={"file_id": file_id})
-        assert r.status_code in (403, 404), r.text
-        _ok("B manage 시도 403 + 공유 링크 생성 차단")
+        assert r.status_code == 403, r.text
+        _ok("B manage 시도 403 + read 만으로는 공유 링크 생성 403")
 
         # 8. depth2 에 G write 부여 (재정의 — 더 가까운 조상)
         r = await c.post(
@@ -184,6 +185,19 @@ async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
         assert body["permission"] == "write" and body["via"] == "group", body
         assert body["source_file_id"] == depth2, body
         _ok("depth2 write 재정의 → B 업로드 성공 (check write/group/source=depth2)")
+
+        # 8-1. write 이상이면 비소유자도 공유 링크를 만들 수 있다.
+        #      (회귀: 소유자만 허용해 "파일을 찾을 수 없습니다" 404 를 내던 버그)
+        r = await c.post("/api/shares", headers=bob_h, json={"file_id": file_id})
+        assert r.status_code == 201, r.text
+        share_url = r.json()["share_url"]
+        # 발급된 링크는 무인증으로 실제 해석돼야 한다.
+        r = await c.get(f"/api/public/shares/{share_url}")
+        assert r.status_code == 200 and r.json()["file_name"] == "file.bin", r.text
+        # 만든 사람(B)의 공유 목록에 잡힌다 — 파일 소유자는 A 지만 created_by 는 B.
+        r = await c.get("/api/shares", headers=bob_h)
+        assert any(s["share_url"] == share_url for s in r.json()), r.text
+        _ok("B(비소유자, write) 공유 링크 생성 201 → 무인증 메타 200 → B 목록에 노출")
 
         # 9. depth1 권한 inherit_to_children=FALSE → 상속 차단, 자신은 유지
         r = await c.put(

@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password, verify_password
 from app.models import File, Share, User
 from app.models.enums import SharePermission
+from app.services import permissions as permissions_service
 from app.services import previews as previews_service
 from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
@@ -74,7 +75,7 @@ async def create_share(
     password: str | None,
     max_downloads: int | None,
 ) -> tuple[Share, str]:
-    """공유 링크 생성 (PRD 6.3). 소유자만, 폴더 불가. (share, 파일명) 반환.
+    """공유 링크 생성 (PRD 6.3). 소유자 또는 write 이상 권한자, 폴더 불가. (share, 파일명) 반환.
 
     share_url 은 secrets.token_urlsafe 로 생성하고 유니크 충돌 시 재생성한다.
     """
@@ -85,10 +86,18 @@ async def create_share(
     if perm not in _ALLOWED_PERMISSIONS:
         raise ShareServiceError(400, "편집 권한 공유는 아직 지원하지 않습니다.")
 
-    # 소유자 검사 + 폴더/삭제 파일 배제. 존재 여부 노출 방지로 미소유는 404.
+    # 접근 검사 + 폴더/삭제 파일 배제. 소유자가 아니어도 그룹 권한(상속 포함)이 write 이상이면
+    # 공유할 수 있다 — 내 폴더에 협업자가 올린 파일도 공유 링크를 걸 수 있어야 하기 때문이다.
+    # read 조차 없으면 404(존재 여부 노출 방지), 볼 수는 있으나 write 미만이면 403 으로 구분한다.
     file = await session.get(File, file_id)
-    if file is None or file.user_id != user.id or file.is_deleted:
+    if file is None or file.is_deleted:
         raise ShareServiceError(404, "파일을 찾을 수 없습니다.")
+    if file.user_id != user.id:
+        level = await permissions_service.get_access_level(session, user, file)
+        if level is None:
+            raise ShareServiceError(404, "파일을 찾을 수 없습니다.")
+        if not permissions_service.permission_covers(level, "write"):
+            raise ShareServiceError(403, "이 파일을 공유할 권한이 없습니다.")
     if file.is_folder:
         raise ShareServiceError(400, "폴더는 공유할 수 없습니다.")
     file_name = file.name
