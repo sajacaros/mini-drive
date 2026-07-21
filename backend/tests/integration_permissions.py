@@ -10,7 +10,8 @@
   → depth1 권한 inherit_to_children=FALSE → depth2b 상속 소실(404), depth1·file 유지(재정의)
   → 회수 직전 접근으로 캐시 적재 후 depth2 권한 회수 → B 접근 즉시 차단(캐시 무효화)
   → 만료 권한 무효(과거 expires_at) → 미래로 갱신 시 접근 회복
-  → B 가 shared-with-me 에서 부여 지점 확인 → permissions/check 응답 확인.
+  → B 가 shared-with-me 에서 부여 지점 확인 → permissions/check 응답 확인
+  → manage 부여(POST)·read→manage 승격(PUT) 후 수임 그룹이 권한 관리 조작 수행.
 
 env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
 실행: `python -m tests.integration_permissions`.
@@ -307,6 +308,44 @@ async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
         assert r.json()["direct"] == [], r.json()
         assert r.json()["inherited"] == [], r.json()
         _ok("GET /permissions — depth2b 직접/상속 목록 (inherit=FALSE 반영)")
+
+        # 15. manage 부여/승격 — 권한 위임이 실제로 동작해야 한다.
+        #     (회귀: 라우터가 manage 를 400 으로 막아 UI 에서 관리 권한을 줄 수 없던 상태)
+        deleg = await _mkfolder(c, alice_h, "위임폴더", None)
+        r = await c.post(
+            f"/api/files/{deleg}/permissions",
+            headers=alice_h,
+            json={"group_id": gid, "permission": "read", "inherit_to_children": True},
+        )
+        assert r.status_code == 201, r.text
+        # read 만으로는 권한 목록 조회(manage 전용) 불가.
+        r = await c.get(f"/api/files/{deleg}/permissions", headers=bob_h)
+        assert r.status_code == 403, r.text
+        # PUT 으로 manage 승격 (회귀: 승격도 400 으로 막혀 있었다).
+        r = await c.put(
+            f"/api/files/{deleg}/permissions/{gid}",
+            headers=alice_h,
+            json={"permission": "manage"},
+        )
+        assert r.status_code == 200 and r.json()["permission"] == "manage", r.text
+        # 승격 즉시 B 가 manage 전용 조작을 할 수 있다 — 목록 조회 + 권한 수정.
+        r = await c.get(f"/api/files/{deleg}/permissions", headers=bob_h)
+        assert r.status_code == 200, r.text
+        r = await c.put(
+            f"/api/files/{deleg}/permissions/{gid}",
+            headers=bob_h,
+            json={"inherit_to_children": False},
+        )
+        assert r.status_code == 200, r.text
+        # POST 로도 처음부터 manage 부여가 가능해야 한다.
+        deleg2 = await _mkfolder(c, alice_h, "위임폴더2", None)
+        r = await c.post(
+            f"/api/files/{deleg2}/permissions",
+            headers=alice_h,
+            json={"group_id": gid, "permission": "manage"},
+        )
+        assert r.status_code == 201 and r.json()["permission"] == "manage", r.text
+        _ok("manage 부여(POST)·승격(PUT) 허용 → 수임 그룹이 권한 관리 조작 수행")
 
     await engine.dispose()
     await redis_client.aclose()

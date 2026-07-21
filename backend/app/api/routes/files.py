@@ -28,7 +28,7 @@ from app.api.download import content_disposition as _content_disposition
 from app.api.download import gateway_download_response, gateway_inline_response
 from app.api.preview import render_preview
 from app.core.config import settings
-from app.models.enums import GroupPermission, UserStatus
+from app.models.enums import UserStatus
 from app.schemas.files import (
     DownloadTicketResponse,
     FileListResponse,
@@ -704,13 +704,9 @@ async def grant_permission(
 ) -> DirectPermissionResponse:
     """그룹 권한 부여 (PRD 6.5). 소유자/manage 권한자만. (file,group) 중복은 upsert.
 
-    부여 가능한 수준은 읽기/쓰기로 제한한다 — manage 신규 부여는 정책상 중단(소유자는 이미 전권).
+    read/write/manage 모두 부여할 수 있다. manage 는 받는 쪽이 이 항목을 **다른 그룹에도 열어줄
+    수 있는** 권한 위임이므로(+ 영구 삭제), 부여 UI 에서 그 범위를 명시한다.
     """
-    if payload.permission == GroupPermission.MANAGE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="관리 권한은 부여할 수 없습니다. 읽기 또는 쓰기만 부여할 수 있습니다.",
-        )
     try:
         row = await permissions_service.grant_permission(
             session,
@@ -778,13 +774,8 @@ async def update_permission(
 ) -> DirectPermissionResponse:
     """그룹 권한 수정 (PRD 6.5). permission/inherit_to_children/expires_at 부분 갱신.
 
-    수정 시에도 manage 로의 승격은 막는다(부여 정책과 일치). 기존 manage 는 읽기/쓰기로 강등 가능.
+    부여와 같은 정책 — read/write/manage 간 승격·강등 모두 허용한다.
     """
-    if payload.permission == GroupPermission.MANAGE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="관리 권한으로 변경할 수 없습니다. 읽기 또는 쓰기만 설정할 수 있습니다.",
-        )
     try:
         row = await permissions_service.update_permission(
             session,

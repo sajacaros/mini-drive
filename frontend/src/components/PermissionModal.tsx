@@ -23,6 +23,44 @@ import { useToast } from "./Toast";
 import { formatDateTime } from "@/lib/format";
 import { permissionLabel, permissionTone } from "@/lib/labels";
 
+/**
+ * 권한 수준별 허용 범위 — 부여 화면에서 그대로 보여준다.
+ *
+ * 문구는 백엔드 인가 기준과 1:1 로 맞춘다: read = ensure_file_access 기본,
+ * write = need="write" 로 막힌 조작(+ 공유 링크 생성), manage = _require_manage 전용 조작
+ * (권한 부여/회수)과 영구 삭제. 수준은 누적이므로 상위는 "쓰기 +" 형태로 표기한다.
+ */
+const PERMISSION_LEVELS: {
+  value: GroupPermissionLevel;
+  label: string;
+  summary: string;
+  items: string[];
+}[] = [
+  {
+    value: "read",
+    label: "읽기",
+    summary: "보기만 가능",
+    items: ["목록·상세 조회", "다운로드·미리보기", "버전 기록 보기"],
+  },
+  {
+    value: "write",
+    label: "쓰기",
+    summary: "읽기 + 내용 변경",
+    items: [
+      "파일 추가·새 버전 업로드",
+      "이름 변경",
+      "휴지통으로 삭제·복구",
+      "공유 링크 생성",
+    ],
+  },
+  {
+    value: "manage",
+    label: "관리",
+    summary: "쓰기 + 권한 위임",
+    items: ["다른 그룹에 권한 부여·회수", "영구 삭제(되돌릴 수 없음)"],
+  },
+];
+
 export function PermissionModal({
   file,
   open,
@@ -195,10 +233,11 @@ export function PermissionModal({
                             })
                           }
                         >
-                          <option value="read">읽기</option>
-                          <option value="write">쓰기</option>
-                          {/* 관리 권한 신규 부여는 중단. 기존 관리 권한은 표시만 하고 읽기/쓰기로 강등 가능. */}
-                          {d.permission === "manage" && <option value="manage">관리</option>}
+                          {PERMISSION_LEVELS.map((p) => (
+                            <option key={p.value} value={p.value} title={p.items.join(" · ")}>
+                              {p.label}
+                            </option>
+                          ))}
                         </select>
                         {file?.is_folder && (
                           <label className="flex items-center gap-1.5 text-muted">
@@ -278,21 +317,47 @@ export function PermissionModal({
                       </p>
                     )}
                   </div>
-                  <div className="flex gap-3">
-                    <div className="flex-1">
-                      <label className="label" htmlFor="permLevel">
-                        권한 수준
-                      </label>
-                      <select
-                        id="permLevel"
-                        className="input"
-                        value={level}
-                        onChange={(e) => setLevel(e.target.value as GroupPermissionLevel)}
-                      >
-                        <option value="read">읽기 (조회·다운로드)</option>
-                        <option value="write">쓰기 (업로드·수정·삭제)</option>
-                      </select>
+                  <div>
+                    <span className="label">권한 수준</span>
+                    {/* 수준 선택 자체가 설명이 되도록 카드로 편다 — 부여 시점에 무엇을 허용하는지
+                        모르면 과도 부여로 이어지므로, 셀렉트 대신 항목을 모두 펼쳐 비교하게 한다. */}
+                    <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="권한 수준">
+                      {PERMISSION_LEVELS.map((p) => {
+                        const active = level === p.value;
+                        return (
+                          <button
+                            key={p.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            onClick={() => setLevel(p.value)}
+                            className="rounded-lg p-2.5 text-left transition-colors"
+                            style={{
+                              border: `2px solid ${active ? "var(--accent)" : "var(--border-color)"}`,
+                              background: active ? "var(--bg-muted)" : "transparent",
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Badge tone={permissionTone(p.value)}>{p.label}</Badge>
+                              <span className="text-xs text-muted">{p.summary}</span>
+                            </div>
+                            <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
+                              {p.items.map((it) => (
+                                <li key={it} className="before:mr-1 before:content-['·']">
+                                  {it}
+                                </li>
+                              ))}
+                            </ul>
+                          </button>
+                        );
+                      })}
                     </div>
+                    {level === "manage" && (
+                      <p className="mt-1.5 text-xs" style={{ color: "var(--danger)" }}>
+                        관리 권한을 받은 그룹은 이 항목을 <b>다른 그룹에도 열어줄 수</b> 있고
+                        영구 삭제도 할 수 있습니다. 공동 관리자에게만 부여하세요.
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="label" htmlFor="permExpires">
