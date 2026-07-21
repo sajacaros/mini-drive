@@ -220,12 +220,25 @@ async def annotate_listing_meta(
     user_group_ids = await get_user_group_ids(session, user.id)
     user_group_id_set = set(user_group_ids)
 
+    # 내가 소유한 폴더 하위의 타인 항목 — 소유 경로로 전권을 갖는다(ensure_file_access 와 같은
+    # 기준). 목록에서 항목당 판정하지 않도록 배치로 한 번에 모은다.
+    ancestor_owned = await permissions_service.ancestor_owned_file_ids(
+        session, user.id, [f.id for f in files if f.user_id != user.id]
+    )
+
     for f in files:
         directs = directs_by_file.get(f.id, [])
         if f.user_id == user.id:
             # 소유 항목 — 전권. group_names 는 내가 공유한 그룹들(직접 부여 그룹명).
             # (file,group) 는 UNIQUE 이므로 한 파일의 그룹명은 서로 다르다 — 중복 제거 불필요.
             f.permission = "owner"  # type: ignore[attr-defined]
+            f.group_names = [gname for _, _, gname in directs]  # type: ignore[attr-defined]
+            continue
+        if f.id in ancestor_owned:
+            # 내 폴더 안에 협업자가 만든 항목 — 소유 경로로 전권. 소유자 컬럼에는 실제 소유자가
+            # 그대로 표시되므로 "owner" 가 아니라 "manage" 로 구분해 표기한다. group_names 는
+            # 같은 폴더의 내 항목들과 일관되게 이 항목에 직접 부여된 그룹으로 채운다.
+            f.permission = "manage"  # type: ignore[attr-defined]
             f.group_names = [gname for _, _, gname in directs]  # type: ignore[attr-defined]
             continue
         # 공유받은 항목 — 파일 자체의 직접 부여(내 그룹) 우선.

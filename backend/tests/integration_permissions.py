@@ -6,6 +6,7 @@
   → depth1 에 G read 부여 → B 가 depth2 하위 file 다운로드 성공(상속) + depth2b 상속 접근
   → B 쓰기 시도 차단(403/404) + manage 시도 403 + read 만으로는 공유 링크 생성 403
   → depth2 에 G write 부여(재정의) → B 업로드(새 버전) 성공 + 비소유자 공유 링크 생성 성공
+  → B 가 A 폴더에 새 파일 업로드 → 위치를 소유한 A 는 조상 소유 상속으로 manage/via=owner
   → depth1 권한 inherit_to_children=FALSE → depth2b 상속 소실(404), depth1·file 유지(재정의)
   → 회수 직전 접근으로 캐시 적재 후 depth2 권한 회수 → B 접근 즉시 차단(캐시 무효화)
   → 만료 권한 무효(과거 expires_at) → 미래로 갱신 시 접근 회복
@@ -198,6 +199,33 @@ async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
         r = await c.get("/api/shares", headers=bob_h)
         assert any(s["share_url"] == share_url for s in r.json()), r.text
         _ok("B(비소유자, write) 공유 링크 생성 201 → 무인증 메타 200 → B 목록에 노출")
+
+        # 8-2. 조상 폴더 소유 상속 — B 가 A 의 폴더(depth2)에 **새 파일**을 올리면 소유자는 B 지만,
+        #      그 위치를 소유한 A 는 소유 경로로 전권(manage)을 갖는다.
+        #      (회귀: 소유자 검사가 파일 자신만 봐서, 내 폴더 안 협업자 파일에 A 가 접근조차
+        #       못 하던 버그)
+        bob_file = await _upload(c, bob_h, "bob.bin", depth2)
+        r = await c.get(f"/api/permissions/check/{bob_file}", headers=alice_h)
+        body = r.json()
+        # 그룹 경로였다면 depth2 write 로 잡힌다 — manage/owner 여야 조상 소유로 판정된 것.
+        assert body["permission"] == "manage" and body["via"] == "owner", body
+        assert body["source_file_id"] == depth2, body
+        # 실제 조작까지 통과해야 한다: 조회·다운로드(read), 공유 링크(write), 권한 부여(manage).
+        r = await c.get(f"/api/files/{bob_file}/download", headers=alice_h)
+        assert r.status_code == 200 and "X-Accel-Redirect" in r.headers, r.text
+        r = await c.post("/api/shares", headers=alice_h, json={"file_id": bob_file})
+        assert r.status_code == 201, r.text
+        r = await c.post(
+            f"/api/files/{bob_file}/permissions",
+            headers=alice_h,
+            json={"group_id": gid, "permission": "read"},
+        )
+        assert r.status_code == 201, r.text
+        # 목록의 권한 컬럼도 같은 판정을 내려야 한다(UI 게이팅과 서버 인가의 불일치 방지).
+        r = await c.get(f"/api/files?parentId={depth2}", headers=alice_h)
+        row = next(it for it in r.json()["items"] if it["id"] == bob_file)
+        assert row["permission"] == "manage", row
+        _ok("조상 폴더 소유 → A 가 B 파일에 manage/owner (check·다운로드·공유·권한부여·목록)")
 
         # 9. depth1 권한 inherit_to_children=FALSE → 상속 차단, 자신은 유지
         r = await c.put(

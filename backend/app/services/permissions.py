@@ -237,55 +237,123 @@ async def get_effective_grant(
     return resolve_effective_grant(rows, datetime.now(UTC))
 
 
-# --- CTE 판정 (사용자 소속 그룹 기준) ----------------------------------------
+# --- CTE 판정 (조상 소유 + 사용자 소속 그룹 기준) -----------------------------
 
-# 대상 파일에서 루트까지 조상 경로를 훑어 사용자 소속 그룹의 권한 행을 모은다.
-# depth 0 = 대상 파일, 상위로 갈수록 +1. inherit/만료 필터는 순수 함수에서 처리한다.
-_ANCESTOR_USER_PERM_SQL = text(
+# 실제 그룹 id 는 양수이므로, 소속 그룹이 없을 때 "아무 행에도 매칭되지 않는" 자리표시자로 쓴다.
+# (expanding bindparam 에 빈 리스트를 넘기지 않기 위한 것 — 조상 경로 자체는 여전히 필요하다.)
+_NO_GROUP = -1
+
+# 대상 파일에서 루트까지 조상 경로를 훑어 (a) 각 노드의 소유자와 (b) 사용자 소속 그룹의 권한 행을
+# 함께 모은다. depth 0 = 대상 파일, 상위로 갈수록 +1. 권한 행이 하나도 없어도 조상 소유 판정을
+# 하려면 경로 자체가 필요하므로 권한 테이블은 LEFT JOIN 이다.
+# inherit/만료 필터는 순수 함수에서 처리한다.
+_ANCESTOR_ACCESS_SQL = text(
     """
     WITH RECURSIVE ancestors AS (
-        SELECT id, parent_folder_id, 0 AS depth
+        SELECT id, parent_folder_id, user_id, 0 AS depth
         FROM files WHERE id = :file_id
         UNION ALL
-        SELECT f.id, f.parent_folder_id, a.depth + 1
+        SELECT f.id, f.parent_folder_id, f.user_id, a.depth + 1
         FROM files f JOIN ancestors a ON f.id = a.parent_folder_id
     )
-    SELECT a.depth AS depth, p.file_id AS file_id, p.permission AS permission,
+    SELECT a.depth AS depth, a.id AS node_id, a.user_id AS node_user_id,
+           p.file_id AS file_id, p.permission AS permission,
            p.inherit_to_children AS inherit_to_children, p.expires_at AS expires_at
     FROM ancestors a
-    JOIN file_group_permissions p ON p.file_id = a.id
-    WHERE p.group_id IN :group_ids
+    LEFT JOIN file_group_permissions p
+           ON p.file_id = a.id AND p.group_id IN :group_ids
     """
 ).bindparams(bindparam("group_ids", expanding=True))
 
 
-async def _fetch_ancestor_perm_rows(
-    session: AsyncSession, file_id: int, group_ids: list[int]
-) -> list[AncestorPermRow]:
-    if not group_ids:
-        return []
-    result = await session.execute(
-        _ANCESTOR_USER_PERM_SQL, {"file_id": file_id, "group_ids": group_ids}
-    )
-    return [
-        AncestorPermRow(
-            depth=r.depth,
-            file_id=r.file_id,
-            permission=r.permission,
-            inherit_to_children=r.inherit_to_children,
-            expires_at=r.expires_at,
-        )
-        for r in result
-    ]
+@dataclass(frozen=True)
+class ResolvedAccess:
+    """소유자 본인을 제외한 유효 접근 판정 결과.
+
+    by_ancestor_owner=True 면 그룹 부여가 아니라 **내가 소유한 상위 폴더**를 통해 얻은 접근이다.
+    """
+
+    level: GroupPermission | None
+    source_file_id: int | None
+    by_ancestor_owner: bool
 
 
-async def _determine_group_level(
+async def _determine_access(
     session: AsyncSession, user: User, file: File
-) -> tuple[GroupPermission | None, int | None]:
-    """사용자의 그룹 권한 유효 수준을 DB 로 판정한다 (소유자 여부는 별도)."""
+) -> ResolvedAccess:
+    """사용자의 유효 접근 수준을 DB 로 판정한다 (파일 자체의 소유 여부는 호출자가 먼저 처리).
+
+    두 경로를 함께 본다:
+      1) **조상 폴더 소유** — 내 폴더 안에 협업자가 만든 항목은 내 소유 경로 아래에 있으므로
+         소유자에 준하는 전권(manage)을 갖는다. 폴더를 소유한다는 것이 그 안의 항목에 대한
+         상위 권한이므로, 하위에 부여된(더 낮은) 그룹 권한이 이를 끌어내리지 않는다 —
+         즉 최근접 조상 규칙의 예외이자 하한선이다.
+      2) **그룹 권한** — 최근접 조상 규칙(resolve_effective_permission).
+    조상 소유가 성립하면 manage 가 최고 수준이므로 그대로 채택하고, 아니면 그룹 판정을 쓴다.
+    """
     group_ids = await get_user_group_ids(session, user.id)
-    rows = await _fetch_ancestor_perm_rows(session, file.id, group_ids)
-    return resolve_effective_permission(rows, datetime.now(UTC))
+    rows = (
+        await session.execute(
+            _ANCESTOR_ACCESS_SQL,
+            {"file_id": file.id, "group_ids": group_ids or [_NO_GROUP]},
+        )
+    ).all()
+
+    # LEFT JOIN 이라 한 노드가 권한 행 수만큼 반복된다 — 경로와 권한 행을 나눠 모은다.
+    chain: dict[int, tuple[int, int]] = {}  # depth -> (node_id, node_user_id)
+    perm_rows: list[AncestorPermRow] = []
+    for r in rows:
+        chain[r.depth] = (r.node_id, r.node_user_id)
+        if r.file_id is not None:
+            perm_rows.append(
+                AncestorPermRow(
+                    depth=r.depth,
+                    file_id=r.file_id,
+                    permission=r.permission,
+                    inherit_to_children=r.inherit_to_children,
+                    expires_at=r.expires_at,
+                )
+            )
+
+    owner_depths = [d for d, (_, uid) in chain.items() if d > 0 and uid == user.id]
+    if owner_depths:
+        nearest = min(owner_depths)
+        return ResolvedAccess(GroupPermission.MANAGE, chain[nearest][0], True)
+
+    level, source = resolve_effective_permission(perm_rows, datetime.now(UTC))
+    return ResolvedAccess(level, source, False)
+
+
+# 여러 파일에 대해 "내가 소유한 폴더의 하위인가"를 한 번에 판정한다 (목록 배치용).
+# 각 대상 파일(origin)마다 조상 경로를 따라 올라가며 내 소유 노드를 만나는지 본다.
+_ANCESTOR_OWNED_SQL = text(
+    """
+    WITH RECURSIVE chain AS (
+        SELECT id AS origin, parent_folder_id, user_id, 0 AS depth
+        FROM files WHERE id IN :file_ids
+        UNION ALL
+        SELECT c.origin, f.parent_folder_id, f.user_id, c.depth + 1
+        FROM files f JOIN chain c ON f.id = c.parent_folder_id
+    )
+    SELECT DISTINCT origin FROM chain WHERE depth > 0 AND user_id = :user_id
+    """
+).bindparams(bindparam("file_ids", expanding=True))
+
+
+async def ancestor_owned_file_ids(
+    session: AsyncSession, user_id: int, file_ids: Iterable[int]
+) -> set[int]:
+    """주어진 파일들 중 **내가 소유한 폴더의 하위**인 것들의 id (쿼리 1회).
+
+    목록 응답의 권한 컬럼을 채울 때 항목당 판정(N+1) 없이 조상 소유를 반영하기 위한 배치 헬퍼다.
+    """
+    ids = list(file_ids)
+    if not ids:
+        return set()
+    rows = await session.execute(
+        _ANCESTOR_OWNED_SQL, {"file_ids": ids, "user_id": user_id}
+    )
+    return {r.origin for r in rows}
 
 
 # --- Redis 캐시 (사용자별 세대 카운터 기반 무효화) ----------------------------
@@ -312,9 +380,10 @@ async def _user_generation(user_id: int) -> int:
 async def get_access_level(
     session: AsyncSession, user: User, file: File
 ) -> GroupPermission | None:
-    """소유자를 제외한 그룹 권한 유효 수준(캐시 적용). ensure_file_access 의 핫패스가 사용.
+    """파일 자체의 소유를 제외한 유효 접근 수준(조상 폴더 소유 + 그룹 권한, 캐시 적용).
 
-    캐시에는 수준 문자열(read/write/manage) 또는 'none' 을 저장한다.
+    ensure_file_access 의 핫패스가 사용한다. 캐시에는 수준 문자열(read/write/manage) 또는
+    'none' 을 저장한다.
     """
     generation = await _user_generation(user.id)
     key = _cache_key(generation, user.id, file.id)
@@ -326,7 +395,7 @@ async def get_access_level(
         cached = cached.decode() if isinstance(cached, bytes) else cached
         return None if cached == "none" else GroupPermission(cached)
 
-    level, _ = await _determine_group_level(session, user, file)
+    level = (await _determine_access(session, user, file)).level
     try:
         await redis_client.set(
             key, level.value if level is not None else "none", ex=_CACHE_TTL_SECONDS
@@ -366,13 +435,13 @@ async def invalidate_group_members(session: AsyncSession, group_id: int) -> None
 
 
 async def _require_manage(session: AsyncSession, actor: User, file: File) -> None:
-    """권한 관리(부여/수정/회수)는 소유자 또는 manage 권한자만.
+    """권한 관리(부여/수정/회수)는 소유자(상위 폴더 소유 포함) 또는 manage 권한자만.
 
     아예 접근 불가면 404(존재 은닉), 조회는 되지만 manage 부족이면 403.
     """
     if file.user_id == actor.id:
         return
-    level, _ = await _determine_group_level(session, actor, file)
+    level = (await _determine_access(session, actor, file)).level
     if level is None:
         raise PermissionServiceError(404, "파일을 찾을 수 없습니다.")
     if _RANK[level] < _RANK[GroupPermission.MANAGE]:
@@ -686,17 +755,23 @@ async def check_permission(
 ) -> EffectivePermission:
     """현재 사용자의 파일 유효 권한 (PRD 6.6). 존재하지 않으면 404.
 
-    소유자(생성자)는 manage(전권). 그 외에는 그룹 권한으로만 판정한다. 시스템 admin 은 파일
-    내용 접근 권한이 없으므로(PRD 3.6.4) via=admin 은 발생하지 않는다.
+    소유자(생성자)는 manage(전권). 내가 소유한 폴더의 하위 항목도 소유 경로로 manage 이며,
+    이 경우 via="owner" 에 source_file_id 로 그 폴더 id 가 실린다(파일 자체 소유는 None).
+    그 외에는 그룹 권한으로 판정한다. 시스템 admin 은 파일 내용 접근 권한이 없으므로
+    (PRD 3.6.4) via=admin 은 발생하지 않는다.
     """
     file = await _get_file(session, file_id)
     if file.user_id == user.id:
         return EffectivePermission(permission="manage", via="owner", source_file_id=None)
 
-    level, source = await _determine_group_level(session, user, file)
-    if level is None:
+    access = await _determine_access(session, user, file)
+    if access.level is None:
         return EffectivePermission(permission="none", via="none", source_file_id=None)
-    return EffectivePermission(permission=level.value, via="group", source_file_id=source)
+    return EffectivePermission(
+        permission=access.level.value,
+        via="owner" if access.by_ancestor_owner else "group",
+        source_file_id=access.source_file_id,
+    )
 
 
 # --- 공유된 항목 목록 (shared-with-me) ---------------------------------------
