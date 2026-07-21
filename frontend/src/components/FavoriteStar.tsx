@@ -31,7 +31,7 @@ export function FavoriteStar({
       }}
       className={`rounded-md p-1.5 transition-colors ${
         active
-          ? "text-[color:var(--accent)]"
+          ? "text-accent"
           : "text-muted opacity-0 hover:text-[color:var(--text-primary)] group-hover:opacity-100"
       } ${className}`}
     >

@@ -93,7 +93,7 @@ export function TrashPage() {
                   <tr key={f.id} className="border-b border-token last:border-0">
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5">
-                        <span className={f.is_folder ? "text-[color:var(--accent)]" : "text-muted"}>
+                        <span className={f.is_folder ? "text-accent" : "text-muted"}>
                           {f.is_folder ? <FolderIcon /> : <FileIcon />}
                         </span>
                         <span className="truncate">{f.name}</span>

@@ -36,7 +36,7 @@ export function Layout() {
           className="flex items-center gap-2 px-5 py-5 transition-opacity hover:opacity-80"
           aria-label="홈으로"
         >
-          <span className="text-[color:var(--accent)]">
+          <span className="text-accent">
             <DriveIcon width={22} height={22} />
           </span>
           <span className="font-pixel text-lg font-semibold">Flex Drive</span>
@@ -133,8 +133,10 @@ function NavItem({
       className={({ isActive }) =>
         `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
           isActive
-            ? "bg-[color:var(--bg-muted)] text-[color:var(--accent)]"
-            : "text-[color:var(--text-secondary)] hover:bg-[color:var(--bg-muted)]"
+            ? "bg-[color:var(--bg-muted)] text-accent"
+            : // 호버 시 배경만 bg-muted 로 바뀌고 글씨가 text-secondary 로 남으면 대비가
+              // 3.6:1 까지 떨어진다(게임보이 라이트). .btn-ghost:hover 처럼 글씨도 같이 올린다.
+              "text-[color:var(--text-secondary)] hover:bg-[color:var(--bg-muted)] hover:text-[color:var(--text-primary)]"
         }`
       }
     >

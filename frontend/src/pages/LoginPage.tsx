@@ -76,7 +76,7 @@ export function LoginPage() {
 
       <p className="mt-5 text-center text-sm text-muted">
         아직 계정이 없으신가요?{" "}
-        <Link to="/register" className="font-medium text-[color:var(--accent)]">
+        <Link to="/register" className="font-medium text-accent">
           가입
         </Link>
       </p>
@@ -96,7 +96,7 @@ export function AuthShell({
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-2">
-          <span className="text-[color:var(--accent)]">
+          <span className="text-accent">
             <DriveIcon width={32} height={32} />
           </span>
           <h1 className="text-xl font-semibold">Flex Drive</h1>

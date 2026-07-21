@@ -754,7 +754,7 @@ export function FileBrowserPage({
             className="pointer-events-none absolute inset-4 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-[color:var(--accent)]"
             style={{ background: "color-mix(in srgb, var(--accent) 12%, var(--bg-primary))" }}
           >
-            <p className="font-medium text-[color:var(--accent)]">여기에 놓아 업로드</p>
+            <p className="font-medium text-accent">여기에 놓아 업로드</p>
           </div>
         )}
 
@@ -1177,7 +1177,7 @@ interface FileRowProps {
 function PermissionCell({ f }: { f: FileNode }) {
   if (!f.permission) return <span className="text-muted">-</span>;
   if (f.permission === "owner") {
-    return <span className="text-xs font-medium text-[color:var(--accent)]">소유자</span>;
+    return <span className="text-xs font-medium text-accent">소유자</span>;
   }
   return <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>;
 }
@@ -1277,7 +1277,7 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2.5">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-[color:var(--accent)]">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-accent">
                     <InboxIcon width={20} height={20} />
                   </span>
                   <span className="font-medium">공유</span>
@@ -1303,7 +1303,7 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                     {/* 이미지면 미니 썸네일, 아니면 유형 아이콘 */}
                     <span
                       className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
-                        f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+                        f.is_folder ? "text-accent" : "text-muted"
                       }`}
                     >
                       <Thumbnail
@@ -1359,7 +1359,7 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           className="card relative flex flex-col overflow-hidden p-0 text-left transition-colors hover:bg-[color:var(--bg-muted)]"
           title="공유받은 항목"
         >
-          <span className="flex aspect-square w-full items-center justify-center bg-muted-token text-[color:var(--accent)]">
+          <span className="flex aspect-square w-full items-center justify-center bg-muted-token text-accent">
             <InboxIcon width={44} height={44} />
           </span>
           <div className="flex flex-col gap-1 border-t border-token px-2.5 py-2">
@@ -1382,7 +1382,7 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           >
             <span
               className={`flex items-center justify-center ${
-                f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+                f.is_folder ? "text-accent" : "text-muted"
               }`}
             >
               <Thumbnail

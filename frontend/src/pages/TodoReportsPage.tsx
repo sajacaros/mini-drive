@@ -77,7 +77,7 @@ export function TodoReportsPage() {
           <div className="flex items-center justify-between gap-4">
             <div>
               <h1 className="flex items-center gap-2 text-lg font-semibold">
-                <span className="text-[color:var(--accent)]">
+                <span className="text-accent">
                   <ChartIcon width={18} height={18} />
                 </span>
                 리포트

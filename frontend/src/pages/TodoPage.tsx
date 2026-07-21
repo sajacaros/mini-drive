@@ -189,7 +189,7 @@ export function TodoPage() {
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="flex items-center gap-2 text-lg font-semibold">
-                <span className="text-[color:var(--accent)]">
+                <span className="text-accent">
                   <CalendarIcon width={18} height={18} />
                 </span>
                 할 일
@@ -233,7 +233,7 @@ export function TodoPage() {
               <div className="text-base font-semibold">{formatDayLabel(date)}</div>
               {!isToday && (
                 <button
-                  className="text-xs text-[color:var(--accent)] hover:underline"
+                  className="text-xs text-accent hover:underline"
                   onClick={() => setDate(todayStr())}
                 >
                   오늘로 이동
@@ -401,7 +401,7 @@ function TodoRow({
           {item.title}
         </div>
         {item.routine_id !== null && (
-          <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-[color:var(--accent)]">
+          <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
             <RepeatIcon width={11} height={11} />
             루틴
           </span>

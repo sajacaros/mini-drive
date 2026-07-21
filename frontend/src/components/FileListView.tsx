@@ -37,7 +37,7 @@ export function FileListView(props: FileListViewProps) {
 function PermissionCell({ f }: { f: FileNode }) {
   if (!f.permission) return <span className="text-muted">-</span>;
   if (f.permission === "owner") {
-    return <span className="text-xs font-medium text-[color:var(--accent)]">소유자</span>;
+    return <span className="text-xs font-medium text-accent">소유자</span>;
   }
   return <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>;
 }
@@ -89,7 +89,7 @@ function Table(p: FileListViewProps) {
                   <button className="flex min-w-0 items-center gap-2.5 text-left" onClick={openOf(f, p)}>
                     <span
                       className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
-                        f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+                        f.is_folder ? "text-accent" : "text-muted"
                       }`}
                     >
                       <Thumbnail
@@ -157,7 +157,7 @@ function Grid(p: FileListViewProps) {
           >
             <span
               className={`flex items-center justify-center ${
-                f.is_folder ? "text-[color:var(--accent)]" : "text-muted"
+                f.is_folder ? "text-accent" : "text-muted"
               }`}
             >
               <Thumbnail

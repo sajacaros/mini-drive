@@ -129,7 +129,7 @@ export function RegisterPage() {
 
       <p className="mt-5 text-center text-sm text-muted">
         이미 계정이 있으신가요?{" "}
-        <Link to="/login" className="font-medium text-[color:var(--accent)]">
+        <Link to="/login" className="font-medium text-accent">
           로그인
         </Link>
       </p>
