@@ -26,10 +26,31 @@ class FakeRedis:
         return 1
 
 
+class _FakeSession:
+    def __init__(self, file: object | None) -> None:
+        self._file = file
+
+    async def __aenter__(self) -> _FakeSession:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def get(self, _model: object, _pk: int) -> object | None:
+        return self._file
+
+
+def _use_session(monkeypatch, file: object | None) -> None:
+    monkeypatch.setattr(fe, "SessionFactory", lambda: _FakeSession(file))
+
+
 class TestPublishPayload:
     async def test_payload_schema_and_channel(self, monkeypatch) -> None:
         fake = FakeRedis()
         monkeypatch.setattr(fe, "redis_client", fake)
+        # 컨테이너(id=7)는 부모가 있는 일반 폴더 — 루트가 아니므로 정규화 대상이 아니다.
+        # publish 경로가 _normalize_container 에서 실 DB 를 잡지 않도록 세션도 대체한다.
+        _use_session(monkeypatch, SimpleNamespace(parent_folder_id=1, group_id=None))
         await fe.publish_file_event(
             type="upload",
             file_id=42,
@@ -63,24 +84,6 @@ class TestPublishPayload:
         await fe.publish_file_event(
             type="delete", file_id=9, parent_folder_id=None, actor_id=1, name="x"
         )
-
-
-class _FakeSession:
-    def __init__(self, file: object | None) -> None:
-        self._file = file
-
-    async def __aenter__(self) -> _FakeSession:
-        return self
-
-    async def __aexit__(self, *exc: object) -> bool:
-        return False
-
-    async def get(self, _model: object, _pk: int) -> object | None:
-        return self._file
-
-
-def _use_session(monkeypatch, file: object | None) -> None:
-    monkeypatch.setattr(fe, "SessionFactory", lambda: _FakeSession(file))
 
 
 class TestPermissionFilter:
