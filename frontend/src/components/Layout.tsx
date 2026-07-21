@@ -1,6 +1,6 @@
 /** 인증 사용자 공통 레이아웃 — 사이드 네비 + 저장 용량 표시. 프로필 칩은 각 페이지 헤더(PageHeader) 우측에 표시된다. */
 
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatBytes, formatPercent } from "@/lib/format";
 import { useAuthStore } from "@/store/auth";
@@ -23,6 +23,7 @@ import {
 
 export function Layout() {
   const { user } = useAuthStore();
+  const location = useLocation();
 
   const used = user?.storage_used ?? 0;
   const max = user?.max_storage ?? 1;
@@ -99,7 +100,17 @@ export function Layout() {
       </aside>
 
       <main className="min-w-0 flex-1">
-        <Outlet />
+        {/*
+          location.key 로 페이지를 리마운트해, 네비를 누르면 **어디에 있든 그 메뉴의 루트로**
+          돌아가게 한다.
+
+          페이지들이 화면 안 위치를 URL 이 아니라 컴포넌트 state 로 들고 있어서 생기는 문제다.
+          예를 들어 FileBrowserPage 의 현재 폴더(path)는 state 라, 폴더를 파고든 뒤 "내 드라이브"를
+          눌러도 URL 이 그대로면 리마운트가 없어 화면이 그 폴더에 머문다(목록 페이지 번호도 같다).
+          React Router 는 같은 경로로 이동해도 새 location.key 를 발급하므로, 이걸 key 로 쓰면
+          "같은 메뉴 다시 클릭"이 리셋으로 이어진다.
+        */}
+        <Outlet key={location.key} />
       </main>
     </div>
   );
