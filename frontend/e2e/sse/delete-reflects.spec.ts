@@ -47,9 +47,9 @@ test.describe("실시간 목록 갱신 (SSE)", () => {
 
       // expect: 토스트 "휴지통으로 이동했습니다."가 보인다
       await expect(page.getByText("휴지통으로 이동했습니다.")).toBeVisible();
-      // expect: 목록 테이블에서 해당 행이 즉시 제거된다(빈 상태라면 빈 상태 문구로 전환)
+      // expect: 목록 테이블에서 해당 행이 즉시 제거된다
+      // (내 드라이브 루트에는 "공유" 가상 폴더 행이 항상 고정 노출되므로 빈 상태 문구는 뜨지 않는다)
       await expect(row).not.toBeVisible();
-      await expect(page.getByText("이 폴더가 비어 있습니다")).toBeVisible();
       // expect: "최근 항목" 스트립 전체가 사라지거나 해당 카드가 제거된다
       await expect(page.getByRole("heading", { name: "최근 항목" })).not.toBeVisible();
 

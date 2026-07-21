@@ -62,11 +62,12 @@ test.describe("실시간 목록 갱신 (SSE)", () => {
 
       // expect: 탭 A에서도 별도 조작 없이 목록에서 폴더가 사라진다
       await expect(folderRowA).not.toBeVisible({ timeout: 10_000 });
-      // expect: 두 탭 모두 정리된 빈 상태로 복귀한다
-      await expect(pageA.getByText("이 폴더가 비어 있습니다")).toBeVisible();
 
+      // expect: 두 탭 모두 해당 폴더가 사라진 상태로 복귀한다.
+      // 내 드라이브 루트에는 "공유" 가상 폴더 행이 항상 고정 노출돼 빈 상태 문구가 뜨지 않으므로
+      // 전역 빈 상태 대신 대상 행의 부재로 확인한다.
       await pageB.goto("/");
-      await expect(pageB.getByText("이 폴더가 비어 있습니다")).toBeVisible();
+      await expect(pageB.getByRole("row", { name: namePattern })).not.toBeVisible();
     } finally {
       // 중간 단언이 실패해 happy-path 정리를 건너뛰었더라도 항상 정리한다(best-effort, 멱등).
       await pageB.goto("/");
