@@ -37,9 +37,17 @@ MAX_THUMBNAIL_SOURCE_BYTES = 50 * 1024 * 1024
 _THUMBNAIL_MIME = "image/png"
 
 
+# image/ 로 시작하지만 PIL(래스터 디코더)이 열 수 없는 타입 — 시도해도 반드시 실패한다.
+# SVG 는 벡터 포맷이라 별도 렌더러(cairosvg 등)가 필요하다. 미지원을 선언해 두면 원본을
+# 스토리지에서 내려받는 헛수고와 확정된 예외를 아낀다.
+_NON_RASTER_IMAGE_MIMES = frozenset({"image/svg+xml", "image/svg"})
+
+
 def is_thumbnailable(mime_type: str | None) -> bool:
-    """이미지 계열이면 썸네일 생성 대상. mime 이 `image/` 로 시작하는지로 판정한다."""
-    return bool(mime_type) and mime_type.startswith("image/")  # type: ignore[union-attr]
+    """썸네일 생성 대상인지. `image/` 계열이되 PIL 이 못 읽는 벡터 포맷은 제외한다."""
+    if not mime_type:
+        return False
+    return mime_type.startswith("image/") and mime_type not in _NON_RASTER_IMAGE_MIMES
 
 
 def build_thumbnail_key(file_id: int) -> str:
@@ -73,14 +81,16 @@ async def maybe_generate(
     이미지가 아니거나 크기 초과면 스킵하고, 남아 있던 이전 썸네일은 제거한다. 어떤 실패도
     호출자(업로드/복구 흐름)로 전파하지 않는다 — 경고 로그만 남긴다.
     """
+    # rollback 은 세션의 ORM 인스턴스를 expire 시키므로, 그 뒤 file.id 를 읽으면 지연 로드가
+    # 일어나 MissingGreenlet 으로 죽는다. "실패해도 전파하지 않는다"는 이 함수의 약속이
+    # 정작 실패 처리 자체에서 깨지던 원인이라, 로그에 쓸 값은 미리 잡아 둔다.
+    file_id = file.id
     try:
         if file.is_folder or not is_thumbnailable(file.mime_type):
             await _clear_thumbnail(session, storage, file)
             return
         if file.size > MAX_THUMBNAIL_SOURCE_BYTES:
-            _log.info(
-                "thumbnail_skip_large", file_id=file.id, size=file.size
-            )
+            _log.info("thumbnail_skip_large", file_id=file_id, size=file.size)
             await _clear_thumbnail(session, storage, file)
             return
 
@@ -93,7 +103,7 @@ async def maybe_generate(
         await session.commit()
     except Exception as exc:  # noqa: BLE001 - best-effort, 업로드를 막지 않는다.
         await session.rollback()
-        _log.warning("thumbnail_generate_failed", file_id=file.id, error=str(exc))
+        _log.warning("thumbnail_generate_failed", file_id=file_id, error=str(exc))
     finally:
         # commit/rollback 으로 만료된 ORM 속성을 다시 로드해, 호출자가 file 을 그대로 직렬화해도
         # 지연 IO(MissingGreenlet)가 나지 않게 한다. 실패는 무시(best-effort).

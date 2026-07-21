@@ -442,6 +442,9 @@ async def _complete_new(
 
     await session.refresh(file)
     await thumbnails_service.maybe_generate(session, storage, file)
+    # 썸네일 실패 시 내부 rollback 으로 세션 인스턴스가 expire 된다(files_service.revive 주석).
+    await files_service.revive(session, user)
+    await files_service.revive(session, file)
     await file_events_service.publish_file_event(
         type="upload",
         file_id=file.id,
