@@ -371,11 +371,13 @@ function TodoRow({
         <GripIcon width={16} height={16} />
       </span>
 
-      {/* 체크 (완료) */}
+      {/* 체크 (완료) — 미완료 상태는 채움 없이 테두리만으로 존재를 알리므로, 장식용인
+          --border-color 로는 부족하다(카드 위 1.4:1). 컨트롤 경계에 요구되는 3:1 을
+          넘기려면 --text-secondary 를 써야 한다 (4테마 최저 3.07:1). */}
       <button
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors"
         style={{
-          borderColor: done ? "var(--success)" : "var(--border-color)",
+          borderColor: done ? "var(--success)" : "var(--text-secondary)",
           background: done ? "var(--success)" : "transparent",
           color: done ? "var(--bg-primary)" : "transparent",
         }}
