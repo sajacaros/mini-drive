@@ -62,13 +62,15 @@ class GroupPermission(StrEnum):
 class TodoStatus(StrEnum):
     """데일리 투두 항목 상태 (todo_items.status).
 
-    - PENDING: 미완료(기본). DONE: 완료(체크). SKIPPED: 건너뜀(X — 오늘은 안 함).
-    달성률 계산에서 skipped 는 분모(actionable)에서 제외한다.
+    - PENDING: 미완료(빈칸, 기본). DONE: 완료(체크). FAILED: 수행 실패(X — 스스로 못 했다고 표시).
+
+    FAILED 는 '오늘은 안 함(skip)'이 아니라 자기 반성으로 남기는 명시적 실패다. 따라서 달성률
+    분모에서 빼지 않고 미달성으로 집계하며, 실패가 하나라도 있는 날은 '달성'이 아니다.
     """
 
     PENDING = "pending"
     DONE = "done"
-    SKIPPED = "skipped"
+    FAILED = "failed"
 
 
 class RoutineFrequency(StrEnum):

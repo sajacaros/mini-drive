@@ -133,13 +133,13 @@ export function TodoReportsPage() {
 }
 
 function ReportBody({ report, tab }: { report: TodoReport; tab: Tab }) {
-  const actionable = report.done + report.pending;
   return (
     <div className="flex flex-col gap-6">
-      {/* 요약 카드들 */}
+      {/* 요약 카드들 — 완료율 분모는 전체 항목(완료+실패+빈칸)이다. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="완료율" value={formatPercent(report.completion_rate)} accent />
-        <StatCard label="완료" value={`${report.done}`} sub={`/ ${actionable}`} />
+        <StatCard label="완료" value={`${report.done}`} sub={`/ ${report.total}`} />
+        <StatCard label="실패" value={`${report.failed}`} sub={`빈칸 ${report.pending}`} />
         <StatCard
           label="현재 연속"
           value={`${report.current_streak}일`}
@@ -217,30 +217,36 @@ function StatCard({
   );
 }
 
-/** 일별 완료/미완료 막대 그래프. 막대 높이 = 항목 수, 초록 = 완료 비율. */
+/**
+ * 일별 막대 그래프. 막대 높이 = 그날 항목 수, 아래부터 완료(초록)/실패(빨강)/빈칸(회색).
+ *
+ * 실패를 빈칸과 같은 회색으로 묶지 않는다 — 완료율 분모에는 셋 다 들어가지만, "못 했다고
+ * 표시한 것"과 "아직 손대지 않은 것"은 되돌아볼 때 의미가 다르기 때문이다.
+ */
 function DailyChart({ report, compact }: { report: TodoReport; compact: boolean }) {
-  const maxTotal = Math.max(1, ...report.daily.map((d) => d.done + d.pending + d.skipped));
+  const maxTotal = Math.max(1, ...report.daily.map((d) => d.total));
   return (
     <div className="card p-4">
       <div className="flex items-end gap-1" style={{ height: 120 }}>
         {report.daily.map((d) => {
-          const total = d.done + d.pending + d.skipped;
+          const total = d.total;
           const h = (total / maxTotal) * 100;
-          const donePct = total > 0 ? (d.done / total) * 100 : 0;
+          const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
           const day = parseDateStr(d.date).getDate();
           return (
             <div
               key={d.date}
               className="flex flex-1 flex-col items-center justify-end gap-1"
-              title={`${d.date} — 완료 ${d.done}, 미완료 ${d.pending}, 건너뜀 ${d.skipped}`}
+              title={`${d.date} — 완료 ${d.done}, 실패 ${d.failed}, 빈칸 ${d.pending}`}
             >
               <div
                 className="flex w-full max-w-8 flex-col justify-end overflow-hidden rounded-t"
                 style={{ height: `${h}%`, minHeight: total > 0 ? 4 : 0 }}
               >
-                {/* 미완료(회색) 위 / 완료(초록) 아래로 쌓는다. */}
-                <div style={{ height: `${100 - donePct}%`, background: "var(--bg-muted)" }} />
-                <div style={{ height: `${donePct}%`, background: "var(--success)" }} />
+                {/* 위에서부터 빈칸(회색) → 실패(빨강) → 완료(초록) 순으로 쌓는다. */}
+                <div style={{ height: `${pct(d.pending)}%`, background: "var(--bg-muted)" }} />
+                <div style={{ height: `${pct(d.failed)}%`, background: "var(--danger)" }} />
+                <div style={{ height: `${pct(d.done)}%`, background: "var(--success)" }} />
               </div>
               {!compact && (
                 <span className="text-[10px] text-muted">{day}</span>
@@ -257,7 +263,8 @@ function DailyChart({ report, compact }: { report: TodoReport; compact: boolean 
       )}
       <div className="mt-3 flex items-center gap-4 text-xs text-muted">
         <LegendDot color="var(--success)" label="완료" />
-        <LegendDot color="var(--bg-muted)" label="미완료/건너뜀" />
+        <LegendDot color="var(--danger)" label="실패" />
+        <LegendDot color="var(--bg-muted)" label="빈칸" />
       </div>
     </div>
   );

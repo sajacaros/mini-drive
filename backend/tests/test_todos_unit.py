@@ -5,7 +5,7 @@
   - week_bounds / month_bounds: 기간 경계(윤년·연말 wrap 포함)
   - _DayCount.achieved: '실행 대상 1개↑ & 미완료 0' 규칙
   - _compute_streaks: 현재/최장 연속(가짜 세션이 (date,status) 행 반환)
-  - build_report: 합계·완료율(분모에서 skipped 제외)·일별 포인트 개수
+  - build_report: 합계·완료율(분모 = 전체 항목, 실패 포함)·일별 포인트 개수
 멱등 물질화·부분 유니크 인덱스 등 postgres 특화 동작은 실 DB 통합 시나리오에서 별도 검증한다.
 """
 
@@ -86,11 +86,15 @@ class TestBounds:
 
 
 class TestDayCount:
-    def test_achieved_requires_actionable_and_no_pending(self) -> None:
-        assert _DayCount(done=2, skipped=1, pending=0).achieved is True
-        assert _DayCount(done=0, skipped=3, pending=0).achieved is False  # 실행 대상 없음
-        assert _DayCount(done=1, skipped=0, pending=1).achieved is False  # 미완료 존재
-        assert _DayCount(done=1, skipped=0, pending=0).actionable == 1
+    def test_achieved_requires_all_done(self) -> None:
+        """실패(X)는 명시적 미달성 — 하나라도 있으면 그날은 '달성'이 아니다."""
+        assert _DayCount(done=2, failed=0, pending=0).achieved is True
+        assert _DayCount(done=2, failed=1, pending=0).achieved is False  # 실패 존재
+        assert _DayCount(done=0, failed=3, pending=0).achieved is False  # 전부 실패
+        assert _DayCount(done=1, failed=0, pending=1).achieved is False  # 빈칸 존재
+        assert _DayCount().achieved is False  # 항목 없음
+        # 분모는 전체 항목(완료+실패+빈칸).
+        assert _DayCount(done=1, failed=1, pending=1).actionable == 3
 
 
 class TestStreaks:
@@ -125,7 +129,7 @@ class TestBuildReport:
             (dt.date(2026, 7, 6), "done"),
             (dt.date(2026, 7, 6), "pending"),
             (dt.date(2026, 7, 7), "done"),
-            (dt.date(2026, 7, 7), "skipped"),
+            (dt.date(2026, 7, 7), "failed"),
             (dt.date(2026, 7, 8), "done"),
         ]
         streak_rows: list = []
@@ -141,10 +145,10 @@ class TestBuildReport:
         )
         assert report.done == 3
         assert report.pending == 1
-        assert report.skipped == 1
+        assert report.failed == 1
         assert report.total == 5
-        # 완료율 = done / (done + pending) = 3/4, skipped 는 분모 제외.
-        assert abs(report.completion_rate - 0.75) < 1e-9
+        # 완료율 = done / total = 3/5 — 실패(X)도 빈칸도 분모에 들어간다.
+        assert abs(report.completion_rate - 0.6) < 1e-9
         assert len(report.daily) == 3  # 빈 날 없이 3일 모두 포인트
         # 루틴 집계: 운동 done 1 / actionable 2.
         assert len(report.routines) == 1

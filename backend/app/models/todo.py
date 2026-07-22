@@ -92,7 +92,7 @@ class TodoItem(Base):
     )
     todo_date: Mapped[date] = mapped_column(Date, nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    # 'pending' | 'done' | 'skipped' (models.enums.TodoStatus).
+    # 'pending' | 'done' | 'failed' (models.enums.TodoStatus).
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'pending'")
     )

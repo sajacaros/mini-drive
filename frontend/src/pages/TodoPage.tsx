@@ -1,9 +1,9 @@
 /**
  * 데일리 투두 — 날짜별 할 일. 날짜를 이동하며 조회하고(자정이 지나 새 날을 열면 활성 루틴이
- * 서버에서 자동 물질화된다), 각 항목의 체크를 누를 때마다 상태가 빈칸 → 완료(v) → 건너뜀(x) →
- * 빈칸 으로 돈다. 건너뜀 전용 버튼을 따로 두면 그 버튼을 못 찾고 "x 는 선택 못 하나" 가 되므로,
- * 컨트롤 하나로 세 상태를 모두 돌린다. 임시 항목은 그날 직접 추가/삭제할 수 있고, 루틴 파생
- * 항목은 배지로 구분한다(삭제 불가 — 건너뜀으로 처리).
+ * 서버에서 자동 물질화된다), 각 항목의 체크를 누를 때마다 상태가 빈칸 → 완료(v) → 실패(x) →
+ * 빈칸 으로 돈다. X 는 '오늘은 안 함(skip)'이 아니라 자기 반성으로 남기는 명시적 수행 실패이며,
+ * 달성률 분모에서 빠지지 않는다. 임시 항목은 그날 직접 추가/삭제할 수 있고, 루틴 파생 항목은
+ * 배지로 구분한다(삭제 불가 — 실패로 기록).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,17 +29,17 @@ import {
 } from "@/components/icons";
 import { addDays, formatDayLabel, todayStr } from "@/lib/localDate";
 
-/** 체크를 누를 때 도는 순서. 빈칸 → 완료(v) → 건너뜀(x) → 빈칸. */
+/** 체크를 누를 때 도는 순서. 빈칸 → 완료(v) → 실패(x) → 빈칸. */
 const NEXT_STATUS: Record<TodoStatus, TodoStatus> = {
   pending: "done",
-  done: "skipped",
-  skipped: "pending",
+  done: "failed",
+  failed: "pending",
 };
 
 const STATUS_LABEL: Record<TodoStatus, string> = {
   pending: "미완료",
   done: "완료",
-  skipped: "건너뜀",
+  failed: "실패",
 };
 
 export function TodoPage() {
@@ -73,8 +73,9 @@ export function TodoPage() {
   const isToday = date === todayStr();
   const items = day?.items ?? [];
   const done = day?.done ?? 0;
-  const actionable = (day?.done ?? 0) + (day?.pending ?? 0);
-  const ratio = actionable > 0 ? done / actionable : 0;
+  // 달성률 분모는 그날의 전체 항목이다 — 실패(X)는 명시적 미달성이라 분모에서 빼지 않는다.
+  const total = day?.total ?? 0;
+  const ratio = total > 0 ? done / total : 0;
 
   const patchLocal = (id: number, next: Partial<TodoItem>) =>
     setDayData((prev) =>
@@ -96,7 +97,7 @@ export function TodoPage() {
     }
   };
 
-  /** 체크 한 번에 상태를 한 칸씩 돌린다: 빈칸 → 완료(v) → 건너뜀(x) → 빈칸. */
+  /** 체크 한 번에 상태를 한 칸씩 돌린다: 빈칸 → 완료(v) → 실패(x) → 빈칸. */
   const cycleStatus = (item: TodoItem) =>
     setStatus(item, NEXT_STATUS[item.status]);
 
@@ -269,8 +270,8 @@ export function TodoPage() {
               <div className="mb-1.5 flex items-center justify-between text-sm">
                 <span className="font-medium">진행률</span>
                 <span className="text-muted">
-                  {done} / {actionable} 완료
-                  {(day?.skipped ?? 0) > 0 && ` · ${day?.skipped} 건너뜀`}
+                  {done} / {total} 완료
+                  {(day?.failed ?? 0) > 0 && ` · ${day?.failed} 실패`}
                 </span>
               </div>
               <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted-token">
@@ -342,9 +343,9 @@ export function TodoPage() {
 /** 응답의 요약 카운트를 items 기준으로 재계산한다(낙관적 갱신 후 배지 동기화). */
 function recount(d: TodoDayResponse): TodoDayResponse {
   const done = d.items.filter((it) => it.status === "done").length;
-  const skipped = d.items.filter((it) => it.status === "skipped").length;
+  const failed = d.items.filter((it) => it.status === "failed").length;
   const pending = d.items.filter((it) => it.status === "pending").length;
-  return { ...d, total: d.items.length, done, skipped, pending };
+  return { ...d, total: d.items.length, done, failed, pending };
 }
 
 function TodoRow({
@@ -361,7 +362,7 @@ function TodoRow({
   onDelete?: () => void;
 }) {
   const done = item.status === "done";
-  const skipped = item.status === "skipped";
+  const failed = item.status === "failed";
   return (
     <li
       data-todo-id={item.id}
@@ -382,7 +383,7 @@ function TodoRow({
         <GripIcon width={16} height={16} />
       </span>
 
-      {/* 상태 체크 — 누를 때마다 빈칸 → 완료(v) → 건너뜀(x) → 빈칸 으로 돈다.
+      {/* 상태 체크 — 누를 때마다 빈칸 → 완료(v) → 실패(x) → 빈칸 으로 돈다.
           미완료 상태는 채움 없이 테두리만으로 존재를 알리므로, 장식용인 --border-color 로는
           부족하다(카드 위 1.4:1). 컨트롤 경계에 요구되는 3:1 을 넘기려면 --text-secondary 를
           써야 한다 (4테마 최저 3.07:1). */}
@@ -391,11 +392,11 @@ function TodoRow({
         style={{
           borderColor: done
             ? "var(--success)"
-            : skipped
+            : failed
               ? "var(--danger)"
               : "var(--text-secondary)",
-          background: done ? "var(--success)" : skipped ? "var(--danger)" : "transparent",
-          color: done || skipped ? "var(--bg-primary)" : "transparent",
+          background: done ? "var(--success)" : failed ? "var(--danger)" : "transparent",
+          color: done || failed ? "var(--bg-primary)" : "transparent",
         }}
         // 세 상태를 도는 버튼이라 aria-pressed(2상태)로는 표현되지 않는다. 현재 상태와 다음
         // 상태를 이름에 함께 담아 스크린리더가 "지금 무엇이고 누르면 무엇이 되는지"를 읽게 한다.
@@ -403,7 +404,7 @@ function TodoRow({
         title={`${STATUS_LABEL[item.status]} — 누르면 ${STATUS_LABEL[NEXT_STATUS[item.status]]}`}
         onClick={onCycleStatus}
       >
-        {skipped ? <XIcon width={14} height={14} /> : <CheckIcon width={14} height={14} />}
+        {failed ? <XIcon width={14} height={14} /> : <CheckIcon width={14} height={14} />}
       </button>
 
       <div className="min-w-0 flex-1">
@@ -411,7 +412,7 @@ function TodoRow({
           className={`truncate text-sm ${
             done
               ? "text-muted line-through"
-              : skipped
+              : failed
                 ? "text-muted line-through opacity-70"
                 : ""
           }`}

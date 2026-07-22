@@ -133,7 +133,7 @@ def _report_response(data: todos_service.ReportData) -> ReportResponse:
         range_end=data.range_end,
         total=data.total,
         done=data.done,
-        skipped=data.skipped,
+        failed=data.failed,
         pending=data.pending,
         completion_rate=round(data.completion_rate, 4),
         current_streak=data.current_streak,
@@ -143,7 +143,7 @@ def _report_response(data: todos_service.ReportData) -> ReportResponse:
                 date=d,
                 total=c.total,
                 done=c.done,
-                skipped=c.skipped,
+                failed=c.failed,
                 pending=c.pending,
             )
             for d, c in data.daily
@@ -208,14 +208,14 @@ async def get_day(
     views = await todos_service.get_day(session, user.id, target)
     items = [_todo_response(v) for v in views]
     done = sum(1 for v in views if v.item.status == TodoStatus.DONE.value)
-    skipped = sum(1 for v in views if v.item.status == TodoStatus.SKIPPED.value)
+    failed = sum(1 for v in views if v.item.status == TodoStatus.FAILED.value)
     pending = sum(1 for v in views if v.item.status == TodoStatus.PENDING.value)
     return TodoDayResponse(
         date=target,
         items=items,
         total=len(items),
         done=done,
-        skipped=skipped,
+        failed=failed,
         pending=pending,
     )
 

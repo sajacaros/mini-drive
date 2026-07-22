@@ -483,7 +483,8 @@ export interface SignupCodeUpdateRequest {
 
 // --- 데일리 투두 + 반복 루틴 -------------------------------------------------
 
-export type TodoStatus = "pending" | "done" | "skipped";
+/** pending=빈칸(미완료), done=완료(v), failed=수행 실패(x — 명시적 미달성). */
+export type TodoStatus = "pending" | "done" | "failed";
 export type RoutineFrequency = "daily" | "weekly";
 
 export interface Routine {
@@ -532,7 +533,8 @@ export interface TodoDayResponse {
   items: TodoItem[];
   total: number;
   done: number;
-  skipped: number;
+  /** 수행 실패(x). 달성률 분모에 포함된다. */
+  failed: number;
   pending: number;
 }
 
@@ -540,7 +542,7 @@ export interface DailyPoint {
   date: string;
   total: number;
   done: number;
-  skipped: number;
+  failed: number;
   pending: number;
 }
 
@@ -557,8 +559,9 @@ export interface TodoReport {
   range_end: string;
   total: number;
   done: number;
-  skipped: number;
+  failed: number;
   pending: number;
+  /** done / total — 실패(x)와 빈칸 모두 분모에 들어간다. */
   completion_rate: number;
   current_streak: number;
   longest_streak: number;

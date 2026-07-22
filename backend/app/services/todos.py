@@ -6,7 +6,8 @@
   새 날짜를 열면 루틴 항목이 자동으로 생겨 보이므로 빈 레코드를 미리 365개 쌓지 않는다.
 
 리포트는 순수 조회다(물질화 부작용 없음) — 실제로 열어본(또는 항목이 생성된) 날의 기록만
-집계한다. 달성률에서 skipped(X)는 분모에서 제외한다.
+집계한다. 달성률 분모는 그날의 전체 항목이다 — 실패(X)는 자기 반성으로 남기는 명시적 미달성이라
+분모에서 빼지 않는다(빈칸도 '안 한 것'으로 함께 센다).
 
 "오늘"의 기준 시각대는 Asia/Seoul(KST)로 고정한다 — 국내용 서비스이며 자정 경계가 사용자
 체감과 일치해야 하기 때문이다.
@@ -302,8 +303,8 @@ async def update_todo(
 async def delete_todo(session: AsyncSession, user_id: int, todo_id: int) -> None:
     """투두 항목 삭제.
 
-    루틴 파생 항목을 지우면 같은 날 재조회 시 다시 물질화된다(설계상 허용 — '건너뜀(X)'로
-    상태를 남기려면 삭제 대신 skipped 로 두면 된다).
+    루틴 파생 항목을 지우면 같은 날 재조회 시 다시 물질화된다(설계상 허용 — '실패(X)'로
+    기록을 남기려면 삭제 대신 failed 로 두면 된다).
     """
     item = await _get_owned_todo(session, user_id, todo_id)
     await session.delete(item)
@@ -316,21 +317,22 @@ async def delete_todo(session: AsyncSession, user_id: int, todo_id: int) -> None
 @dataclass
 class _DayCount:
     done: int = 0
-    skipped: int = 0
+    failed: int = 0
     pending: int = 0
 
     @property
     def total(self) -> int:
-        return self.done + self.skipped + self.pending
+        return self.done + self.failed + self.pending
 
     @property
     def actionable(self) -> int:
-        return self.done + self.pending
+        """달성률 분모 — 그날의 전체 항목. 실패(X)도 빈칸도 '안 한 것'으로 함께 센다."""
+        return self.total
 
     @property
     def achieved(self) -> bool:
-        # 실행 대상이 1개 이상이고 미완료가 없으면 그날은 '달성'.
-        return self.actionable >= 1 and self.pending == 0
+        # 항목이 1개 이상이고 전부 완료여야 그날은 '달성' — 실패가 하나라도 있으면 아니다.
+        return self.total >= 1 and self.done == self.total
 
 
 @dataclass
@@ -346,7 +348,7 @@ class ReportData:
     range_end: date
     total: int
     done: int
-    skipped: int
+    failed: int
     pending: int
     completion_rate: float
     current_streak: int
@@ -372,8 +374,8 @@ async def _day_counts(
         c = counts[day]
         if status == TodoStatus.DONE.value:
             c.done += 1
-        elif status == TodoStatus.SKIPPED.value:
-            c.skipped += 1
+        elif status == TodoStatus.FAILED.value:
+            c.failed += 1
         else:
             c.pending += 1
     return counts
@@ -398,8 +400,8 @@ async def _compute_streaks(session: AsyncSession, user_id: int) -> tuple[int, in
         c = counts[day]
         if status == TodoStatus.DONE.value:
             c.done += 1
-        elif status == TodoStatus.SKIPPED.value:
-            c.skipped += 1
+        elif status == TodoStatus.FAILED.value:
+            c.failed += 1
         else:
             c.pending += 1
 
@@ -452,12 +454,9 @@ async def _routine_aggregates(
         if agg is None:
             agg = RoutineAgg(title=routine_title or item_title)
             aggs[routine_id] = agg
+        agg.actionable += 1  # 완료/실패/빈칸 모두 분모에 들어간다.
         if status == TodoStatus.DONE.value:
             agg.done += 1
-            agg.actionable += 1
-        elif status == TodoStatus.PENDING.value:
-            agg.actionable += 1
-        # skipped 는 분모 제외.
     return sorted(aggs.items(), key=lambda kv: kv[1].title)
 
 
@@ -470,7 +469,7 @@ async def build_report(
 
     counts = await _day_counts(session, user_id, start, end)
 
-    total = done = skipped = pending = 0
+    total = done = failed = pending = 0
     daily: list[tuple[date, _DayCount]] = []
     cursor = start
     while cursor <= end:
@@ -478,12 +477,11 @@ async def build_report(
         daily.append((cursor, c))
         total += c.total
         done += c.done
-        skipped += c.skipped
+        failed += c.failed
         pending += c.pending
         cursor += timedelta(days=1)
 
-    actionable = done + pending
-    completion_rate = (done / actionable) if actionable > 0 else 0.0
+    completion_rate = (done / total) if total > 0 else 0.0
 
     current_streak, longest_streak = await _compute_streaks(session, user_id)
     routines = await _routine_aggregates(session, user_id, start, end)
@@ -493,7 +491,7 @@ async def build_report(
         range_end=end,
         total=total,
         done=done,
-        skipped=skipped,
+        failed=failed,
         pending=pending,
         completion_rate=completion_rate,
         current_streak=current_streak,

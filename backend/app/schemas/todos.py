@@ -87,7 +87,7 @@ class TodoCreateRequest(BaseModel):
 
 
 class TodoUpdateRequest(BaseModel):
-    """투두 부분 수정 (제목/상태/정렬). 체크=done, X=skipped."""
+    """투두 부분 수정 (제목/상태/정렬). 체크 순환: pending → done → failed → pending."""
 
     title: str | None = Field(default=None, min_length=1, max_length=500)
     status: TodoStatus | None = None
@@ -113,7 +113,7 @@ class TodoDayResponse(BaseModel):
     items: list[TodoResponse]
     total: int  # 전체 항목 수
     done: int
-    skipped: int
+    failed: int  # 수행 실패(X) — 달성률 분모에 포함된다.
     pending: int
 
 
@@ -121,12 +121,12 @@ class TodoDayResponse(BaseModel):
 
 
 class DailyPoint(BaseModel):
-    """일별 추이 한 점. actionable = done + pending (skipped 제외)."""
+    """일별 추이 한 점. 분모는 total(완료+실패+빈칸) 이다."""
 
     date: date
     total: int
     done: int
-    skipped: int
+    failed: int
     pending: int
 
 
@@ -147,9 +147,9 @@ class ReportResponse(BaseModel):
     range_end: date
     total: int
     done: int
-    skipped: int
+    failed: int
     pending: int
-    completion_rate: float  # done / actionable (0.0~1.0), actionable 0 이면 0.0
+    completion_rate: float  # done / total (0.0~1.0), total 0 이면 0.0
     current_streak: int
     longest_streak: int
     daily: list[DailyPoint]
