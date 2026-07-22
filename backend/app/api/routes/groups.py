@@ -76,8 +76,9 @@ async def list_groups(
                 **GroupResponse.model_validate(g).model_dump(),
                 member_count=count,
                 my_role=my_role,
+                owner_display_name=owner_name,
             )
-            for g, count, my_role in rows
+            for g, count, my_role, owner_name in rows
         ],
         total=total,
         page=page,
@@ -91,15 +92,20 @@ async def get_group(
 ) -> GroupDetailResponse:
     """그룹 상세 — 정보 + 활성 멤버 목록. 비멤버도 조회 가능 (PRD 3.1.1)."""
     try:
-        group, member_count, my_role, members = await groups_service.get_group_detail(
-            session, group_id, user.id
-        )
+        (
+            group,
+            member_count,
+            my_role,
+            owner_name,
+            members,
+        ) = await groups_service.get_group_detail(session, group_id, user.id)
     except GroupServiceError as exc:
         raise _http_error(exc) from exc
     return GroupDetailResponse(
         **GroupResponse.model_validate(group).model_dump(),
         member_count=member_count,
         my_role=my_role,
+        owner_display_name=owner_name,
         members=[_member_response(m, email, name) for m, email, name in members],
     )
 

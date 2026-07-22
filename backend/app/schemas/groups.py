@@ -38,10 +38,11 @@ class GroupResponse(BaseModel):
 
 
 class GroupSummaryResponse(GroupResponse):
-    """그룹 목록 항목 — 멤버 수와 요청자의 소속 역할 포함 (PRD 6.4 GET /api/groups)."""
+    """그룹 목록 항목 — 멤버 수·요청자 역할·소유자 표시명 포함 (PRD 6.4 GET /api/groups)."""
 
     member_count: int
     my_role: str | None = None
+    owner_display_name: str = ""
 
 
 class GroupListResponse(BaseModel):

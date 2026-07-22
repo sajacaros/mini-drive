@@ -245,8 +245,8 @@ async def create_group(
 
 async def list_groups(
     session: AsyncSession, user_id: int, page: int, size: int
-) -> tuple[list[tuple[Group, int, str | None]], int]:
-    """활성 그룹 목록 + (멤버 수, 요청자 역할). 페이지네이션."""
+) -> tuple[list[tuple[Group, int, str | None, str]], int]:
+    """활성 그룹 목록 + (멤버 수, 요청자 역할, 소유자 표시명). 페이지네이션."""
     member_count_sq = (
         select(
             GroupMember.group_id.label("group_id"),
@@ -281,28 +281,34 @@ async def list_groups(
                 Group,
                 func.coalesce(member_count_sq.c.member_count, 0),
                 my_sq.c.my_role,
+                User.display_name,
             )
             .outerjoin(member_count_sq, member_count_sq.c.group_id == Group.id)
             .outerjoin(my_sq, my_sq.c.group_id == Group.id)
+            .join(User, User.id == Group.owner_user_id)
             .where(Group.is_active.is_(True))
             .order_by(Group.created_at.desc(), Group.id.desc())
             .offset(offset)
             .limit(size)
         )
     ).all()
-    return [(g, count, role) for g, count, role in rows], total
+    return [(g, count, role, owner) for g, count, role, owner in rows], total
 
 
 async def get_group_detail(
     session: AsyncSession, group_id: int, user_id: int
-) -> tuple[Group, int, str | None, list[tuple[GroupMember, str, str]]]:
-    """그룹 상세 — 그룹 + 멤버 수 + 요청자 역할 + 활성 멤버 목록. 비멤버도 조회 가능."""
+) -> tuple[Group, int, str | None, str, list[tuple[GroupMember, str, str]]]:
+    """그룹 상세 — 그룹 + 멤버 수 + 요청자 역할 + 소유자 표시명 + 활성 멤버 목록. 비멤버도 조회 가능."""
     group = await _get_active_group(session, group_id)
     members = await fetch_members(session, group_id)
     my_role = next(
         (m.role for m, _, _ in members if m.user_id == user_id), None
     )
-    return group, len(members), my_role, members
+    # 소유자는 제거될 수 없으므로(check_can_remove_member) 활성 멤버 목록에 반드시 있다.
+    owner_name = next(
+        (name for m, _, name in members if m.user_id == group.owner_user_id), ""
+    )
+    return group, len(members), my_role, owner_name, members
 
 
 async def get_group_members(

@@ -337,6 +337,8 @@ export interface Group {
 export interface GroupSummary extends Group {
   member_count: number;
   my_role: GroupRole | null;
+  /** 소유자(owner_user_id)의 표시명. */
+  owner_display_name: string;
 }
 
 export interface GroupListResponse {

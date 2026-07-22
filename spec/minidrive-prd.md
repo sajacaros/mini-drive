@@ -474,10 +474,14 @@ CREATE TABLE groups (
     owner_user_id   BIGINT NOT NULL REFERENCES users(id),
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (name)
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX uq_groups_name_active ON groups (name) WHERE is_active;
 ```
+
+> **이름 점유 범위**: 그룹 삭제는 소프트 삭제(`is_active=FALSE`)이므로 이름 유일성도 활성 그룹으로
+> 한정한다. 전역 `UNIQUE (name)` 이면 목록에 보이지도 않는 삭제된 그룹이 이름을 계속 점유해
+> 같은 이름으로 재생성할 수 없다.
 
 ### 5.6 group_members 테이블
 

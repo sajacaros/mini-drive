@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -45,7 +46,16 @@ class Group(Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = (UniqueConstraint("name", name="uq_groups_name"),)
+    # 삭제가 소프트 삭제(is_active=FALSE)이므로 이름 점유도 활성 그룹으로 한정한다.
+    # 전역 UNIQUE 였다면 삭제된 그룹이 이름을 계속 잡고 있어 같은 이름으로 재생성할 수 없다.
+    __table_args__ = (
+        Index(
+            "uq_groups_name_active",
+            "name",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
         return f"<Group id={self.id} name={self.name!r}>"

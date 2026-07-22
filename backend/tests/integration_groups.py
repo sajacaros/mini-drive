@@ -309,7 +309,25 @@ async def scenario() -> None:  # noqa: C901 - 순차 시나리오
         assert all(g["id"] != gid for g in r.json()["items"])
         _ok("삭제 후 상세 404 / 목록 제외")
 
-        # 21. audit_logs — 기대 액션 모두 기록
+        # 21. 삭제된 이름 재사용 — 소프트 삭제가 이름을 계속 점유하면 안 된다
+        r = await c.post("/api/groups", headers=bob_h, json={"name": "개발1팀"})
+        assert r.status_code == 201, r.text
+        reused_gid = r.json()["id"]
+        assert reused_gid != gid
+        # 재생성된 그룹은 다시 이름을 점유한다.
+        r = await c.post("/api/groups", headers=carol_h, json={"name": "개발1팀"})
+        assert r.status_code == 409, r.text
+        _ok("삭제된 그룹 이름 재사용 201 (활성 그룹끼리는 여전히 409)")
+
+        # 22. 목록 — 소유자 표시명 노출
+        r = await c.get("/api/groups", headers=bob_h)
+        item = next(g for g in r.json()["items"] if g["id"] == reused_gid)
+        assert item["owner_display_name"] == USERS["bob"]["display_name"], item
+        r = await c.get(f"/api/groups/{reused_gid}", headers=bob_h)
+        assert r.json()["owner_display_name"] == USERS["bob"]["display_name"], r.text
+        _ok("목록/상세 owner_display_name 노출")
+
+        # 23. audit_logs — 기대 액션 모두 기록
         actions = await _audit_actions()
         for expected in (
             "group.create",
