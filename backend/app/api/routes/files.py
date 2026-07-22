@@ -28,8 +28,10 @@ from app.api.download import content_disposition as _content_disposition
 from app.api.download import gateway_download_response, gateway_inline_response
 from app.api.preview import render_preview
 from app.core.config import settings
+from app.core.metrics import observe_download_bytes
 from app.models.enums import UserStatus
 from app.schemas.files import (
+    ArchiveTicketRequest,
     BatchUploadItem,
     BatchUploadResponse,
     DownloadTicketResponse,
@@ -56,6 +58,7 @@ from app.schemas.uploads import (
     ResumableReuploadInitRequest,
     ResumableSessionResponse,
 )
+from app.services import archives as archives_service
 from app.services import favorites as favorites_service
 from app.services import file_events as file_events_service
 from app.services import files as files_service
@@ -446,6 +449,81 @@ async def download_by_ticket(
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return gateway_download_response(internal, filename, mime)
+
+
+# --- ZIP 아카이브 다운로드 (폴더 / 다중 선택) --------------------------------
+#
+# 여기만 게이트웨이 모델의 예외다: X-Accel-Redirect 는 오브젝트 하나만 흘려보낼 수 있어,
+# 여러 오브젝트를 한 파일로 묶으려면 backend 가 스트리밍 주체가 되어야 한다.
+
+
+@router.post("/download-archive-ticket", response_model=DownloadTicketResponse)
+async def issue_archive_download_ticket(
+    payload: ArchiveTicketRequest,
+    user: CurrentUser,
+    session: DbSession,
+    redis: RedisClient,
+) -> DownloadTicketResponse:
+    """폴더/다중 선택 ZIP 다운로드 티켓 발급.
+
+    발급 시점에 전체 계획(접근 판정 + 개수/용량 상한)을 실제로 세워 본다 — 스트리밍이
+    시작된 뒤에는 실패를 HTTP 상태로 알릴 수 없기 때문이다. 계획 자체는 버리고, 소비 시
+    같은 판정을 다시 한다(그 사이 권한이 바뀌었을 수 있다).
+    """
+    try:
+        await archives_service.plan_archive(session, user, payload.file_ids)
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+
+    token = await tickets_service.issue_ticket(
+        redis, {"kind": "archive", "file_ids": payload.file_ids, "uid": user.id}
+    )
+    return DownloadTicketResponse(
+        ticket=token,
+        url=f"/api/files/download-archive?ticket={token}",
+        expires_in=tickets_service.TICKET_TTL_SECONDS,
+    )
+
+
+@router.get("/download-archive")
+async def download_archive_by_ticket(
+    session: DbSession, redis: RedisClient, ticket: str = Query(...)
+) -> StreamingResponse:
+    """티켓 기반 ZIP 스트리밍 다운로드 (무헤더 GET).
+
+    티켓을 원자적으로 소비한 뒤 접근 판정을 다시 하고, MinIO 에서 읽은 청크를 그대로 ZIP
+    프레임에 실어 내보낸다. `X-Accel-Buffering: no` 로 nginx 가 응답 전체를 버퍼링하지
+    않게 해 첫 바이트가 바로 브라우저에 닿게 한다.
+    """
+    payload = await tickets_service.consume_ticket(redis, ticket)
+    if payload is None or payload.get("kind") != "archive":
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+
+    user = await get_user_by_id(session, int(payload["uid"]))
+    if user is None or user.status != UserStatus.ACTIVE:
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+
+    try:
+        plan = await archives_service.plan_archive(
+            session, user, [int(i) for i in payload["file_ids"]]
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+
+    # 인가된 바이트를 계측한다 (PRD 11장) — 단일 다운로드의 게이트웨이 계측과 같은 기준.
+    observe_download_bytes(plan.total_bytes)
+    # 스트리밍은 수 분이 걸릴 수 있다. DB 커넥션을 그동안 붙들지 않도록 먼저 놓아준다
+    # (의존성 teardown 의 close 는 멱등하다).
+    await session.close()
+
+    return StreamingResponse(
+        archives_service.stream_archive(get_storage(), plan.entries),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": _content_disposition(plan.filename),
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # --- /{file_id} ------------------------------------------------------------

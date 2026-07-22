@@ -6,6 +6,7 @@
  * 클릭 한 번은 선택, 더블클릭이 "열기"다(터치는 한 번 탭). 미리보기도 이 "열기"에 얹혀 있어
  * 따로 버튼을 두지 않는다 — 파일은 onPreview, 폴더는 onOpenFolder 로 넘겨 호출부가 해당
  * 폴더로 이동시킨다(최근 목록은 파일만 담기므로 실질적으로 즐겨찾기에서만 폴더가 나타난다).
+ * 다운로드 버튼은 폴더에도 둔다 — 폴더는 하위 전체가 ZIP 하나로 내려온다.
  */
 
 import { useState } from "react";
@@ -73,10 +74,12 @@ function groupText(f: FileNode): string {
 }
 
 function DownloadButton({ file, onDownload }: { file: FileNode; onDownload: (f: FileNode) => void }) {
+  // 폴더는 하위 전체를 ZIP 하나로 묶어 받는다 — 라벨로 그 차이를 알린다.
+  const title = file.is_folder ? "ZIP 으로 다운로드" : "다운로드";
   return (
     <button
-      title="다운로드"
-      aria-label="다운로드"
+      title={title}
+      aria-label={title}
       onClick={(e) => {
         e.stopPropagation();
         onDownload(file);
@@ -167,7 +170,7 @@ function Table(p: ViewProps) {
                   className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100"
                   {...ROW_ACTION_PROPS}
                 >
-                  {!f.is_folder && <DownloadButton file={f} onDownload={p.onDownload} />}
+                  <DownloadButton file={f} onDownload={p.onDownload} />
                 </div>
               </td>
             </tr>
@@ -229,14 +232,12 @@ function Grid(p: ViewProps) {
               <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
               {f.location && <p className="truncate text-[10px] text-muted">{f.location}</p>}
             </button>
-            {!f.is_folder && (
-              <span
-                className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-                {...ROW_ACTION_PROPS}
-              >
-                <DownloadButton file={f} onDownload={p.onDownload} />
-              </span>
-            )}
+            <span
+              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+              {...ROW_ACTION_PROPS}
+            >
+              <DownloadButton file={f} onDownload={p.onDownload} />
+            </span>
           </div>
         </div>
       ))}

@@ -50,7 +50,7 @@ import {
   UploadIcon,
   XIcon,
 } from "@/components/icons";
-import { downloadFile } from "@/lib/download";
+import { downloadArchive, downloadNode } from "@/lib/download";
 import { InlineNameInput } from "@/components/InlineName";
 import { subscribeFileEvents } from "@/lib/fileEvents";
 import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
@@ -63,6 +63,7 @@ import {
   ROW_SELECTED_CLASS,
   rowOpenHandlers,
   useCoarsePointer,
+  type SelectMods,
 } from "@/lib/rowOpen";
 import {
   forgetSession,
@@ -173,8 +174,13 @@ export function FileBrowserPage({
     () => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list",
   );
   const [previewTarget, setPreviewTarget] = useState<FileNode | null>(null);
-  // 클릭으로 고른 항목 (열기는 더블클릭). 목록이 바뀌면 아래 effect 에서 해제한다.
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  /**
+   * 클릭으로 고른 항목들 (열기는 더블클릭). Ctrl/Cmd 로 토글, Shift 로 범위, 체크박스로 누적한다.
+   * 목록이 바뀌면 아래 effect 에서 해제한다. "공유" 가상 행은 SHARED_VIRTUAL_ID 로 함께 담긴다.
+   */
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  /** Shift 범위 선택의 기준점 — 마지막으로 "단독/토글"로 고른 항목. */
+  const anchorRef = useRef<number | null>(null);
   // 드라이브 홈(루트)에서만 노출하는 "최근 항목" 스트립 데이터 (Phase 8-3).
   const [recent, setRecent] = useState<FileNode[]>([]);
   // 중단된 재개 세션(새로고침 포함) — 파일 재선택으로 이어올릴 수 있다.
@@ -412,9 +418,49 @@ export function FileBrowserPage({
 
   // 폴더를 옮기거나 페이지를 넘기면 이전 선택/편집은 화면에 없으므로 해제한다.
   useEffect(() => {
-    setSelectedId(null);
+    setSelectedIds([]);
+    anchorRef.current = null;
     setRenamingId(null);
   }, [parentId, page]);
+
+  // --- 선택 (클릭=단독, Ctrl/Cmd=토글, Shift=범위, 체크박스=누적) --------------
+
+  /** 제자리 편집·이름 변경처럼 대상이 하나여야 하는 동작의 기준. */
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
+  const allSelected = items.length > 0 && items.every((f) => selectedIds.includes(f.id));
+  /** 실제로 내려받을 수 있는 선택분 — "공유" 가상 행은 실물이 아니라 제외한다. */
+  const downloadableSelection = selectedIds.filter((id) => id !== SHARED_VIRTUAL_ID);
+
+  const selectItem = (id: number, mods: SelectMods) => {
+    setSelectedIds((prev) => {
+      // Shift 범위는 화면 순서(items)를 좌표계로 쓴다. 기준점이나 대상이 목록 밖이면
+      // (예: "공유" 가상 행) 범위를 만들 수 없으므로 단독 선택으로 떨어진다.
+      if (mods.range && anchorRef.current !== null) {
+        const ids = items.map((f) => f.id);
+        const from = ids.indexOf(anchorRef.current);
+        const to = ids.indexOf(id);
+        if (from >= 0 && to >= 0) {
+          const [start, end] = from <= to ? [from, to] : [to, from];
+          return ids.slice(start, end + 1);
+        }
+      }
+      anchorRef.current = id;
+      if (mods.toggle) {
+        return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      }
+      return [id];
+    });
+  };
+
+  const clearSelection = () => {
+    anchorRef.current = null;
+    setSelectedIds([]);
+  };
+
+  const toggleSelectAll = () => {
+    anchorRef.current = null;
+    setSelectedIds(allSelected ? [] : items.map((f) => f.id));
+  };
 
   // 선택한 항목을 F2 로 제자리 편집 (탐색기 관례). 입력/다이얼로그 안에서 누른 키는
   // 그쪽에서 stopPropagation 하므로 여기까지 오지 않는다.
@@ -829,9 +875,26 @@ export function FileBrowserPage({
     }
   };
 
+  /** 한 항목 다운로드 — 파일은 원본 그대로, 폴더는 하위 전체를 ZIP 으로 묶어 받는다. */
   const onDownload = async (file: FileNode) => {
     try {
-      await downloadFile(file.id);
+      await downloadNode(file);
+    } catch (err) {
+      toast.error(extractErrorMessage(err, "다운로드에 실패했습니다."));
+    }
+  };
+
+  /**
+   * 선택한 항목 다운로드. 파일 하나뿐이면 굳이 ZIP 으로 감싸지 않고 원본을 그대로 준다.
+   * 개수·용량 상한 초과(413) 등 서버 안내는 그대로 토스트에 싣는다.
+   */
+  const downloadSelection = async () => {
+    const ids = downloadableSelection;
+    if (ids.length === 0) return;
+    const single = ids.length === 1 ? items.find((f) => f.id === ids[0]) : undefined;
+    try {
+      if (single) await downloadNode(single);
+      else await downloadArchive(ids);
     } catch (err) {
       toast.error(extractErrorMessage(err, "다운로드에 실패했습니다."));
     }
@@ -1180,7 +1243,8 @@ export function FileBrowserPage({
               onPreview: openPreview,
               onDownload,
               onRename: (f: FileNode) => {
-                setSelectedId(f.id);
+                setSelectedIds([f.id]);
+                anchorRef.current = f.id;
                 setRenamingId(f.id);
               },
               onShare: (f: FileNode) => setShareTarget(f),
@@ -1214,8 +1278,10 @@ export function FileBrowserPage({
               onDropOnFolderRow: (f: FileNode, e: DragEvent) => onDropOnFolder(e, f.id, f.name),
               // 내 드라이브 루트에서만 상단에 "공유" 가상 폴더 행을 고정한다.
               onOpenShared: showSharedVirtualRow ? openSharedVirtual : undefined,
-              selectedId,
-              onSelect: setSelectedId,
+              selectedIds,
+              onSelect: selectItem,
+              allSelected,
+              onToggleSelectAll: toggleSelectAll,
               renamingId,
               onRenameSubmit: submitRename,
               onRenameCancel: () => setRenamingId(null),
@@ -1248,6 +1314,31 @@ export function FileBrowserPage({
             >
               다음
             </button>
+          </div>
+        )}
+
+        {/*
+          선택 액션 바 — 항목을 고르면 목록 아래에 떠서 따라온다. 지금은 다운로드만 싣는다
+          (여러 항목·폴더는 서버가 ZIP 하나로 묶어 스트리밍한다).
+          목록 "위"가 아니라 "아래"에 두는 것이 핵심이다: 클릭 한 번에 바가 생기면서 행이
+          밀리면, 더블클릭의 두 번째 클릭이 옆 행에 떨어져 엉뚱한 폴더가 열린다.
+          "공유" 가상 행은 내려받을 실물이 없어 세지 않는다.
+        */}
+        {downloadableSelection.length > 0 && (
+          <div className="pointer-events-none sticky bottom-0 z-20 flex justify-center pt-3">
+            <div
+              className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full border border-token bg-[color:var(--bg-secondary)] px-4 py-2 text-sm shadow-lg"
+              data-testid="selection-bar"
+            >
+              <span className="font-medium">{downloadableSelection.length}개 선택됨</span>
+              <button className="btn btn-primary" onClick={() => void downloadSelection()}>
+                <DownloadIcon width={16} height={16} />
+                다운로드
+              </button>
+              <button className="btn btn-secondary" onClick={clearSelection}>
+                선택 해제
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1539,10 +1630,13 @@ interface FileRowProps {
   onToggleFavorite: (f: FileNode) => void;
   /** 지정 시 목록 상단에 "공유" 가상 폴더 행을 고정 노출한다(내 드라이브 루트 전용). */
   onOpenShared?: () => void;
-  // --- 선택 (클릭=선택, 더블클릭=열기) ---
-  /** 현재 선택된 항목 id. "공유" 가상 행은 SHARED_VIRTUAL_ID. */
-  selectedId: number | null;
-  onSelect: (id: number) => void;
+  // --- 선택 (클릭=선택, 더블클릭=열기, Ctrl/Shift·체크박스로 다중 선택) ---
+  /** 현재 선택된 항목 id 들. "공유" 가상 행은 SHARED_VIRTUAL_ID. */
+  selectedIds: number[];
+  onSelect: (id: number, mods: SelectMods) => void;
+  /** 목록 전체가 선택됐는지 (헤더 체크박스 상태). */
+  allSelected: boolean;
+  onToggleSelectAll: () => void;
   // --- 제자리 이름 편집 (F2 / 이름 재클릭 / 행 액션) ---
   /** 편집 중인 항목 id. 그 행만 이름 자리에 입력이 뜬다. */
   renamingId: number | null;
@@ -1589,6 +1683,28 @@ function rowCanManage(f: FileNode, containerCanManage: boolean): boolean {
   return f.permission === "owner" || permissionCovers(f.permission, "manage");
 }
 
+/**
+ * 행/카드의 선택 체크박스. 행 클릭 판정(선택/열기)에서 빠지도록 ROW_ACTION_PROPS 를 두른다.
+ * 체크박스는 언제나 "누적 토글"이라 Ctrl 클릭과 같은 뜻으로 넘긴다.
+ */
+function SelectCheckbox({
+  checked,
+  label,
+  onToggle,
+  className,
+}: {
+  checked: boolean;
+  label: string;
+  onToggle: () => void;
+  className?: string;
+}) {
+  return (
+    <span className={className} {...ROW_ACTION_PROPS}>
+      <input type="checkbox" checked={checked} aria-label={label} onChange={onToggle} />
+    </span>
+  );
+}
+
 /** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용). */
 function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
   // 행별 조작(새 버전/이름 변경/삭제/권한 관리)은 항목 자체 권한으로 게이팅한다.
@@ -1596,6 +1712,12 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
   const canManage = rowCanManage(f, p.canManage);
   return (
     <>
+      {f.is_folder && (
+        // 폴더는 하위 전체를 ZIP 하나로 묶어 받는다 (backend 스트리밍).
+        <IconAction title="ZIP 으로 다운로드" onClick={() => p.onDownload(f)}>
+          <DownloadIcon width={16} height={16} />
+        </IconAction>
+      )}
       {!f.is_folder && (
         <>
           <IconAction title="미리보기" onClick={() => p.onPreview(f)}>
@@ -1693,6 +1815,13 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
+            <th className="w-10 px-4 py-2.5">
+              <SelectCheckbox
+                checked={p.allSelected}
+                label="전체 선택"
+                onToggle={p.onToggleSelectAll}
+              />
+            </th>
             <th className="px-4 py-2.5 font-medium">이름</th>
             <th className="w-32 px-4 py-2.5 font-medium">소유자</th>
             <th className="w-40 px-4 py-2.5 font-medium">그룹</th>
@@ -1707,14 +1836,16 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           {p.onOpenShared && (
             <tr
               className={`group border-b border-token hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
-                p.selectedId === SHARED_VIRTUAL_ID ? ROW_SELECTED_CLASS : ""
+                p.selectedIds.includes(SHARED_VIRTUAL_ID) ? ROW_SELECTED_CLASS : ""
               }`}
               {...rowOpenHandlers({
                 coarse,
-                select: () => p.onSelect(SHARED_VIRTUAL_ID),
+                select: (mods) => p.onSelect(SHARED_VIRTUAL_ID, mods),
                 open: p.onOpenShared,
               })}
             >
+              {/* 가상 폴더는 내려받을 실물이 없어 선택 체크박스를 두지 않는다. */}
+              <td className="px-4 py-2.5" />
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-accent">
@@ -1738,13 +1869,13 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
                 p.dropTargetId === f.id
                   ? "bg-[color:var(--bg-muted)] outline outline-2 -outline-offset-2 outline-[color:var(--accent)]"
-                  : p.selectedId === f.id
+                  : p.selectedIds.includes(f.id)
                     ? ROW_SELECTED_CLASS
                     : ""
               }`}
               {...rowOpenHandlers({
                 coarse,
-                select: () => p.onSelect(f.id),
+                select: (mods) => p.onSelect(f.id, mods),
                 open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
               })}
               // 편집 중에는 글자를 긁는 동작이 드래그 이동으로 새지 않게 끈다.
@@ -1755,6 +1886,13 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               onDragLeave={f.is_folder ? p.onDragLeaveFolder : undefined}
               onDrop={f.is_folder ? (e) => p.onDropOnFolderRow(f, e) : undefined}
             >
+              <td className="px-4 py-2.5">
+                <SelectCheckbox
+                  checked={p.selectedIds.includes(f.id)}
+                  label={`${f.name} 선택`}
+                  onToggle={() => p.onSelect(f.id, { toggle: true, range: false })}
+                />
+              </td>
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <ItemName
@@ -1827,11 +1965,11 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
         <button
           {...rowOpenHandlers({
             coarse,
-            select: () => p.onSelect(SHARED_VIRTUAL_ID),
+            select: (mods) => p.onSelect(SHARED_VIRTUAL_ID, mods),
             open: p.onOpenShared,
           })}
           className={`card relative flex flex-col overflow-hidden p-0 text-left transition-colors hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
-            p.selectedId === SHARED_VIRTUAL_ID ? CARD_SELECTED_CLASS : ""
+            p.selectedIds.includes(SHARED_VIRTUAL_ID) ? CARD_SELECTED_CLASS : ""
           }`}
           title="공유받은 항목"
         >
@@ -1850,13 +1988,13 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           className={`group card relative flex flex-col overflow-hidden p-0 ${ROW_BASE_CLASS} ${
             p.dropTargetId === f.id
               ? "ring-2 ring-[color:var(--accent)]"
-              : p.selectedId === f.id
+              : p.selectedIds.includes(f.id)
                 ? CARD_SELECTED_CLASS
                 : ""
           }`}
           {...rowOpenHandlers({
             coarse,
-            select: () => p.onSelect(f.id),
+            select: (mods) => p.onSelect(f.id, mods),
             open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
           })}
           // 편집 중에는 글자를 긁는 동작이 드래그 이동으로 새지 않게 끈다.
@@ -1867,6 +2005,15 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           onDragLeave={f.is_folder ? p.onDragLeaveFolder : undefined}
           onDrop={f.is_folder ? (e) => p.onDropOnFolderRow(f, e) : undefined}
         >
+          {/* 선택 체크박스 — 선택됐으면 항상, 아니면 hover 시 노출 */}
+          <SelectCheckbox
+            checked={p.selectedIds.includes(f.id)}
+            label={`${f.name} 선택`}
+            onToggle={() => p.onSelect(f.id, { toggle: true, range: false })}
+            className={`absolute left-1.5 top-1.5 z-10 transition-opacity ${
+              p.selectedIds.includes(f.id) ? "" : "opacity-0 group-hover:opacity-100"
+            }`}
+          />
           {/* 즐겨찾기 별 — 활성이면 항상, 아니면 hover 시 노출 */}
           <span className="absolute right-1.5 top-1.5 z-10" {...ROW_ACTION_PROPS}>
             <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />

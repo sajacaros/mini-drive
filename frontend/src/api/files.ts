@@ -126,6 +126,20 @@ export async function issueDownloadTicket(fileId: number): Promise<DownloadTicke
   return data;
 }
 
+/**
+ * 폴더/다중 선택 ZIP 다운로드 티켓 발급.
+ * 폴더는 하위 전체가 상대 경로 그대로 담긴다. 개수·용량 상한을 넘으면 413.
+ */
+export async function issueArchiveDownloadTicket(
+  fileIds: number[],
+): Promise<DownloadTicketResponse> {
+  const { data } = await apiClient.post<DownloadTicketResponse>(
+    "/files/download-archive-ticket",
+    { file_ids: fileIds },
+  );
+  return data;
+}
+
 /** 특정 버전 다운로드 티켓 발급. */
 export async function issueVersionDownloadTicket(
   fileId: number,

@@ -114,6 +114,15 @@ class FileVersionListResponse(BaseModel):
     items: list[FileVersionResponse]
 
 
+class ArchiveTicketRequest(BaseModel):
+    """폴더/다중 선택 ZIP 다운로드 티켓 발급 (POST /api/files/download-archive-ticket).
+
+    file_ids 는 폴더와 파일을 섞어 담을 수 있다. 폴더는 하위 전체가 상대 경로 그대로 담긴다.
+    """
+
+    file_ids: list[int] = Field(min_length=1)
+
+
 class DownloadTicketResponse(BaseModel):
     """단기 일회성 다운로드 티켓 (브라우저 대용량 다운로드용).
 

@@ -15,7 +15,7 @@ import { PreviewModal } from "@/components/PreviewModal";
 import { useToast } from "@/components/Toast";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import { HistoryIcon } from "@/components/icons";
-import { downloadFile } from "@/lib/download";
+import { downloadNode } from "@/lib/download";
 import { fetchFilePreview } from "@/lib/preview";
 
 const RECENT_LIMIT = 50;
@@ -60,7 +60,7 @@ export function RecentPage() {
 
   const onDownload = async (f: FileNode) => {
     try {
-      await downloadFile(f.id);
+      await downloadNode(f);
     } catch (err) {
       toast.error(extractErrorMessage(err, "다운로드에 실패했습니다."));
     }

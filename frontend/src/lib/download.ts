@@ -10,6 +10,7 @@
  */
 
 import {
+  issueArchiveDownloadTicket,
   issueDownloadTicket,
   issueVersionDownloadTicket,
 } from "@/api/files";
@@ -34,6 +35,22 @@ function navigateToDownload(url: string): void {
 export async function downloadFile(fileId: number): Promise<void> {
   const ticket = await issueDownloadTicket(fileId);
   navigateToDownload(ticket.url);
+}
+
+/**
+ * 폴더 또는 여러 항목을 ZIP 하나로 다운로드한다.
+ * 단일 다운로드와 같은 티켓 흐름이고, 스트리밍만 backend 가 맡는다(무압축 ZIP).
+ * 개수·용량 상한 초과는 티켓 발급 단계에서 413 으로 걸러져 호출부가 안내할 수 있다.
+ */
+export async function downloadArchive(fileIds: number[]): Promise<void> {
+  const ticket = await issueArchiveDownloadTicket(fileIds);
+  navigateToDownload(ticket.url);
+}
+
+/** 항목 하나 다운로드 — 파일은 원본 그대로, 폴더는 하위 전체를 ZIP 으로. 호출부의 분기를 없앤다. */
+export async function downloadNode(file: { id: number; is_folder: boolean }): Promise<void> {
+  if (file.is_folder) await downloadArchive([file.id]);
+  else await downloadFile(file.id);
 }
 
 /** 인증 사용자의 특정 버전 다운로드. */

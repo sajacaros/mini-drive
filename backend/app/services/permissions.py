@@ -324,6 +324,40 @@ async def _determine_access(
     return ResolvedAccess(level, source, False)
 
 
+async def can_access_descendants(
+    session: AsyncSession, user: User, folder: File
+) -> bool:
+    """폴더 **하위 항목까지** 접근이 미치는지 (폴더 ZIP 다운로드용).
+
+    폴더를 읽을 수 있다고 그 안까지 볼 수 있는 것은 아니다 — 그룹 부여가
+    inherit_to_children=FALSE 면 그 폴더 한 칸에만 적용된다(PRD 5.7). 하위 판정은
+    "상속되는 근거가 하나라도 있는가"면 충분하다:
+      - 폴더 자신이나 조상을 내가 소유하면 하위 전체가 내 소유 경로 아래다(조상 소유 규칙).
+      - 그룹 부여는 미만료 + inherit_to_children 인 행이 하나라도 있으면 하위로 이어진다.
+        (하위에서는 그 행의 depth 가 하나 더 깊어질 뿐 판정 규칙은 같다.)
+    반대로 하위에서 권한이 **낮아지는** 경우는 없다 — 최근접 조상 규칙은 내 소속 그룹의
+    부여 행만 보고, 어떤 수준이든 read 는 포함하므로 접근이 끊기지 않는다.
+    """
+    if folder.user_id == user.id:
+        return True
+    group_ids = await get_user_group_ids(session, user.id)
+    rows = (
+        await session.execute(
+            _ANCESTOR_ACCESS_SQL,
+            {"file_id": folder.id, "group_ids": group_ids or [_NO_GROUP]},
+        )
+    ).all()
+    now = datetime.now(UTC)
+    for r in rows:
+        if r.depth > 0 and r.node_user_id == user.id:
+            return True
+        if r.file_id is None or not r.inherit_to_children:
+            continue
+        if r.expires_at is None or r.expires_at > now:
+            return True
+    return False
+
+
 # 여러 파일에 대해 "내가 소유한 폴더의 하위인가"를 한 번에 판정한다 (목록 배치용).
 # 각 대상 파일(origin)마다 조상 경로를 따라 올라가며 내 소유 노드를 만나는지 본다.
 _ANCESTOR_OWNED_SQL = text(
