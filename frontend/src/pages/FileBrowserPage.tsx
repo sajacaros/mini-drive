@@ -51,7 +51,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { downloadFile } from "@/lib/download";
-import { InlineNameInput, useClickToRename } from "@/components/InlineName";
+import { InlineNameInput } from "@/components/InlineName";
 import { subscribeFileEvents } from "@/lib/fileEvents";
 import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
@@ -1645,31 +1645,23 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
 
 /**
  * 항목의 이름 표시 — 편집 중이면 같은 자리에 입력이 뜬다.
- * 표시 상태에서는 클릭 판정을 행이 맡으므로, 이 버튼은 키보드 포커스/Enter 진입점과
- * "선택된 이름 재클릭 → 편집" 트리거 역할만 한다.
+ * 표시 상태에서는 클릭 판정을 행이 맡으므로, 이 버튼은 키보드 포커스/Enter 진입점일 뿐이다.
+ * 이름 변경은 행 액션의 "이름 변경" 아이콘(또는 F2)으로만 들어간다.
  */
 function ItemName({
   file: f,
-  coarse,
   thumb,
   children,
   className,
   ...p
 }: {
   file: FileNode;
-  coarse: boolean;
   /** 편집 중에도 그대로 남는 썸네일/아이콘. */
   thumb: React.ReactNode;
   /** 표시 상태의 이름 영역 (이름 + 배지 등). */
   children: React.ReactNode;
   className: string;
 } & FileRowProps) {
-  const clickToRename = useClickToRename({
-    // 터치는 한 번 탭이 곧 "열기"라 재클릭 편집이 성립하지 않는다.
-    enabled: !coarse && p.selectedId === f.id && rowCanWrite(f, p.canWrite),
-    onStart: () => p.onRename(f),
-  });
-
   if (p.renamingId === f.id) {
     // 편집 중에는 입력이 남는 폭을 다 쓰도록 flex-1 을 더한다.
     return (
@@ -1687,7 +1679,6 @@ function ItemName({
     <button
       className={className}
       title={f.is_folder ? "더블클릭하면 폴더를 엽니다" : "더블클릭하면 미리봅니다"}
-      {...clickToRename}
     >
       {thumb}
       {children}
@@ -1768,7 +1759,6 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                 <div className="flex items-center gap-2">
                   <ItemName
                     file={f}
-                    coarse={coarse}
                     className="flex min-w-0 items-center gap-2.5 text-left"
                     thumb={
                       /* 이미지면 미니 썸네일, 아니면 유형 아이콘 */
@@ -1918,7 +1908,7 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
 
           {/* 이름 + 동작 */}
           <div className="flex flex-col gap-1 border-t border-token px-2.5 py-2">
-            <ItemName file={f} coarse={coarse} className="min-w-0 text-left" thumb={null} {...p}>
+            <ItemName file={f} className="min-w-0 text-left" thumb={null} {...p}>
               <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
             </ItemName>
             <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>

@@ -1,46 +1,18 @@
 /**
  * 목록/그리드에서 항목 이름을 제자리에서 고치는 입력 (탐색기·파인더 방식).
  *
- * 편집 진입은 세 가지 — F2, 행 액션의 "이름 변경" 아이콘, 그리고 "이미 선택된 항목의
- * 이름을 한 번 더 클릭". 마지막 경로는 첫 클릭을 더블클릭(=열기)과 공유하므로 바로
- * 진입하지 않고, CLICK_TO_RENAME_DELAY_MS 안에 두 번째 클릭이 오면 열기에 양보한다.
+ * 편집 진입은 두 가지 — F2, 그리고 행 액션의 "이름 변경" 아이콘. 한때 "이미 선택된
+ * 항목의 이름을 한 번 더 클릭"도 진입점이었지만, 첫 클릭을 더블클릭(=열기)과 공유하는
+ * 탓에 폴더를 열려다 편집이 뜨는 일이 잦아 걷어냈다. 파일·폴더 모두 행 액션으로 고친다.
  *
  * 저장은 Enter 또는 포커스 이탈, 취소는 Esc. 확장자를 뺀 본체만 선택된 채로 열려
  * 이름만 바로 덮어쓸 수 있다.
  */
 
 import { useEffect, useRef } from "react";
-import type { MouseEvent } from "react";
 
 import type { FileNode } from "@/api/types";
 import { ROW_ACTION_PROPS } from "@/lib/rowOpen";
-
-/** 이름 클릭 후 이 시간 안에 두 번째 클릭이 오면 "열기"로 보고 편집 진입을 취소한다. */
-const CLICK_TO_RENAME_DELAY_MS = 500;
-
-/** 선택된 항목의 이름을 한 번 더 클릭했을 때 편집으로 들어가는 핸들러 묶음. */
-export function useClickToRename(o: { enabled: boolean; onStart: () => void }) {
-  const timer = useRef<number | null>(null);
-  const cancel = () => {
-    if (timer.current === null) return;
-    window.clearTimeout(timer.current);
-    timer.current = null;
-  };
-  useEffect(() => cancel, []);
-
-  return {
-    onClick: (e: MouseEvent) => {
-      cancel();
-      // 키보드 Enter/Space 로 누른 click 은 detail=0 — 그건 "열기"라 편집으로 새면 안 된다.
-      if (!o.enabled || e.detail === 0) return;
-      timer.current = window.setTimeout(() => {
-        timer.current = null;
-        o.onStart();
-      }, CLICK_TO_RENAME_DELAY_MS);
-    },
-    onDoubleClick: cancel,
-  };
-}
 
 export interface InlineNameInputProps {
   file: FileNode;

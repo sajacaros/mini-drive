@@ -125,29 +125,39 @@ test.describe("이름 제자리 편집", () => {
     }
   });
 
-  test("선택된 항목의 이름을 한 번 더 클릭하면 편집으로 들어간다", async ({ page }) => {
+  test("행 액션 아이콘으로 편집에 들어가고, 이름을 거듭 클릭해도 편집이 열리지 않는다", async ({
+    page,
+  }) => {
     const stamp = Date.now();
-    const name = `e2e-rename-click-${stamp}`;
+    const before = `e2e-rename-icon-${stamp}`;
+    const after = `e2e-renamed-icon-${stamp}`;
 
     await loginAsAdmin(page);
     await page.goto("/");
 
     try {
-      await makeFolder(page, name);
-      const row = page.getByRole("row", { name: new RegExp(name) });
+      await makeFolder(page, before);
+      const row = page.getByRole("row", { name: new RegExp(before) });
 
-      // 첫 클릭은 선택. 두 번째 클릭이 더블클릭(=열기)으로 묶이지 않도록 간격을 둔다.
-      await row.getByText(name).click();
+      // 이름 재클릭은 더 이상 편집 진입점이 아니다 — 폴더를 열려다 편집이 뜨던 문제로
+      // 걷어냈다. 더블클릭으로 묶이지 않을 만큼 간격을 둬도 편집은 열리지 않아야 한다.
+      await row.getByText(before).click();
       await page.waitForTimeout(700);
-      await row.getByText(name).click();
+      await row.getByText(before).click();
+      await page.waitForTimeout(700);
+      await expect(nameInput(page)).toHaveCount(0);
 
-      // expect: 폴더로 들어가지 않고 제자리 편집이 열린다
-      await expect(nameInput(page)).toHaveValue(name);
-      await expect(page.getByRole("button", { name: "내 드라이브" })).toBeVisible();
+      // 편집 진입은 행 액션의 "이름 변경" 아이콘으로 한다(파일·폴더 공통).
+      await row.getByLabel("이름 변경").click();
+      await expect(nameInput(page)).toHaveValue(before);
 
-      await nameInput(page).press("Escape");
+      await nameInput(page).fill(after);
+      await nameInput(page).press("Enter");
+      await expect(page.getByText("이름을 변경했습니다.")).toBeVisible();
+      await expect(page.getByRole("row", { name: new RegExp(after) })).toBeVisible();
     } finally {
-      await purge(page, new RegExp(name));
+      await purge(page, new RegExp(before));
+      await purge(page, new RegExp(after));
     }
   });
 });
