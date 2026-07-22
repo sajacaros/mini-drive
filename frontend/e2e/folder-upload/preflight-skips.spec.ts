@@ -89,6 +89,10 @@ test.describe("폴더 업로드 — 사전 검사", () => {
 
           const root = dirEntry(name, [ok, control, tooLong]);
           const dataTransfer = {
+            // types 는 앱이 "페이지 안에서 끌어온 항목 이동"과 "바깥에서 온 업로드"를
+            // 가르는 데 쓴다(FileBrowserPage 의 isInternalDrag). 실제 파일 드롭과 같이
+            // ["Files"] 를 준다 — 빠뜨리면 드롭 핸들러가 그 자리에서 터진다.
+            types: ["Files"],
             items: [{ kind: "file", webkitGetAsEntry: () => root }],
             files: [] as File[],
           };
@@ -121,7 +125,7 @@ test.describe("폴더 업로드 — 사전 검사", () => {
       await page.getByRole("dialog").locator("button", { hasText: "닫기" }).click();
 
       // 정상 파일만 실제로 저장됐다 — 위반 항목은 전송 자체가 일어나지 않는다.
-      await page.getByRole("button", { name: rootName }).click();
+      await page.getByRole("button", { name: rootName }).dblclick();
       await expect(page.getByRole("button", { name: "정상.txt" })).toBeVisible();
       await expect(page.getByRole("row", { name: /제어문자/ })).toHaveCount(0);
     } finally {

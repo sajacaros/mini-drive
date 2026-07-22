@@ -52,13 +52,14 @@ test.describe("좌측 네비게이션", () => {
       await page.getByRole("button", { name: "만들기" }).click();
       await expect(page.getByText("폴더를 만들었습니다.")).toBeVisible();
 
-      await page.getByRole("button", { name: outer }).click();
+      // 목록에서 한 번 클릭은 선택일 뿐이고, 폴더를 여는 건 더블클릭이다(lib/rowOpen.ts).
+      await page.getByRole("button", { name: outer }).dblclick();
       await page.getByRole("button", { name: "새 폴더" }).click();
       await page.getByPlaceholder("폴더 이름").fill(inner);
       await page.getByRole("button", { name: "만들기" }).click();
       await expect(page.getByText("폴더를 만들었습니다.")).toBeVisible();
 
-      await page.getByRole("button", { name: inner }).click();
+      await page.getByRole("button", { name: inner }).dblclick();
       // 2단계 안이므로 breadcrumb 에 두 폴더가 모두 남아 있다.
       await expect(page.getByRole("button", { name: outer })).toBeVisible();
 
@@ -87,7 +88,7 @@ test.describe("좌측 네비게이션", () => {
 
       // 들어갔다 → 네비 → 다시 들어갔다 → 네비. 두 번 모두 루트로 와야 한다.
       for (let i = 0; i < 2; i += 1) {
-        await page.getByRole("button", { name: outer }).click();
+        await page.getByRole("button", { name: outer }).dblclick();
         await expect(page.getByText("이 폴더가 비어 있습니다")).toBeVisible();
 
         await page.getByRole("link", { name: "내 드라이브" }).click();

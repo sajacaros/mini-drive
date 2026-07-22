@@ -86,6 +86,10 @@ test.describe("폴더 업로드 — 드래그 앤 드롭", () => {
 
           const root = dirEntry(name, files.map(fileEntry));
           const dataTransfer = {
+            // types 는 앱이 "페이지 안에서 끌어온 항목 이동"과 "바깥에서 온 업로드"를
+            // 가르는 데 쓴다(FileBrowserPage 의 isInternalDrag). 실제 파일 드롭과 같이
+            // ["Files"] 를 준다 — 빠뜨리면 드롭 핸들러가 그 자리에서 터진다.
+            types: ["Files"],
             items: [{ kind: "file", webkitGetAsEntry: () => root }],
             files: [] as File[],
           };
@@ -111,7 +115,7 @@ test.describe("폴더 업로드 — 드래그 앤 드롭", () => {
 
       // 서버에도 전부 저장됐는지 확인한다. 목록은 50개씩 끊기므로 총 페이지 수로 총량을 본다
       // — 120개면 3페이지, 100개만 왔다면 2페이지라 여기서 갈린다.
-      await page.getByRole("button", { name: rootName }).click();
+      await page.getByRole("button", { name: rootName }).dblclick();
       await expect(page.getByRole("button", { name: "f000.txt" })).toBeVisible();
       await expect(page.getByText(`1 / ${Math.ceil(FILE_COUNT / 50)}`)).toBeVisible();
 

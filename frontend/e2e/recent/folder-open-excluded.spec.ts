@@ -14,7 +14,8 @@ test.describe("최근 이용 콘텐츠", () => {
       await loginAsAdmin(page);
       await page.goto("/");
 
-      // 1. '새 폴더'로 테스트 폴더를 생성한 뒤 폴더명을 클릭해 하위 폴더로 진입(열람)한다
+      // 1. '새 폴더'로 테스트 폴더를 생성한 뒤 폴더명을 더블클릭해 하위 폴더로 진입(열람)한다
+      //    (한 번 클릭은 선택일 뿐 — lib/rowOpen.ts)
       await page.getByRole("button", { name: "새 폴더" }).click();
       await expect(page.getByRole("heading", { name: "새 폴더" })).toBeVisible();
       await page.getByRole("textbox", { name: "폴더 이름" }).fill(folderName);
@@ -23,7 +24,7 @@ test.describe("최근 이용 콘텐츠", () => {
 
       const folderRow = page.getByRole("row", { name: namePattern });
       await expect(folderRow).toBeVisible();
-      await folderRow.getByRole("button", { name: folderName }).click();
+      await folderRow.getByRole("button", { name: folderName }).dblclick();
 
       // expect: 폴더 내부(빈 상태)로 이동한다
       await expect(page.getByText("이 폴더가 비어 있습니다")).toBeVisible();

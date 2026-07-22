@@ -53,14 +53,20 @@ test.describe("즐겨찾기", () => {
         "true",
       );
 
-      // expect: 파일 카드가 보이고, 미리보기·다운로드 액션 버튼과 pressed 별 아이콘이 함께 노출된다
+      // expect: 파일 카드가 보이고, 다운로드 액션과 pressed 별 아이콘이 함께 노출된다
       const favoritesCard = page.locator("div.group.card").filter({ hasText: fileName });
       await expect(favoritesCard).toBeVisible();
-      await expect(favoritesCard.getByRole("button", { name: "미리보기" })).toBeVisible();
       await expect(favoritesCard.getByRole("button", { name: "다운로드" })).toBeVisible();
       await expect(
         favoritesCard.getByRole("button", { name: "즐겨찾기 해제" }),
       ).toHaveAttribute("aria-pressed", "true");
+
+      // expect: 미리보기는 카드에 버튼을 두지 않고 더블클릭으로 연다(FileListView 의 Grid).
+      await favoritesCard.dblclick();
+      const preview = page.getByRole("dialog");
+      await expect(preview.getByRole("heading", { name: fileName })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(preview).toHaveCount(0);
     } finally {
       // 4. 테스트 정리: 즐겨찾기 해제, 파일 삭제 및 영구 삭제
       await page.goto("/");

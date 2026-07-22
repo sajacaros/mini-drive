@@ -83,15 +83,16 @@ test.describe("폴더 업로드 (배치)", () => {
       await expect(rootRow).toBeVisible();
 
       // 5. 트리를 따라 내려가며 구조가 보존됐는지 확인한다.
-      await page.getByRole("button", { name: rootName }).click();
+      // 폴더 열기는 더블클릭이다(한 번 클릭은 선택 — lib/rowOpen.ts).
+      await page.getByRole("button", { name: rootName }).dblclick();
       await expect(page.getByRole("button", { name: "docs" })).toBeVisible();
       await expect(page.getByRole("button", { name: "root.txt" })).toBeVisible();
 
-      await page.getByRole("button", { name: "docs" }).click();
+      await page.getByRole("button", { name: "docs" }).dblclick();
       await expect(page.getByRole("button", { name: "nested" })).toBeVisible();
       await expect(page.getByRole("button", { name: "a.txt" })).toBeVisible();
 
-      await page.getByRole("button", { name: "nested" }).click();
+      await page.getByRole("button", { name: "nested" }).dblclick();
       await expect(page.getByRole("button", { name: "b.txt" })).toBeVisible();
       // 2단계까지 내려왔으므로 breadcrumb 에 경로가 남아 있어야 한다.
       await expect(page.getByRole("button", { name: "docs" })).toBeVisible();

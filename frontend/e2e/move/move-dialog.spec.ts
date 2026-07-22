@@ -14,6 +14,11 @@ async function makeFolder(page: import("@playwright/test").Page, name: string) {
   await expect(page.getByText("폴더를 만들었습니다.")).toBeVisible();
 }
 
+/** 토스트(role=status)만 골라낸다 — 같은 문구를 쓰는 다이얼로그와 섞이지 않게. */
+function toast(page: import("@playwright/test").Page, pattern: RegExp) {
+  return page.getByRole("status").filter({ hasText: pattern });
+}
+
 /** 휴지통까지 비워 흔적을 남기지 않는다. */
 async function purge(page: import("@playwright/test").Page, pattern: RegExp) {
   await page.goto("/");
@@ -62,11 +67,14 @@ test.describe("이동", () => {
       await confirm.click();
 
       // expect: 토스트 + 현재 목록에서 사라짐
-      await expect(page.getByText(new RegExp(`${itemName}.*${dstName}.*이동`))).toBeVisible();
+      // 토스트(role=status)로 좁힌다 — 그냥 getByText 로 잡으면 아직 닫히지 않은 이동
+      // 다이얼로그(제목=항목 이름, 확정 버튼="…(으)로 이동")가 같은 문구로 매치돼
+      // 이동이 실패해도 통과해 버린다.
+      await expect(toast(page, new RegExp(`${itemName}.*${dstName}.*이동`))).toBeVisible();
       await expect(itemRow).not.toBeVisible();
 
-      // 3. 목적지 폴더를 열면 그 안에 있다
-      await page.getByRole("row", { name: new RegExp(dstName) }).getByText(dstName).click();
+      // 3. 목적지 폴더를 열면 그 안에 있다 (한 번 클릭은 선택, 열기는 더블클릭)
+      await page.getByRole("row", { name: new RegExp(dstName) }).getByText(dstName).dblclick();
       await expect(page.getByRole("row", { name: new RegExp(itemName) })).toBeVisible();
 
       // 4. breadcrumb 으로 돌아오면 목록에 없다(이동이 실제로 반영됨)
@@ -77,7 +85,7 @@ test.describe("이동", () => {
       await page.goto("/");
       const dstRow = page.getByRole("row", { name: new RegExp(dstName) });
       if (await existsNow(dstRow)) {
-        await dstRow.getByText(dstName).click();
+        await dstRow.getByText(dstName).dblclick();
         const inner = page.getByRole("row", { name: new RegExp(itemName) });
         if (await existsNow(inner)) {
           await inner.getByLabel("삭제").click();
@@ -110,17 +118,17 @@ test.describe("이동", () => {
       // 드래그 앤 드롭 — HTML5 DnD 이벤트를 Playwright 가 합성한다.
       await itemRow.dragTo(dstRow);
 
-      await expect(page.getByText(new RegExp(`${itemName}.*${dstName}.*이동`))).toBeVisible();
+      await expect(toast(page, new RegExp(`${itemName}.*${dstName}.*이동`))).toBeVisible();
       await expect(itemRow).not.toBeVisible();
 
-      // 목적지 안에 실제로 들어갔는지 확인
-      await dstRow.getByText(dstName).click();
+      // 목적지 안에 실제로 들어갔는지 확인 (한 번 클릭은 선택, 열기는 더블클릭)
+      await dstRow.getByText(dstName).dblclick();
       await expect(page.getByRole("row", { name: new RegExp(itemName) })).toBeVisible();
 
       // breadcrumb 으로 다시 꺼내기 — 상위 경로가 드롭 대상이다
       const innerRow = page.getByRole("row", { name: new RegExp(itemName) });
       await innerRow.dragTo(page.getByRole("button", { name: "내 드라이브" }));
-      await expect(page.getByText(new RegExp(`${itemName}.*내 드라이브.*이동`))).toBeVisible();
+      await expect(toast(page, new RegExp(`${itemName}.*내 드라이브.*이동`))).toBeVisible();
       await expect(innerRow).not.toBeVisible();
     } finally {
       await purge(page, new RegExp(itemName));
