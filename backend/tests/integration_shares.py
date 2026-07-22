@@ -4,7 +4,8 @@
 무인증 다운로드(X-Accel-Redirect + presigned URL 로 MinIO 직접 GET 바이트 일치) →
 비밀번호 공유(오답 401 / 정답 200) → 만료 공유 410(메타·다운로드) →
 max_downloads 소진 410 → 폴더 공유 400 → 없는 URL 404 →
-비활성화(DELETE) 후 즉시 410 차단 → 공유 있는 파일 영구 삭제 성공(FK 이슈 해결 + shares 행 제거).
+비활성화(DELETE) 후 즉시 410 차단 → 목록 활성/비활성 탭 필터 + 페이지네이션 →
+공유 있는 파일 영구 삭제 성공(FK 이슈 해결 + shares 행 제거).
 
 env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.integration_shares`.
 """
@@ -129,7 +130,7 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         # download_count 증가 반영
         r = await c.get("/api/shares", headers=alice_h)
         assert r.status_code == 200, r.text
-        mine = {s["share_url"]: s for s in r.json()}
+        mine = {s["share_url"]: s for s in r.json()["items"]}
         assert mine[share_url]["download_count"] == 1, r.text
         _ok("목록에서 download_count=1 확인")
 
@@ -140,7 +141,7 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         assert r.json()["expires_in"] == 60
         # 티켓 발급이 download_count 를 소모(2)
         r2 = await c.get("/api/shares", headers=alice_h)
-        assert {s["share_url"]: s for s in r2.json()}[share_url]["download_count"] == 2
+        assert {s["share_url"]: s for s in r2.json()["items"]}[share_url]["download_count"] == 2
         # 무헤더 GET → 바이트 일치
         r = await c.get(ticket_url)
         assert r.status_code == 200, r.text
@@ -237,10 +238,41 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         r = await c.post(f"/api/public/shares/{dis_url}/download")
         assert r.status_code == 410, r.text
         # 행은 남아 있어야 한다(이력 보존) — 목록에 여전히 존재(is_active=False)
-        r = await c.get("/api/shares", headers=alice_h)
-        disabled = next(s for s in r.json() if s["share_url"] == dis_url)
+        r = await c.get("/api/shares", headers=alice_h, params={"active": "false"})
+        disabled = next(s for s in r.json()["items"] if s["share_url"] == dis_url)
         assert disabled["is_active"] is False
+        # 활성 탭(active=true)에는 더 이상 잡히지 않는다.
+        r = await c.get("/api/shares", headers=alice_h, params={"active": "true"})
+        assert all(s["share_url"] != dis_url for s in r.json()["items"]), r.text
         _ok("비활성화 후 즉시 410 + 행 보존(is_active=False)")
+
+        # --- 목록: 활성/비활성 탭 + 페이지네이션 ------------------------------
+        r = await c.get("/api/shares", headers=alice_h, params={"size": 100})
+        all_items = r.json()["items"]
+        all_total = r.json()["total"]
+        assert len(all_items) == all_total, r.text
+        act = (await c.get("/api/shares", headers=alice_h, params={"active": "true"})).json()
+        ina = (await c.get("/api/shares", headers=alice_h, params={"active": "false"})).json()
+        # 탭별 total 은 필터 적용 후 개수이고, 두 탭을 합치면 전체가 된다.
+        assert act["total"] + ina["total"] == all_total, (act["total"], ina["total"], all_total)
+        assert all(s["is_active"] for s in act["items"]), act
+        assert all(not s["is_active"] for s in ina["items"]), ina
+        _ok(f"활성/비활성 탭 필터 (활성 {act['total']} + 비활성 {ina['total']} = {all_total})")
+
+        # size=2 로 쪼개면 페이지마다 다른 항목이 최신순으로 나온다.
+        p1 = (await c.get("/api/shares", headers=alice_h, params={"page": 1, "size": 2})).json()
+        p2 = (await c.get("/api/shares", headers=alice_h, params={"page": 2, "size": 2})).json()
+        assert p1["total"] == p2["total"] == all_total, (p1["total"], p2["total"])
+        assert len(p1["items"]) == 2 and len(p2["items"]) >= 1, (p1, p2)
+        assert {s["id"] for s in p1["items"]}.isdisjoint({s["id"] for s in p2["items"]})
+        paged = p1["items"] + p2["items"]
+        assert [s["id"] for s in paged] == [
+            s["id"] for s in all_items[: len(paged)]
+        ], "페이지 경계에서 최신순 정렬이 깨짐"
+        # 범위를 벗어난 페이지는 빈 목록(total 은 유지).
+        far = (await c.get("/api/shares", headers=alice_h, params={"page": 99})).json()
+        assert far["items"] == [] and far["total"] == all_total, far
+        _ok("페이지네이션 (size=2 경계 + 최신순 유지 + 범위 밖 빈 목록)")
 
         # --- 공유 있는 파일 영구 삭제 성공 (FK 이슈 해결 확인) ----------------
         del_file = await _upload(c, alice_h, "to-delete.bin")

@@ -14,6 +14,8 @@ PRD 6.3 의 `GET /api/shares/{shareUrl}/preview` 는 공개 경로(`/api/public/
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps import CurrentUser, DbSession, RedisClient
@@ -22,6 +24,7 @@ from app.api.preview import render_preview
 from app.schemas.files import DownloadTicketResponse
 from app.schemas.shares import (
     ShareCreateRequest,
+    ShareListResponse,
     SharePasswordRequest,
     SharePublicMeta,
     ShareResponse,
@@ -67,22 +70,31 @@ async def create_share(
     return ShareResponse.from_share(share, file_name)
 
 
-@router.get("", response_model=list[ShareResponse])
+@router.get("", response_model=ShareListResponse)
 async def list_shares(
-    user: CurrentUser, session: DbSession, redis: RedisClient
-) -> list[ShareResponse]:
+    user: CurrentUser,
+    session: DbSession,
+    redis: RedisClient,
+    active: Annotated[bool | None, Query(description="활성 상태 필터")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> ShareListResponse:
     """내 공유 링크 목록 (파일명·다운로드 수·접근 통계·활성 상태 포함) — PRD 3.4, 6.3.
 
-    접근 통계(조회 수/마지막 접근)는 한 번의 MGET 으로 일괄 조회한다(Redis 오류 시 0/None).
+    active 로 활성/비활성을 나눠 보고(생략 시 전체), page/size 로 페이지네이션한다.
+    접근 통계(조회 수/마지막 접근)는 현재 페이지 항목만 한 번의 MGET 으로 일괄 조회한다
+    (Redis 오류 시 0/None).
     """
-    rows = await shares_service.list_shares(session, user)
+    rows, total = await shares_service.list_shares(
+        session, user, active=active, page=page, size=size
+    )
     stats = await share_stats_service.get_stats_bulk(
         redis, [share.id for share, _ in rows]
     )
-    result: list[ShareResponse] = []
+    items: list[ShareResponse] = []
     for share, name in rows:
         s = stats.get(share.id)
-        result.append(
+        items.append(
             ShareResponse.from_share(
                 share,
                 name,
@@ -90,7 +102,7 @@ async def list_shares(
                 last_access_at=s.last_access_at if s else None,
             )
         )
-    return result
+    return ShareListResponse(items=items, total=total, page=page, size=size)
 
 
 @router.get("/{share_id}/stats", response_model=ShareStatsResponse)

@@ -248,7 +248,7 @@ async def scenario() -> None:
         # 목록에 통계 반영 (view_count>=2, last_access 존재)
         r = await c.get("/api/shares", headers=alice_h)
         assert r.status_code == 200, r.text
-        entry = next(s for s in r.json() if s["id"] == share_id)
+        entry = next(s for s in r.json()["items"] if s["id"] == share_id)
         assert entry["view_count"] >= 2, entry
         assert entry["last_access_at"] is not None, entry
         assert entry["download_count"] == 0, entry  # 미리보기는 다운로드 소모 안 함

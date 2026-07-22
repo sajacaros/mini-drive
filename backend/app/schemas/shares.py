@@ -80,6 +80,18 @@ class ShareResponse(BaseModel):
         )
 
 
+class ShareListResponse(BaseModel):
+    """페이지네이션된 내 공유 링크 목록 (PRD 6.3 GET /api/shares).
+
+    total 은 active 필터를 적용한 뒤의 개수다 — 활성/비활성 탭마다 페이지 수가 따로 계산된다.
+    """
+
+    items: list[ShareResponse]
+    total: int
+    page: int
+    size: int
+
+
 class ShareStatsResponse(BaseModel):
     """공유 링크 접근 통계 (PRD 3.4). download_count 는 DB 정확값, view/last_access 는 근사치."""
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -136,17 +136,38 @@ async def create_share(
     raise ShareServiceError(500, "공유 링크 생성에 실패했습니다. 다시 시도해 주세요.")
 
 
-async def list_shares(session: AsyncSession, user: User) -> list[tuple[Share, str]]:
-    """내 공유 링크 목록 (파일명 포함, 최신순) — PRD 6.3."""
+async def list_shares(
+    session: AsyncSession,
+    user: User,
+    *,
+    active: bool | None = None,
+    page: int = 1,
+    size: int = 20,
+) -> tuple[list[tuple[Share, str]], int]:
+    """내 공유 링크 목록 (파일명 포함, 최신순) — PRD 6.3. ((share, 파일명) 목록, 총 개수).
+
+    active 는 활성/비활성 탭 필터(None 이면 전체). 총 개수는 필터를 적용한 뒤 센다 —
+    페이지 수 계산이 현재 탭 기준이어야 하기 때문이다.
+    """
+    base = (
+        select(Share, File.name)
+        .join(File, Share.file_id == File.id)
+        .where(Share.created_by == user.id)
+    )
+    count_q = select(func.count()).select_from(Share).where(Share.created_by == user.id)
+    if active is not None:
+        base = base.where(Share.is_active.is_(active))
+        count_q = count_q.where(Share.is_active.is_(active))
+
+    total = (await session.execute(count_q)).scalar_one()
     rows = (
         await session.execute(
-            select(Share, File.name)
-            .join(File, Share.file_id == File.id)
-            .where(Share.created_by == user.id)
-            .order_by(Share.created_at.desc())
+            base.order_by(Share.created_at.desc())
+            .offset((page - 1) * size)
+            .limit(size)
         )
     ).all()
-    return [(share, name) for share, name in rows]
+    return [(share, name) for share, name in rows], total
 
 
 async def get_owned_share(session: AsyncSession, user: User, share_id: int) -> Share:

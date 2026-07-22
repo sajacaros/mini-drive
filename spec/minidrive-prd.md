@@ -646,7 +646,7 @@ CREATE TABLE app_settings (
 | Method | Endpoint | 설명 |
 |---|---|---|
 | `POST` | `/api/shares` | 공유 링크 생성 |
-| `GET`  | `/api/shares` | 내 공유 링크 목록 |
+| `GET`  | `/api/shares` | 내 공유 링크 목록 (`active` 활성/비활성 필터, `page`/`size` 페이지네이션) |
 | `DELETE`| `/api/shares/{id}` | 공유 링크 비활성화 |
 | `GET`  | `/api/public/shares/{shareUrl}` | 공유 메타 조회 (무인증. 없음 404 / 비활성·만료·삭제 410) |
 | `POST` | `/api/public/shares/{shareUrl}/download` | 공유 다운로드 (무인증, body: password 옵션) |

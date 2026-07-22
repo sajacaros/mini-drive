@@ -6,13 +6,26 @@ import type { Share } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
 import { buildShareLink } from "@/components/ShareModal";
 import { useToast } from "@/components/Toast";
-import { Badge, EmptyState, ErrorState, LoadingState } from "@/components/ui";
+import {
+  EmptyState,
+  ErrorState,
+  FilterTab,
+  LoadingState,
+  Pagination,
+} from "@/components/ui";
 import { CopyIcon, LinkIcon } from "@/components/icons";
 import { formatDateTime } from "@/lib/format";
+
+const PAGE_SIZE = 20;
+
+type Tab = "active" | "inactive";
 
 export function SharesPage() {
   const toast = useToast();
   const [shares, setShares] = useState<Share[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [tab, setTab] = useState<Tab>("active");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,17 +33,24 @@ export function SharesPage() {
     setLoading(true);
     setError(null);
     try {
-      setShares(await listShares());
+      const res = await listShares(tab === "active", page, PAGE_SIZE);
+      setShares(res.items);
+      setTotal(res.total);
     } catch (err) {
       setError(extractErrorMessage(err, "공유 링크를 불러오지 못했습니다."));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tab, page]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const switchTab = (next: Tab) => {
+    setTab(next);
+    setPage(1);
+  };
 
   const copy = async (share: Share) => {
     try {
@@ -45,20 +65,33 @@ export function SharesPage() {
     try {
       await disableShare(share.id);
       toast.success("공유를 비활성화했습니다.");
-      await load();
+      // 활성 탭에서 방금 비활성화한 항목은 목록에서 빠진다. 그게 이 페이지의 마지막 한 건이었다면
+      // 빈 페이지가 남으므로 앞 페이지로 물러난다(setPage 가 load 를 다시 태운다).
+      if (shares.length === 1 && page > 1) setPage(page - 1);
+      else await load();
     } catch (err) {
       toast.error(extractErrorMessage(err, "비활성화에 실패했습니다."));
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
   return (
     <div className="flex h-screen flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-6 pt-4">
         <PageHeader align="start">
-        <h1 className="text-lg font-semibold">공유 링크</h1>
-        <p className="mt-0.5 text-sm text-muted">
-          내가 만든 공유 링크를 관리합니다. 조회수·마지막 접근은 근사치입니다.
-        </p>
+          <h1 className="text-lg font-semibold">공유 링크</h1>
+          <p className="mt-0.5 text-sm text-muted">
+            내가 만든 공유 링크를 관리합니다. 조회수·마지막 접근은 근사치입니다.
+          </p>
+          <div className="mt-3 flex gap-1">
+            <FilterTab active={tab === "active"} onClick={() => switchTab("active")}>
+              활성
+            </FilterTab>
+            <FilterTab active={tab === "inactive"} onClick={() => switchTab("inactive")}>
+              비활성
+            </FilterTab>
+          </div>
         </PageHeader>
       </div>
 
@@ -68,18 +101,25 @@ export function SharesPage() {
         ) : error ? (
           <ErrorState message={error} onRetry={load} />
         ) : shares.length === 0 ? (
-          <EmptyState
-            icon={<LinkIcon width={40} height={40} />}
-            title="아직 만든 공유 링크가 없습니다"
-            hint="파일 목록에서 공유 아이콘을 눌러 링크를 만들 수 있습니다."
-          />
+          tab === "active" ? (
+            <EmptyState
+              icon={<LinkIcon width={40} height={40} />}
+              title="활성 공유 링크가 없습니다"
+              hint="파일 목록에서 공유 아이콘을 눌러 링크를 만들 수 있습니다."
+            />
+          ) : (
+            <EmptyState
+              icon={<LinkIcon width={40} height={40} />}
+              title="비활성 공유 링크가 없습니다"
+              hint="비활성화한 링크는 이력 보존을 위해 이 탭에 남습니다."
+            />
+          )
         ) : (
           <div className="card overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">
                   <th className="px-4 py-2.5 font-medium">파일</th>
-                  <th className="w-24 px-4 py-2.5 font-medium">상태</th>
                   <th className="w-24 px-4 py-2.5 font-medium">다운로드</th>
                   <th className="w-20 px-4 py-2.5 font-medium">조회수</th>
                   <th className="w-44 px-4 py-2.5 font-medium">마지막 접근</th>
@@ -99,13 +139,6 @@ export function SharesPage() {
                           {s.expires_at && ` · ${formatDateTime(s.expires_at)} 만료`}
                         </span>
                       </div>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      {s.is_active ? (
-                        <Badge tone="success">활성</Badge>
-                      ) : (
-                        <Badge tone="neutral">비활성</Badge>
-                      )}
                     </td>
                     <td className="px-4 py-2.5 text-muted">
                       {s.download_count}
@@ -135,6 +168,8 @@ export function SharesPage() {
             </table>
           </div>
         )}
+
+        <Pagination page={page} totalPages={totalPages} onChange={setPage} />
       </div>
     </div>
   );

@@ -6,7 +6,15 @@ import type { AdminShare } from "@/api/types";
 import { Modal } from "@/components/Modal";
 import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
-import { Badge, EmptyState, ErrorState, LoadingState, Pagination, Spinner } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  ErrorState,
+  FilterTab,
+  LoadingState,
+  Pagination,
+  Spinner,
+} from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
 import { sharePermissionLabel } from "@/lib/labels";
 
@@ -178,28 +186,5 @@ export function AdminSharesPage() {
         </p>
       </Modal>
     </div>
-  );
-}
-
-function FilterTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-        active
-          ? "border-[color:var(--accent)] text-accent"
-          : "border-transparent text-muted hover:text-[color:var(--text-primary)]"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

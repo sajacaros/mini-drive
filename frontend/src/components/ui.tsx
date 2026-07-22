@@ -82,6 +82,30 @@ export function Pagination({
   );
 }
 
+/** 목록 상단 필터 탭 (전체/활성/비활성 등). 헤더 하단 경계선 위에 얹히도록 -mb-px 를 준다. */
+export function FilterTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+        active
+          ? "border-[color:var(--accent)] text-accent"
+          : "border-transparent text-muted hover:text-[color:var(--text-primary)]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** 상태 배지 (사용자 상태, 공유 활성 여부 등). */
 export function Badge({
   children,

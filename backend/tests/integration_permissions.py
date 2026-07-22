@@ -198,7 +198,7 @@ async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
         assert r.status_code == 200 and r.json()["file_name"] == "file.bin", r.text
         # 만든 사람(B)의 공유 목록에 잡힌다 — 파일 소유자는 A 지만 created_by 는 B.
         r = await c.get("/api/shares", headers=bob_h)
-        assert any(s["share_url"] == share_url for s in r.json()), r.text
+        assert any(s["share_url"] == share_url for s in r.json()["items"]), r.text
         _ok("B(비소유자, write) 공유 링크 생성 201 → 무인증 메타 200 → B 목록에 노출")
 
         # 8-2. 조상 폴더 소유 상속 — B 가 A 의 폴더(depth2)에 **새 파일**을 올리면 소유자는 B 지만,

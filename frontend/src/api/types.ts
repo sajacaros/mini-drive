@@ -167,6 +167,14 @@ export interface Share {
   last_access_at: string | null;
 }
 
+/** 페이지네이션된 내 공유 링크 목록 (GET /api/shares). total 은 active 필터 적용 후 개수. */
+export interface ShareListResponse {
+  items: Share[];
+  total: number;
+  page: number;
+  size: number;
+}
+
 /** 단건 공유 통계 (GET /api/shares/{id}/stats). */
 export interface ShareStats {
   share_id: number;

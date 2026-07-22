@@ -2,15 +2,28 @@
 
 import { withBase } from "@/lib/basePath";
 import apiClient from "./client";
-import type { Share, ShareCreateRequest, SharePublicMeta, ShareStats } from "./types";
+import type {
+  Share,
+  ShareCreateRequest,
+  ShareListResponse,
+  SharePublicMeta,
+  ShareStats,
+} from "./types";
 
 export async function createShare(payload: ShareCreateRequest): Promise<Share> {
   const { data } = await apiClient.post<Share>("/shares", payload);
   return data;
 }
 
-export async function listShares(): Promise<Share[]> {
-  const { data } = await apiClient.get<Share[]>("/shares");
+/** 내 공유 링크 목록. active 로 활성/비활성 탭을 나눈다(생략 시 전체). */
+export async function listShares(
+  active?: boolean,
+  page = 1,
+  size = 20,
+): Promise<ShareListResponse> {
+  const { data } = await apiClient.get<ShareListResponse>("/shares", {
+    params: { active, page, size },
+  });
   return data;
 }
 
