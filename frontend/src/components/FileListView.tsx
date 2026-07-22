@@ -3,9 +3,11 @@
  * FileBrowserPage 의 풀 행 액션 대신 미리보기·다운로드·즐겨찾기만 노출한다. 리스트·그리드를
  * 모두 지원하며 썸네일/포맷 헬퍼는 기존 것을 그대로 재사용한다.
  *
- * 폴더 항목은 클릭 시 onOpenFolder 로 넘겨 호출부가 해당 폴더로 이동시킨다(최근 목록은 파일만
- * 담기므로 실질적으로 즐겨찾기에서만 폴더가 나타난다).
+ * 클릭 한 번은 선택, 더블클릭이 "열기"다(터치는 한 번 탭). 폴더는 onOpenFolder 로 넘겨 호출부가
+ * 해당 폴더로 이동시킨다(최근 목록은 파일만 담기므로 실질적으로 즐겨찾기에서만 폴더가 나타난다).
  */
+
+import { useState } from "react";
 
 import type { FileNode } from "@/api/types";
 import { Badge } from "@/components/ui";
@@ -14,6 +16,14 @@ import { Thumbnail } from "@/components/Thumbnail";
 import { DownloadIcon, FileIcon, FolderIcon } from "@/components/icons";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionLabel, permissionTone } from "@/lib/labels";
+import {
+  CARD_SELECTED_CLASS,
+  ROW_ACTION_PROPS,
+  ROW_BASE_CLASS,
+  ROW_SELECTED_CLASS,
+  rowOpenHandlers,
+  useCoarsePointer,
+} from "@/lib/rowOpen";
 
 export interface FileListViewProps {
   items: FileNode[];
@@ -24,13 +34,27 @@ export interface FileListViewProps {
   onToggleFavorite: (f: FileNode) => void;
 }
 
-/** 파일=미리보기, 폴더=열기 로 분기하는 공통 클릭 핸들러. */
-function openOf(f: FileNode, p: FileListViewProps) {
-  return () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f));
+/** 선택은 이 뷰 안에서만 의미가 있어 내부 상태로 들고 있는다. */
+interface ViewProps extends FileListViewProps {
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+  coarse: boolean;
+}
+
+/** 행/카드에 그대로 펼치는 선택·열기 핸들러 (파일=미리보기, 폴더=열기). */
+function openOf(f: FileNode, p: ViewProps) {
+  return rowOpenHandlers({
+    coarse: p.coarse,
+    select: () => p.onSelect(f.id),
+    open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
+  });
 }
 
 export function FileListView(props: FileListViewProps) {
-  return (props.view ?? "list") === "grid" ? <Grid {...props} /> : <Table {...props} />;
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const coarse = useCoarsePointer();
+  const p: ViewProps = { ...props, selectedId, onSelect: setSelectedId, coarse };
+  return (props.view ?? "list") === "grid" ? <Grid {...p} /> : <Table {...p} />;
 }
 
 /** 권한 셀 — owner 는 "소유자"로 구분해 강조하고, 그 외는 라벨/톤 배지로 표시. */
@@ -63,7 +87,7 @@ function DownloadButton({ file, onDownload }: { file: FileNode; onDownload: (f: 
   );
 }
 
-function Table(p: FileListViewProps) {
+function Table(p: ViewProps) {
   return (
     <div className="card overflow-x-auto">
       <table className="w-full text-sm">
@@ -82,11 +106,18 @@ function Table(p: FileListViewProps) {
           {p.items.map((f) => (
             <tr
               key={f.id}
-              className="group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)]"
+              className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
+                p.selectedId === f.id ? ROW_SELECTED_CLASS : ""
+              }`}
+              {...openOf(f, p)}
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
-                  <button className="flex min-w-0 items-center gap-2.5 text-left" onClick={openOf(f, p)}>
+                  {/* 클릭 처리는 행이 맡는다 — 이 버튼은 키보드 포커스/Enter 진입점 */}
+                  <button
+                    className="flex min-w-0 items-center gap-2.5 text-left"
+                    title={f.is_folder ? "더블클릭하면 폴더를 엽니다" : "더블클릭하면 미리봅니다"}
+                  >
                     <span
                       className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
                         f.is_folder ? "text-accent" : "text-muted"
@@ -110,7 +141,9 @@ function Table(p: FileListViewProps) {
                       )}
                     </span>
                   </button>
-                  <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
+                  <span {...ROW_ACTION_PROPS}>
+                    <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
+                  </span>
                 </div>
               </td>
               <td className="px-4 py-2.5 text-muted">
@@ -129,7 +162,10 @@ function Table(p: FileListViewProps) {
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
-                <div className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100">
+                <div
+                  className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100"
+                  {...ROW_ACTION_PROPS}
+                >
                   {!f.is_folder && <DownloadButton file={f} onDownload={p.onDownload} />}
                 </div>
               </td>
@@ -141,19 +177,24 @@ function Table(p: FileListViewProps) {
   );
 }
 
-function Grid(p: FileListViewProps) {
+function Grid(p: ViewProps) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {p.items.map((f) => (
-        <div key={f.id} className="group card relative flex flex-col overflow-hidden p-0">
+        <div
+          key={f.id}
+          className={`group card relative flex flex-col overflow-hidden p-0 ${ROW_BASE_CLASS} ${
+            p.selectedId === f.id ? CARD_SELECTED_CLASS : ""
+          }`}
+          {...openOf(f, p)}
+        >
           {/* 항상 표시되는 즐겨찾기 별(비활성은 hover 노출) */}
-          <span className="absolute right-1.5 top-1.5 z-10">
+          <span className="absolute right-1.5 top-1.5 z-10" {...ROW_ACTION_PROPS}>
             <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
           </span>
           <button
             className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-muted-token"
-            onClick={openOf(f, p)}
-            title={f.is_folder ? "폴더 열기" : "미리보기"}
+            title={f.is_folder ? "더블클릭하면 폴더를 엽니다" : "더블클릭하면 미리봅니다"}
           >
             <span
               className={`flex items-center justify-center ${
@@ -182,13 +223,16 @@ function Grid(p: FileListViewProps) {
           </button>
 
           <div className="flex items-center gap-1 border-t border-token px-2.5 py-2">
-            <button className="min-w-0 flex-1 text-left" onClick={openOf(f, p)}>
+            <button className="min-w-0 flex-1 text-left">
               <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
               <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
               {f.location && <p className="truncate text-[10px] text-muted">{f.location}</p>}
             </button>
             {!f.is_folder && (
-              <span className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+              <span
+                className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                {...ROW_ACTION_PROPS}
+              >
                 <DownloadButton file={f} onDownload={p.onDownload} />
               </span>
             )}

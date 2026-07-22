@@ -15,10 +15,20 @@ import {
 } from "@/components/icons";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
+import {
+  ROW_ACTION_PROPS,
+  ROW_BASE_CLASS,
+  ROW_SELECTED_CLASS,
+  rowOpenHandlers,
+  useCoarsePointer,
+} from "@/lib/rowOpen";
 
 export function SharedWithMePage() {
   const toast = useToast();
   const navigate = useNavigate();
+  const coarse = useCoarsePointer();
+  // 클릭 = 선택, 더블클릭 = 열기. 같은 파일이 그룹별로 여러 번 나오므로 키에 group_id 를 섞는다.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const [items, setItems] = useState<SharedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,15 +104,24 @@ export function SharedWithMePage() {
               <tbody>
                 {items.map((item) => {
                   const f = item.file;
+                  const key = `${f.id}-${item.group_id}`;
                   return (
                     <tr
-                      key={`${f.id}-${item.group_id}`}
-                      className="group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)]"
+                      key={key}
+                      className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
+                        selectedKey === key ? ROW_SELECTED_CLASS : ""
+                      }`}
+                      {...rowOpenHandlers({
+                        coarse,
+                        select: () => setSelectedKey(key),
+                        open: () => onOpen(item),
+                      })}
                     >
                       <td className="px-4 py-2.5">
+                        {/* 클릭 처리는 행이 맡고, 폴더 행 버튼은 키보드 진입점 역할만 한다. */}
                         <button
                           className="flex items-center gap-2.5 text-left"
-                          onClick={() => onOpen(item)}
+                          title={f.is_folder ? "더블클릭하면 폴더를 엽니다" : undefined}
                           disabled={!f.is_folder}
                         >
                           <span className={f.is_folder ? "text-accent" : "text-muted"}>
@@ -126,7 +145,10 @@ export function SharedWithMePage() {
                       </td>
                       <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
                       <td className="px-4 py-2.5">
-                        <div className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100">
+                        <div
+                          className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100"
+                          {...ROW_ACTION_PROPS}
+                        >
                           {!f.is_folder && permissionCovers(item.permission, "read") && (
                             <button
                               title="다운로드"

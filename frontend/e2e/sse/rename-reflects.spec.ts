@@ -41,13 +41,13 @@ test.describe("실시간 목록 갱신 (SSE)", () => {
       await expect(page.getByRole("heading", { name: "최근 항목" })).toBeVisible();
       await expect(recentStrip(page).getByRole("button", { name: fileName })).toBeVisible();
 
-      // 2. 해당 파일 행의 '이름 변경' 버튼 클릭 → textbox 값을 새 이름으로 변경 → '변경' 클릭
+      // 2. 해당 파일 행의 '이름 변경' 버튼 클릭 → 행 안에서 제자리 편집 → Enter 로 확정
       await row.getByRole("button", { name: "이름 변경" }).click();
-      await expect(page.getByRole("heading", { name: "이름 변경" })).toBeVisible();
-      const renameTextbox = page.getByRole("dialog").getByRole("textbox");
+      // 제자리 편집 입력은 한 번에 하나만 열리므로 페이지 범위로 잡아도 모호하지 않다.
+      const renameTextbox = page.getByRole("textbox", { name: "이름" });
       await expect(renameTextbox).toHaveValue(fileName);
       await renameTextbox.fill(newFileName);
-      await page.getByRole("button", { name: "변경", exact: true }).click();
+      await renameTextbox.press("Enter");
 
       // expect: 토스트 "이름을 변경했습니다."가 보인다
       await expect(page.getByText("이름을 변경했습니다.")).toBeVisible();

@@ -51,10 +51,19 @@ import {
   XIcon,
 } from "@/components/icons";
 import { downloadFile } from "@/lib/download";
+import { InlineNameInput, useClickToRename } from "@/components/InlineName";
 import { subscribeFileEvents } from "@/lib/fileEvents";
 import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
+import {
+  CARD_SELECTED_CLASS,
+  ROW_ACTION_PROPS,
+  ROW_BASE_CLASS,
+  ROW_SELECTED_CLASS,
+  rowOpenHandlers,
+  useCoarsePointer,
+} from "@/lib/rowOpen";
 import {
   forgetSession,
   listPendingSessions,
@@ -164,6 +173,8 @@ export function FileBrowserPage({
     () => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list",
   );
   const [previewTarget, setPreviewTarget] = useState<FileNode | null>(null);
+  // 클릭으로 고른 항목 (열기는 더블클릭). 목록이 바뀌면 아래 effect 에서 해제한다.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   // 드라이브 홈(루트)에서만 노출하는 "최근 항목" 스트립 데이터 (Phase 8-3).
   const [recent, setRecent] = useState<FileNode[]>([]);
   // 중단된 재개 세션(새로고침 포함) — 파일 재선택으로 이어올릴 수 있다.
@@ -185,8 +196,8 @@ export function FileBrowserPage({
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
-  const [renameTarget, setRenameTarget] = useState<FileNode | null>(null);
-  const [renameValue, setRenameValue] = useState("");
+  // 제자리 편집 중인 항목 id (F2 / 이름 재클릭 / 행 액션으로 진입).
+  const [renamingId, setRenamingId] = useState<number | null>(null);
   const [moveTarget, setMoveTarget] = useState<FileNode | null>(null);
   /**
    * 드롭 하이라이트 대상. 폴더 행은 id, breadcrumb 은 그 crumb 의 id(루트는 null)라
@@ -398,6 +409,26 @@ export function FileBrowserPage({
   }, [atVirtualShared, inSharedSubtree, parentId]);
 
   const reload = () => load(parentId, page);
+
+  // 폴더를 옮기거나 페이지를 넘기면 이전 선택/편집은 화면에 없으므로 해제한다.
+  useEffect(() => {
+    setSelectedId(null);
+    setRenamingId(null);
+  }, [parentId, page]);
+
+  // 선택한 항목을 F2 로 제자리 편집 (탐색기 관례). 입력/다이얼로그 안에서 누른 키는
+  // 그쪽에서 stopPropagation 하므로 여기까지 오지 않는다.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "F2" || selectedId === null) return;
+      const target = items.find((f) => f.id === selectedId);
+      if (!target || !rowCanWrite(target, canWrite)) return;
+      e.preventDefault();
+      setRenamingId(target.id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedId, items, canWrite]);
 
   // --- 탐색 -----------------------------------------------------------------
 
@@ -770,17 +801,14 @@ export function FileBrowserPage({
     void runMove(dragged, targetId, targetName);
   };
 
-  const submitRename = async () => {
-    if (!renameTarget) return;
-    const name = renameValue.trim();
-    if (!name || name === renameTarget.name) {
-      setRenameTarget(null);
-      return;
-    }
+  /** 제자리 편집 확정. 실패해도 편집은 닫고(목록엔 원래 이름이 남는다) 사유만 알린다. */
+  const submitRename = async (file: FileNode, raw: string) => {
+    setRenamingId(null);
+    const name = raw.trim();
+    if (!name || name === file.name) return;
     try {
-      await renameFile(renameTarget.id, name);
+      await renameFile(file.id, name);
       toast.success("이름을 변경했습니다.");
-      setRenameTarget(null);
       await reload();
     } catch (err) {
       toast.error(extractErrorMessage(err, "이름 변경에 실패했습니다."));
@@ -1152,8 +1180,8 @@ export function FileBrowserPage({
               onPreview: openPreview,
               onDownload,
               onRename: (f: FileNode) => {
-                setRenameTarget(f);
-                setRenameValue(f.name);
+                setSelectedId(f.id);
+                setRenamingId(f.id);
               },
               onShare: (f: FileNode) => setShareTarget(f),
               onPermissions: (f: FileNode) => setPermTarget(f),
@@ -1186,6 +1214,11 @@ export function FileBrowserPage({
               onDropOnFolderRow: (f: FileNode, e: DragEvent) => onDropOnFolder(e, f.id, f.name),
               // 내 드라이브 루트에서만 상단에 "공유" 가상 폴더 행을 고정한다.
               onOpenShared: showSharedVirtualRow ? openSharedVirtual : undefined,
+              selectedId,
+              onSelect: setSelectedId,
+              renamingId,
+              onRenameSubmit: submitRename,
+              onRenameCancel: () => setRenamingId(null),
             };
             return view === "grid" ? (
               <FileGrid items={items} {...rowProps} />
@@ -1325,30 +1358,7 @@ export function FileBrowserPage({
         />
       </Modal>
 
-      {/* 이름 변경 모달 */}
-      <Modal
-        open={renameTarget !== null}
-        title="이름 변경"
-        onClose={() => setRenameTarget(null)}
-        footer={
-          <>
-            <button className="btn btn-secondary" onClick={() => setRenameTarget(null)}>
-              취소
-            </button>
-            <button className="btn btn-primary" onClick={submitRename}>
-              변경
-            </button>
-          </>
-        }
-      >
-        <input
-          className="input"
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submitRename()}
-          autoFocus
-        />
-      </Modal>
+      {/* 이름 변경은 목록 안 제자리 편집(InlineNameInput)으로 처리한다 — 모달 없음 */}
 
       {/* 이동 대상 폴더 선택 */}
       <MoveModal
@@ -1529,6 +1539,15 @@ interface FileRowProps {
   onToggleFavorite: (f: FileNode) => void;
   /** 지정 시 목록 상단에 "공유" 가상 폴더 행을 고정 노출한다(내 드라이브 루트 전용). */
   onOpenShared?: () => void;
+  // --- 선택 (클릭=선택, 더블클릭=열기) ---
+  /** 현재 선택된 항목 id. "공유" 가상 행은 SHARED_VIRTUAL_ID. */
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+  // --- 제자리 이름 편집 (F2 / 이름 재클릭 / 행 액션) ---
+  /** 편집 중인 항목 id. 그 행만 이름 자리에 입력이 뜬다. */
+  renamingId: number | null;
+  onRenameSubmit: (f: FileNode, name: string) => void;
+  onRenameCancel: () => void;
   // --- 드래그 이동 ---
   /** 항목을 끌 수 있는지(컨테이너에 쓰기 권한이 있을 때만). */
   dragEnabled: boolean;
@@ -1624,7 +1643,60 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
   );
 }
 
+/**
+ * 항목의 이름 표시 — 편집 중이면 같은 자리에 입력이 뜬다.
+ * 표시 상태에서는 클릭 판정을 행이 맡으므로, 이 버튼은 키보드 포커스/Enter 진입점과
+ * "선택된 이름 재클릭 → 편집" 트리거 역할만 한다.
+ */
+function ItemName({
+  file: f,
+  coarse,
+  thumb,
+  children,
+  className,
+  ...p
+}: {
+  file: FileNode;
+  coarse: boolean;
+  /** 편집 중에도 그대로 남는 썸네일/아이콘. */
+  thumb: React.ReactNode;
+  /** 표시 상태의 이름 영역 (이름 + 배지 등). */
+  children: React.ReactNode;
+  className: string;
+} & FileRowProps) {
+  const clickToRename = useClickToRename({
+    // 터치는 한 번 탭이 곧 "열기"라 재클릭 편집이 성립하지 않는다.
+    enabled: !coarse && p.selectedId === f.id && rowCanWrite(f, p.canWrite),
+    onStart: () => p.onRename(f),
+  });
+
+  if (p.renamingId === f.id) {
+    // 편집 중에는 입력이 남는 폭을 다 쓰도록 flex-1 을 더한다.
+    return (
+      <div className={`${className} flex-1`}>
+        {thumb}
+        <InlineNameInput
+          file={f}
+          onSubmit={(name) => p.onRenameSubmit(f, name)}
+          onCancel={p.onRenameCancel}
+        />
+      </div>
+    );
+  }
+  return (
+    <button
+      className={className}
+      title={f.is_folder ? "더블클릭하면 폴더를 엽니다" : "더블클릭하면 미리봅니다"}
+      {...clickToRename}
+    >
+      {thumb}
+      {children}
+    </button>
+  );
+}
+
 function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
+  const coarse = useCoarsePointer();
   return (
     <div className="card overflow-x-auto">
       <table className="w-full text-sm">
@@ -1643,8 +1715,14 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           {/* 내 드라이브 루트 전용 "공유" 가상 폴더 고정 행 */}
           {p.onOpenShared && (
             <tr
-              className="group cursor-pointer border-b border-token hover:bg-[color:var(--bg-muted)]"
-              onClick={p.onOpenShared}
+              className={`group border-b border-token hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
+                p.selectedId === SHARED_VIRTUAL_ID ? ROW_SELECTED_CLASS : ""
+              }`}
+              {...rowOpenHandlers({
+                coarse,
+                select: () => p.onSelect(SHARED_VIRTUAL_ID),
+                open: p.onOpenShared,
+              })}
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2.5">
@@ -1666,12 +1744,20 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           {items.map((f) => (
             <tr
               key={f.id}
-              className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${
+              className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
                 p.dropTargetId === f.id
                   ? "bg-[color:var(--bg-muted)] outline outline-2 -outline-offset-2 outline-[color:var(--accent)]"
-                  : ""
+                  : p.selectedId === f.id
+                    ? ROW_SELECTED_CLASS
+                    : ""
               }`}
-              draggable={p.dragEnabled && rowCanWrite(f, p.canWrite)}
+              {...rowOpenHandlers({
+                coarse,
+                select: () => p.onSelect(f.id),
+                open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
+              })}
+              // 편집 중에는 글자를 긁는 동작이 드래그 이동으로 새지 않게 끈다.
+              draggable={p.dragEnabled && p.renamingId !== f.id && rowCanWrite(f, p.canWrite)}
               onDragStart={(e) => p.onDragStartItem(f, e)}
               onDragEnd={p.onDragEndItem}
               onDragOver={f.is_folder ? (e) => p.onDragOverFolder(f, e) : undefined}
@@ -1680,28 +1766,34 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
-                  <button
+                  <ItemName
+                    file={f}
+                    coarse={coarse}
                     className="flex min-w-0 items-center gap-2.5 text-left"
-                    onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
+                    thumb={
+                      /* 이미지면 미니 썸네일, 아니면 유형 아이콘 */
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
+                          f.is_folder ? "text-accent" : "text-muted"
+                        }`}
+                      >
+                        <Thumbnail
+                          file={f}
+                          className="h-8 w-8 rounded object-cover"
+                          fallback={f.is_folder ? <FolderIcon /> : <FileIcon />}
+                        />
+                      </span>
+                    }
+                    {...p}
                   >
-                    {/* 이미지면 미니 썸네일, 아니면 유형 아이콘 */}
-                    <span
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded ${
-                        f.is_folder ? "text-accent" : "text-muted"
-                      }`}
-                    >
-                      <Thumbnail
-                        file={f}
-                        className="h-8 w-8 rounded object-cover"
-                        fallback={f.is_folder ? <FolderIcon /> : <FileIcon />}
-                      />
-                    </span>
                     <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
                     {!f.is_folder && f.current_version >= 2 && (
                       <Badge tone="neutral">v{f.current_version}</Badge>
                     )}
-                  </button>
-                  <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
+                  </ItemName>
+                  <span {...ROW_ACTION_PROPS}>
+                    <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
+                  </span>
                 </div>
               </td>
               <td className="px-4 py-2.5 text-muted">
@@ -1720,7 +1812,10 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
-                <div className="flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                <div
+                  className="flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                  {...ROW_ACTION_PROPS}
+                >
                   <RowActions file={f} {...p} />
                 </div>
               </td>
@@ -1732,15 +1827,22 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   );
 }
 
-/** 썸네일 중심 그리드 뷰 (PRD 3.2). 폴더 클릭은 탐색, 파일 클릭은 미리보기. */
+/** 썸네일 중심 그리드 뷰 (PRD 3.2). 클릭은 선택, 더블클릭은 폴더 탐색/파일 미리보기. */
 function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
+  const coarse = useCoarsePointer();
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {/* 내 드라이브 루트 전용 "공유" 가상 폴더 카드 */}
       {p.onOpenShared && (
         <button
-          onClick={p.onOpenShared}
-          className="card relative flex flex-col overflow-hidden p-0 text-left transition-colors hover:bg-[color:var(--bg-muted)]"
+          {...rowOpenHandlers({
+            coarse,
+            select: () => p.onSelect(SHARED_VIRTUAL_ID),
+            open: p.onOpenShared,
+          })}
+          className={`card relative flex flex-col overflow-hidden p-0 text-left transition-colors hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
+            p.selectedId === SHARED_VIRTUAL_ID ? CARD_SELECTED_CLASS : ""
+          }`}
           title="공유받은 항목"
         >
           <span className="flex aspect-square w-full items-center justify-center bg-muted-token text-accent">
@@ -1755,10 +1857,20 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
       {items.map((f) => (
         <div
           key={f.id}
-          className={`group card relative flex flex-col overflow-hidden p-0 ${
-            p.dropTargetId === f.id ? "ring-2 ring-[color:var(--accent)]" : ""
+          className={`group card relative flex flex-col overflow-hidden p-0 ${ROW_BASE_CLASS} ${
+            p.dropTargetId === f.id
+              ? "ring-2 ring-[color:var(--accent)]"
+              : p.selectedId === f.id
+                ? CARD_SELECTED_CLASS
+                : ""
           }`}
-          draggable={p.dragEnabled && rowCanWrite(f, p.canWrite)}
+          {...rowOpenHandlers({
+            coarse,
+            select: () => p.onSelect(f.id),
+            open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
+          })}
+          // 편집 중에는 글자를 긁는 동작이 드래그 이동으로 새지 않게 끈다.
+          draggable={p.dragEnabled && p.renamingId !== f.id && rowCanWrite(f, p.canWrite)}
           onDragStart={(e) => p.onDragStartItem(f, e)}
           onDragEnd={p.onDragEndItem}
           onDragOver={f.is_folder ? (e) => p.onDragOverFolder(f, e) : undefined}
@@ -1766,14 +1878,13 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           onDrop={f.is_folder ? (e) => p.onDropOnFolderRow(f, e) : undefined}
         >
           {/* 즐겨찾기 별 — 활성이면 항상, 아니면 hover 시 노출 */}
-          <span className="absolute right-1.5 top-1.5 z-10">
+          <span className="absolute right-1.5 top-1.5 z-10" {...ROW_ACTION_PROPS}>
             <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />
           </span>
-          {/* 썸네일/아이콘 영역 (정사각형) */}
+          {/* 썸네일/아이콘 영역 (정사각형) — 클릭 판정은 카드가 맡는다 */}
           <button
             className="relative flex aspect-square w-full items-center justify-center overflow-hidden bg-muted-token"
-            onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
-            title={f.is_folder ? "폴더 열기" : "미리보기"}
+            title={f.is_folder ? "더블클릭하면 폴더를 엽니다" : "더블클릭하면 미리봅니다"}
           >
             <span
               className={`flex items-center justify-center ${
@@ -1807,15 +1918,15 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
 
           {/* 이름 + 동작 */}
           <div className="flex flex-col gap-1 border-t border-token px-2.5 py-2">
-            <button
-              className="min-w-0 text-left"
-              onClick={() => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f))}
-            >
+            <ItemName file={f} coarse={coarse} className="min-w-0 text-left" thumb={null} {...p}>
               <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
-              <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
-            </button>
+            </ItemName>
+            <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
             {/* 좁은 셀에서 넘치지 않도록 아이콘은 줄바꿈 허용 */}
-            <div className="flex flex-wrap opacity-0 transition-opacity group-hover:opacity-100">
+            <div
+              className="flex flex-wrap opacity-0 transition-opacity group-hover:opacity-100"
+              {...ROW_ACTION_PROPS}
+            >
               <RowActions file={f} {...p} />
             </div>
           </div>
