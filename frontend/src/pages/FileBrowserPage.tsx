@@ -57,8 +57,10 @@ import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
 import {
+  CARD_ACTIVE_CLASS,
   CARD_SELECTED_CLASS,
   ROW_ACTION_PROPS,
+  ROW_ACTIVE_CLASS,
   ROW_BASE_CLASS,
   ROW_SELECTED_CLASS,
   rowOpenHandlers,
@@ -175,11 +177,18 @@ export function FileBrowserPage({
   );
   const [previewTarget, setPreviewTarget] = useState<FileNode | null>(null);
   /**
-   * 클릭으로 고른 항목들 (열기는 더블클릭). Ctrl/Cmd 로 토글, Shift 로 범위, 체크박스로 누적한다.
-   * 목록이 바뀌면 아래 effect 에서 해제한다. "공유" 가상 행은 SHARED_VIRTUAL_ID 로 함께 담긴다.
+   * 체크 선택된 항목들 — 선택 액션 바(일괄 다운로드)의 대상이다. 체크박스, Ctrl/Cmd 토글,
+   * Shift 범위로만 담긴다. 클릭 한 번은 여기에 손대지 않는다(→ activeId).
+   * 목록이 바뀌면 아래 effect 에서 해제한다.
    */
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  /** Shift 범위 선택의 기준점 — 마지막으로 "단독/토글"로 고른 항목. */
+  /**
+   * 클릭 한 번으로 잡히는 "현재 항목". 하이라이트와 F2 이름 편집의 기준일 뿐이라 체크와는
+   * 따로 논다 — 폴더를 더블클릭해 들어갈 때 체크가 딸려 들어오지 않게 하려는 분리다.
+   * "공유" 가상 행은 SHARED_VIRTUAL_ID 로 여기에만 담긴다(체크 대상이 아니다).
+   */
+  const [activeId, setActiveId] = useState<number | null>(null);
+  /** Shift 범위 선택의 기준점 — 마지막으로 클릭/토글한 항목. */
   const anchorRef = useRef<number | null>(null);
   // 드라이브 홈(루트)에서만 노출하는 "최근 항목" 스트립 데이터 (Phase 8-3).
   const [recent, setRecent] = useState<FileNode[]>([]);
@@ -419,22 +428,27 @@ export function FileBrowserPage({
   // 폴더를 옮기거나 페이지를 넘기면 이전 선택/편집은 화면에 없으므로 해제한다.
   useEffect(() => {
     setSelectedIds([]);
+    setActiveId(null);
     anchorRef.current = null;
     setRenamingId(null);
   }, [parentId, page]);
 
-  // --- 선택 (클릭=단독, Ctrl/Cmd=토글, Shift=범위, 체크박스=누적) --------------
+  // --- 현재 항목(클릭) / 체크 선택(체크박스·Ctrl·Shift) ------------------------
 
-  /** 제자리 편집·이름 변경처럼 대상이 하나여야 하는 동작의 기준. */
-  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const allSelected = items.length > 0 && items.every((f) => selectedIds.includes(f.id));
-  /** 실제로 내려받을 수 있는 선택분 — "공유" 가상 행은 실물이 아니라 제외한다. */
-  const downloadableSelection = selectedIds.filter((id) => id !== SHARED_VIRTUAL_ID);
 
+  /** 클릭 한 번 — 현재 항목만 옮긴다. 체크 선택은 건드리지 않는다. */
+  const focusItem = (id: number) => {
+    setActiveId(id);
+    anchorRef.current = id;
+  };
+
+  /** 체크 선택 변경 — 체크박스(누적 토글)와 Ctrl/Shift 클릭이 함께 쓴다. */
   const selectItem = (id: number, mods: SelectMods) => {
+    setActiveId(id);
     setSelectedIds((prev) => {
       // Shift 범위는 화면 순서(items)를 좌표계로 쓴다. 기준점이나 대상이 목록 밖이면
-      // (예: "공유" 가상 행) 범위를 만들 수 없으므로 단독 선택으로 떨어진다.
+      // (예: "공유" 가상 행) 범위를 만들 수 없으므로 토글로 떨어진다.
       if (mods.range && anchorRef.current !== null) {
         const ids = items.map((f) => f.id);
         const from = ids.indexOf(anchorRef.current);
@@ -445,10 +459,7 @@ export function FileBrowserPage({
         }
       }
       anchorRef.current = id;
-      if (mods.toggle) {
-        return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      }
-      return [id];
+      return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
     });
   };
 
@@ -462,19 +473,20 @@ export function FileBrowserPage({
     setSelectedIds(allSelected ? [] : items.map((f) => f.id));
   };
 
-  // 선택한 항목을 F2 로 제자리 편집 (탐색기 관례). 입력/다이얼로그 안에서 누른 키는
-  // 그쪽에서 stopPropagation 하므로 여기까지 오지 않는다.
+  // 현재 항목을 F2 로 제자리 편집 (탐색기 관례). 대상은 체크 선택이 아니라 클릭으로 잡힌
+  // 항목 하나다. 입력/다이얼로그 안에서 누른 키는 그쪽에서 stopPropagation 하므로 여기까지
+  // 오지 않는다.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "F2" || selectedId === null) return;
-      const target = items.find((f) => f.id === selectedId);
+      if (e.key !== "F2" || activeId === null) return;
+      const target = items.find((f) => f.id === activeId);
       if (!target || !rowCanWrite(target, canWrite)) return;
       e.preventDefault();
       setRenamingId(target.id);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedId, items, canWrite]);
+  }, [activeId, items, canWrite]);
 
   // --- 탐색 -----------------------------------------------------------------
 
@@ -889,7 +901,7 @@ export function FileBrowserPage({
    * 개수·용량 상한 초과(413) 등 서버 안내는 그대로 토스트에 싣는다.
    */
   const downloadSelection = async () => {
-    const ids = downloadableSelection;
+    const ids = selectedIds;
     if (ids.length === 0) return;
     const single = ids.length === 1 ? items.find((f) => f.id === ids[0]) : undefined;
     try {
@@ -1243,8 +1255,7 @@ export function FileBrowserPage({
               onPreview: openPreview,
               onDownload,
               onRename: (f: FileNode) => {
-                setSelectedIds([f.id]);
-                anchorRef.current = f.id;
+                focusItem(f.id);
                 setRenamingId(f.id);
               },
               onShare: (f: FileNode) => setShareTarget(f),
@@ -1278,6 +1289,8 @@ export function FileBrowserPage({
               onDropOnFolderRow: (f: FileNode, e: DragEvent) => onDropOnFolder(e, f.id, f.name),
               // 내 드라이브 루트에서만 상단에 "공유" 가상 폴더 행을 고정한다.
               onOpenShared: showSharedVirtualRow ? openSharedVirtual : undefined,
+              activeId,
+              onFocus: focusItem,
               selectedIds,
               onSelect: selectItem,
               allSelected,
@@ -1318,19 +1331,18 @@ export function FileBrowserPage({
         )}
 
         {/*
-          선택 액션 바 — 항목을 고르면 목록 아래에 떠서 따라온다. 지금은 다운로드만 싣는다
-          (여러 항목·폴더는 서버가 ZIP 하나로 묶어 스트리밍한다).
-          목록 "위"가 아니라 "아래"에 두는 것이 핵심이다: 클릭 한 번에 바가 생기면서 행이
-          밀리면, 더블클릭의 두 번째 클릭이 옆 행에 떨어져 엉뚱한 폴더가 열린다.
-          "공유" 가상 행은 내려받을 실물이 없어 세지 않는다.
+          선택 액션 바 — 체크한 항목이 있으면 목록 아래에 떠서 따라온다. 지금은 다운로드만
+          싣는다 (여러 항목·폴더는 서버가 ZIP 하나로 묶어 스트리밍한다).
+          목록 "위"가 아니라 "아래"에 두는 것이 핵심이다: 바가 생기면서 행이 밀리면 곧이어
+          누르는 클릭이 옆 행에 떨어진다.
         */}
-        {downloadableSelection.length > 0 && (
+        {selectedIds.length > 0 && (
           <div className="pointer-events-none sticky bottom-0 z-20 flex justify-center pt-3">
             <div
               className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full border border-token bg-[color:var(--bg-secondary)] px-4 py-2 text-sm shadow-lg"
               data-testid="selection-bar"
             >
-              <span className="font-medium">{downloadableSelection.length}개 선택됨</span>
+              <span className="font-medium">{selectedIds.length}개 선택됨</span>
               <button className="btn btn-primary" onClick={() => void downloadSelection()}>
                 <DownloadIcon width={16} height={16} />
                 다운로드
@@ -1630,8 +1642,11 @@ interface FileRowProps {
   onToggleFavorite: (f: FileNode) => void;
   /** 지정 시 목록 상단에 "공유" 가상 폴더 행을 고정 노출한다(내 드라이브 루트 전용). */
   onOpenShared?: () => void;
-  // --- 선택 (클릭=선택, 더블클릭=열기, Ctrl/Shift·체크박스로 다중 선택) ---
-  /** 현재 선택된 항목 id 들. "공유" 가상 행은 SHARED_VIRTUAL_ID. */
+  // --- 현재 항목 / 체크 선택 (클릭=현재 항목, 더블클릭=열기, 체크박스·Ctrl/Shift=체크) ---
+  /** 클릭으로 잡힌 현재 항목. 하이라이트·F2 기준일 뿐 체크와는 무관하다. */
+  activeId: number | null;
+  onFocus: (id: number) => void;
+  /** 체크된 항목 id 들 — 선택 액션 바의 대상. */
   selectedIds: number[];
   onSelect: (id: number, mods: SelectMods) => void;
   /** 목록 전체가 선택됐는지 (헤더 체크박스 상태). */
@@ -1836,11 +1851,12 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           {p.onOpenShared && (
             <tr
               className={`group border-b border-token hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
-                p.selectedIds.includes(SHARED_VIRTUAL_ID) ? ROW_SELECTED_CLASS : ""
+                p.activeId === SHARED_VIRTUAL_ID ? ROW_ACTIVE_CLASS : ""
               }`}
+              // 내려받을 실물이 없어 체크 대상이 아니다 — 현재 항목 표시까지만 한다.
               {...rowOpenHandlers({
                 coarse,
-                select: (mods) => p.onSelect(SHARED_VIRTUAL_ID, mods),
+                focus: () => p.onFocus(SHARED_VIRTUAL_ID),
                 open: p.onOpenShared,
               })}
             >
@@ -1871,10 +1887,13 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                   ? "bg-[color:var(--bg-muted)] outline outline-2 -outline-offset-2 outline-[color:var(--accent)]"
                   : p.selectedIds.includes(f.id)
                     ? ROW_SELECTED_CLASS
-                    : ""
+                    : p.activeId === f.id
+                      ? ROW_ACTIVE_CLASS
+                      : ""
               }`}
               {...rowOpenHandlers({
                 coarse,
+                focus: () => p.onFocus(f.id),
                 select: (mods) => p.onSelect(f.id, mods),
                 open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
               })}
@@ -1955,7 +1974,7 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   );
 }
 
-/** 썸네일 중심 그리드 뷰 (PRD 3.2). 클릭은 선택, 더블클릭은 폴더 탐색/파일 미리보기. */
+/** 썸네일 중심 그리드 뷰 (PRD 3.2). 클릭은 현재 항목, 더블클릭은 폴더 탐색/파일 미리보기. */
 function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   const coarse = useCoarsePointer();
   return (
@@ -1965,11 +1984,12 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
         <button
           {...rowOpenHandlers({
             coarse,
-            select: (mods) => p.onSelect(SHARED_VIRTUAL_ID, mods),
+            // 내려받을 실물이 없어 체크 대상이 아니다 — 현재 항목 표시까지만 한다.
+            focus: () => p.onFocus(SHARED_VIRTUAL_ID),
             open: p.onOpenShared,
           })}
           className={`card relative flex flex-col overflow-hidden p-0 text-left transition-colors hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
-            p.selectedIds.includes(SHARED_VIRTUAL_ID) ? CARD_SELECTED_CLASS : ""
+            p.activeId === SHARED_VIRTUAL_ID ? CARD_ACTIVE_CLASS : ""
           }`}
           title="공유받은 항목"
         >
@@ -1990,10 +2010,13 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               ? "ring-2 ring-[color:var(--accent)]"
               : p.selectedIds.includes(f.id)
                 ? CARD_SELECTED_CLASS
-                : ""
+                : p.activeId === f.id
+                  ? CARD_ACTIVE_CLASS
+                  : ""
           }`}
           {...rowOpenHandlers({
             coarse,
+            focus: () => p.onFocus(f.id),
             select: (mods) => p.onSelect(f.id, mods),
             open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
           })}

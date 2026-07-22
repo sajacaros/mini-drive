@@ -50,7 +50,7 @@ test.describe("이름 제자리 편집", () => {
       await makeFolder(page, before);
       const row = page.getByRole("row", { name: new RegExp(before) });
 
-      // 1. 한 번 클릭 = 선택. 이 상태에서 F2 가 편집을 연다.
+      // 1. 한 번 클릭 = 현재 항목(체크는 켜지지 않는다). 이 상태에서 F2 가 편집을 연다.
       await row.getByText(before).click();
       await page.keyboard.press("F2");
 

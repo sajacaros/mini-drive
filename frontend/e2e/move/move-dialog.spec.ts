@@ -73,7 +73,7 @@ test.describe("이동", () => {
       await expect(toast(page, new RegExp(`${itemName}.*${dstName}.*이동`))).toBeVisible();
       await expect(itemRow).not.toBeVisible();
 
-      // 3. 목적지 폴더를 열면 그 안에 있다 (한 번 클릭은 선택, 열기는 더블클릭)
+      // 3. 목적지 폴더를 열면 그 안에 있다 (한 번 클릭은 현재 항목, 열기는 더블클릭)
       await page.getByRole("row", { name: new RegExp(dstName) }).getByText(dstName).dblclick();
       await expect(page.getByRole("row", { name: new RegExp(itemName) })).toBeVisible();
 
@@ -121,7 +121,7 @@ test.describe("이동", () => {
       await expect(toast(page, new RegExp(`${itemName}.*${dstName}.*이동`))).toBeVisible();
       await expect(itemRow).not.toBeVisible();
 
-      // 목적지 안에 실제로 들어갔는지 확인 (한 번 클릭은 선택, 열기는 더블클릭)
+      // 목적지 안에 실제로 들어갔는지 확인 (한 번 클릭은 현재 항목, 열기는 더블클릭)
       await dstRow.getByText(dstName).dblclick();
       await expect(page.getByRole("row", { name: new RegExp(itemName) })).toBeVisible();
 

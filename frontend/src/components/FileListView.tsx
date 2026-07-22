@@ -3,7 +3,7 @@
  * FileBrowserPage 의 풀 행 액션 대신 다운로드·즐겨찾기만 버튼으로 노출한다. 리스트·그리드를
  * 모두 지원하며 썸네일/포맷 헬퍼는 기존 것을 그대로 재사용한다.
  *
- * 클릭 한 번은 선택, 더블클릭이 "열기"다(터치는 한 번 탭). 미리보기도 이 "열기"에 얹혀 있어
+ * 클릭 한 번은 현재 항목 표시, 더블클릭이 "열기"다(터치는 한 번 탭). 미리보기도 이 "열기"에 얹혀 있어
  * 따로 버튼을 두지 않는다 — 파일은 onPreview, 폴더는 onOpenFolder 로 넘겨 호출부가 해당
  * 폴더로 이동시킨다(최근 목록은 파일만 담기므로 실질적으로 즐겨찾기에서만 폴더가 나타난다).
  * 다운로드 버튼은 폴더에도 둔다 — 폴더는 하위 전체가 ZIP 하나로 내려온다.
@@ -19,10 +19,10 @@ import { DownloadIcon, FileIcon, FolderIcon } from "@/components/icons";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionLabel, permissionTone } from "@/lib/labels";
 import {
-  CARD_SELECTED_CLASS,
+  CARD_ACTIVE_CLASS,
   ROW_ACTION_PROPS,
+  ROW_ACTIVE_CLASS,
   ROW_BASE_CLASS,
-  ROW_SELECTED_CLASS,
   rowOpenHandlers,
   useCoarsePointer,
 } from "@/lib/rowOpen";
@@ -36,26 +36,29 @@ export interface FileListViewProps {
   onToggleFavorite: (f: FileNode) => void;
 }
 
-/** 선택은 이 뷰 안에서만 의미가 있어 내부 상태로 들고 있는다. */
+/**
+ * 이 뷰에는 체크박스가 없어 "현재 항목" 하나만 들고 있으면 된다(하이라이트 용도).
+ * 상위 화면이 쓰지 않으므로 내부 상태로 둔다.
+ */
 interface ViewProps extends FileListViewProps {
-  selectedId: number | null;
-  onSelect: (id: number) => void;
+  activeId: number | null;
+  onFocus: (id: number) => void;
   coarse: boolean;
 }
 
-/** 행/카드에 그대로 펼치는 선택·열기 핸들러 (파일=미리보기, 폴더=열기). */
+/** 행/카드에 그대로 펼치는 현재 항목·열기 핸들러 (파일=미리보기, 폴더=열기). */
 function openOf(f: FileNode, p: ViewProps) {
   return rowOpenHandlers({
     coarse: p.coarse,
-    select: () => p.onSelect(f.id),
+    focus: () => p.onFocus(f.id),
     open: () => (f.is_folder ? p.onOpenFolder(f) : p.onPreview(f)),
   });
 }
 
 export function FileListView(props: FileListViewProps) {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [activeId, setActiveId] = useState<number | null>(null);
   const coarse = useCoarsePointer();
-  const p: ViewProps = { ...props, selectedId, onSelect: setSelectedId, coarse };
+  const p: ViewProps = { ...props, activeId, onFocus: setActiveId, coarse };
   return (props.view ?? "list") === "grid" ? <Grid {...p} /> : <Table {...p} />;
 }
 
@@ -111,7 +114,7 @@ function Table(p: ViewProps) {
             <tr
               key={f.id}
               className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
-                p.selectedId === f.id ? ROW_SELECTED_CLASS : ""
+                p.activeId === f.id ? ROW_ACTIVE_CLASS : ""
               }`}
               {...openOf(f, p)}
             >
@@ -188,7 +191,7 @@ function Grid(p: ViewProps) {
         <div
           key={f.id}
           className={`group card relative flex flex-col overflow-hidden p-0 ${ROW_BASE_CLASS} ${
-            p.selectedId === f.id ? CARD_SELECTED_CLASS : ""
+            p.activeId === f.id ? CARD_ACTIVE_CLASS : ""
           }`}
           {...openOf(f, p)}
         >

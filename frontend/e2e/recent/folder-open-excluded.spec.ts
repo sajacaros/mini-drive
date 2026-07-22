@@ -15,7 +15,7 @@ test.describe("최근 이용 콘텐츠", () => {
       await page.goto("/");
 
       // 1. '새 폴더'로 테스트 폴더를 생성한 뒤 폴더명을 더블클릭해 하위 폴더로 진입(열람)한다
-      //    (한 번 클릭은 선택일 뿐 — lib/rowOpen.ts)
+      //    (한 번 클릭은 현재 항목 표시일 뿐 — lib/rowOpen.ts)
       await page.getByRole("button", { name: "새 폴더" }).click();
       await expect(page.getByRole("heading", { name: "새 폴더" })).toBeVisible();
       await page.getByRole("textbox", { name: "폴더 이름" }).fill(folderName);

@@ -52,7 +52,7 @@ test.describe("좌측 네비게이션", () => {
       await page.getByRole("button", { name: "만들기" }).click();
       await expect(page.getByText("폴더를 만들었습니다.")).toBeVisible();
 
-      // 목록에서 한 번 클릭은 선택일 뿐이고, 폴더를 여는 건 더블클릭이다(lib/rowOpen.ts).
+      // 목록에서 한 번 클릭은 현재 항목 표시일 뿐이고, 폴더를 여는 건 더블클릭이다(lib/rowOpen.ts).
       await page.getByRole("button", { name: outer }).dblclick();
       await page.getByRole("button", { name: "새 폴더" }).click();
       await page.getByPlaceholder("폴더 이름").fill(inner);

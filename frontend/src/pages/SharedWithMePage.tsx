@@ -17,8 +17,8 @@ import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import {
   ROW_ACTION_PROPS,
+  ROW_ACTIVE_CLASS,
   ROW_BASE_CLASS,
-  ROW_SELECTED_CLASS,
   rowOpenHandlers,
   useCoarsePointer,
 } from "@/lib/rowOpen";
@@ -27,8 +27,8 @@ export function SharedWithMePage() {
   const toast = useToast();
   const navigate = useNavigate();
   const coarse = useCoarsePointer();
-  // 클릭 = 선택, 더블클릭 = 열기. 같은 파일이 그룹별로 여러 번 나오므로 키에 group_id 를 섞는다.
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // 클릭 = 현재 항목, 더블클릭 = 열기. 같은 파일이 그룹별로 여러 번 나오므로 키에 group_id 를 섞는다.
+  const [activeKey, setActiveKey] = useState<string | null>(null);
 
   const [items, setItems] = useState<SharedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -109,11 +109,11 @@ export function SharedWithMePage() {
                     <tr
                       key={key}
                       className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${ROW_BASE_CLASS} ${
-                        selectedKey === key ? ROW_SELECTED_CLASS : ""
+                        activeKey === key ? ROW_ACTIVE_CLASS : ""
                       }`}
                       {...rowOpenHandlers({
                         coarse,
-                        select: () => setSelectedKey(key),
+                        focus: () => setActiveKey(key),
                         open: () => onOpen(item),
                       })}
                     >

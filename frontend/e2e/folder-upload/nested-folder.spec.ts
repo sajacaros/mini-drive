@@ -83,7 +83,7 @@ test.describe("폴더 업로드 (배치)", () => {
       await expect(rootRow).toBeVisible();
 
       // 5. 트리를 따라 내려가며 구조가 보존됐는지 확인한다.
-      // 폴더 열기는 더블클릭이다(한 번 클릭은 선택 — lib/rowOpen.ts).
+      // 폴더 열기는 더블클릭이다(한 번 클릭은 현재 항목 — lib/rowOpen.ts).
       await page.getByRole("button", { name: rootName }).dblclick();
       await expect(page.getByRole("button", { name: "docs" })).toBeVisible();
       await expect(page.getByRole("button", { name: "root.txt" })).toBeVisible();
