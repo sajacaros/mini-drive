@@ -1,7 +1,9 @@
 /**
  * 데일리 투두 — 날짜별 할 일. 날짜를 이동하며 조회하고(자정이 지나 새 날을 열면 활성 루틴이
- * 서버에서 자동 물질화된다), 각 항목을 체크(done)/건너뜀(skipped)으로 토글한다. 임시 항목은
- * 그날 직접 추가/삭제할 수 있고, 루틴 파생 항목은 배지로 구분해 X(건너뜀)로만 처리한다.
+ * 서버에서 자동 물질화된다), 각 항목의 체크를 누를 때마다 상태가 빈칸 → 완료(v) → 건너뜀(x) →
+ * 빈칸 으로 돈다. 건너뜀 전용 버튼을 따로 두면 그 버튼을 못 찾고 "x 는 선택 못 하나" 가 되므로,
+ * 컨트롤 하나로 세 상태를 모두 돌린다. 임시 항목은 그날 직접 추가/삭제할 수 있고, 루틴 파생
+ * 항목은 배지로 구분한다(삭제 불가 — 건너뜀으로 처리).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -26,6 +28,19 @@ import {
   XIcon,
 } from "@/components/icons";
 import { addDays, formatDayLabel, todayStr } from "@/lib/localDate";
+
+/** 체크를 누를 때 도는 순서. 빈칸 → 완료(v) → 건너뜀(x) → 빈칸. */
+const NEXT_STATUS: Record<TodoStatus, TodoStatus> = {
+  pending: "done",
+  done: "skipped",
+  skipped: "pending",
+};
+
+const STATUS_LABEL: Record<TodoStatus, string> = {
+  pending: "미완료",
+  done: "완료",
+  skipped: "건너뜀",
+};
 
 export function TodoPage() {
   const toast = useToast();
@@ -81,10 +96,9 @@ export function TodoPage() {
     }
   };
 
-  const toggleDone = (item: TodoItem) =>
-    setStatus(item, item.status === "done" ? "pending" : "done");
-  const toggleSkip = (item: TodoItem) =>
-    setStatus(item, item.status === "skipped" ? "pending" : "skipped");
+  /** 체크 한 번에 상태를 한 칸씩 돌린다: 빈칸 → 완료(v) → 건너뜀(x) → 빈칸. */
+  const cycleStatus = (item: TodoItem) =>
+    setStatus(item, NEXT_STATUS[item.status]);
 
   const add = async () => {
     const title = newTitle.trim();
@@ -313,8 +327,7 @@ export function TodoPage() {
                   item={item}
                   dragging={draggingId === item.id}
                   onDragStart={() => setDraggingId(item.id)}
-                  onToggleDone={() => void toggleDone(item)}
-                  onToggleSkip={() => void toggleSkip(item)}
+                  onCycleStatus={() => void cycleStatus(item)}
                   onDelete={item.routine_id === null ? () => void remove(item) : undefined}
                 />
               ))}
@@ -338,15 +351,13 @@ function TodoRow({
   item,
   dragging,
   onDragStart,
-  onToggleDone,
-  onToggleSkip,
+  onCycleStatus,
   onDelete,
 }: {
   item: TodoItem;
   dragging: boolean;
   onDragStart: () => void;
-  onToggleDone: () => void;
-  onToggleSkip: () => void;
+  onCycleStatus: () => void;
   onDelete?: () => void;
 }) {
   const done = item.status === "done";
@@ -371,21 +382,28 @@ function TodoRow({
         <GripIcon width={16} height={16} />
       </span>
 
-      {/* 체크 (완료) — 미완료 상태는 채움 없이 테두리만으로 존재를 알리므로, 장식용인
-          --border-color 로는 부족하다(카드 위 1.4:1). 컨트롤 경계에 요구되는 3:1 을
-          넘기려면 --text-secondary 를 써야 한다 (4테마 최저 3.07:1). */}
+      {/* 상태 체크 — 누를 때마다 빈칸 → 완료(v) → 건너뜀(x) → 빈칸 으로 돈다.
+          미완료 상태는 채움 없이 테두리만으로 존재를 알리므로, 장식용인 --border-color 로는
+          부족하다(카드 위 1.4:1). 컨트롤 경계에 요구되는 3:1 을 넘기려면 --text-secondary 를
+          써야 한다 (4테마 최저 3.07:1). */}
       <button
         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors"
         style={{
-          borderColor: done ? "var(--success)" : "var(--text-secondary)",
-          background: done ? "var(--success)" : "transparent",
-          color: done ? "var(--bg-primary)" : "transparent",
+          borderColor: done
+            ? "var(--success)"
+            : skipped
+              ? "var(--danger)"
+              : "var(--text-secondary)",
+          background: done ? "var(--success)" : skipped ? "var(--danger)" : "transparent",
+          color: done || skipped ? "var(--bg-primary)" : "transparent",
         }}
-        aria-label={done ? "완료 해제" : "완료"}
-        aria-pressed={done}
-        onClick={onToggleDone}
+        // 세 상태를 도는 버튼이라 aria-pressed(2상태)로는 표현되지 않는다. 현재 상태와 다음
+        // 상태를 이름에 함께 담아 스크린리더가 "지금 무엇이고 누르면 무엇이 되는지"를 읽게 한다.
+        aria-label={`상태: ${STATUS_LABEL[item.status]} (누르면 ${STATUS_LABEL[NEXT_STATUS[item.status]]})`}
+        title={`${STATUS_LABEL[item.status]} — 누르면 ${STATUS_LABEL[NEXT_STATUS[item.status]]}`}
+        onClick={onCycleStatus}
       >
-        <CheckIcon width={14} height={14} />
+        {skipped ? <XIcon width={14} height={14} /> : <CheckIcon width={14} height={14} />}
       </button>
 
       <div className="min-w-0 flex-1">
@@ -407,21 +425,6 @@ function TodoRow({
           </span>
         )}
       </div>
-
-      {/* 건너뜀 (X) */}
-      <button
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
-        style={{
-          color: skipped ? "var(--danger)" : "var(--text-secondary)",
-          background: skipped ? "color-mix(in srgb, var(--danger) 16%, transparent)" : "transparent",
-        }}
-        title={skipped ? "건너뜀 해제" : "오늘은 건너뜀"}
-        aria-label={skipped ? "건너뜀 해제" : "건너뜀"}
-        aria-pressed={skipped}
-        onClick={onToggleSkip}
-      >
-        <XIcon width={15} height={15} />
-      </button>
 
       {onDelete && (
         <button
