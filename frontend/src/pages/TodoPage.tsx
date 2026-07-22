@@ -183,7 +183,7 @@ export function TodoPage() {
   }, [draggingId]);
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 py-4">
         <PageHeader>
           <div className="flex flex-wrap items-center justify-between gap-4">

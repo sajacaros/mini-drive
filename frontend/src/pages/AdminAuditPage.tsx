@@ -73,7 +73,7 @@ export function AdminAuditPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 py-4">
         <PageHeader align="start">
         <h1 className="text-lg font-semibold">감사 로그</h1>
@@ -152,7 +152,7 @@ export function AdminAuditPage() {
         ) : logs.length === 0 ? (
           <EmptyState title="감사 로그가 없습니다" />
         ) : (
-          <div className="card overflow-hidden">
+          <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

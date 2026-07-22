@@ -131,7 +131,7 @@ export function GroupDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen flex-col">
+      <div className="flex h-full flex-col">
         <LoadingState />
       </div>
     );
@@ -139,14 +139,14 @@ export function GroupDetailPage() {
 
   if (error || !group) {
     return (
-      <div className="flex h-screen flex-col p-6">
+      <div className="flex h-full flex-col p-6">
         <ErrorState message={error ?? "그룹을 찾을 수 없습니다."} onRetry={load} />
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       {/* 헤더: breadcrumb + 그룹명 */}
       <div className="border-b border-token px-6 py-4">
         <PageHeader align="start">
@@ -192,7 +192,7 @@ export function GroupDetailPage() {
           )}
         </div>
 
-        <div className="card overflow-hidden">
+        <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-token text-left text-xs text-muted">

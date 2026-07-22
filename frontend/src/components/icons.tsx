@@ -279,6 +279,20 @@ export const RepeatIcon = (p: IconProps) => (
   </svg>
 );
 
+export const MenuIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M3 6h18M3 12h18M3 18h18" />
+  </svg>
+);
+
+/** 사이드바 접기/펼치기 토글용 — 좌측 패널이 있는 사각형. */
+export const PanelLeftIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M9 3v18" />
+  </svg>
+);
+
 export const ChevronLeftIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="m15 18-6-6 6-6" />

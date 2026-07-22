@@ -82,7 +82,7 @@ export function AdminSharesPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 pt-4">
         <PageHeader align="start">
           <h1 className="text-lg font-semibold">공유 링크</h1>
@@ -108,7 +108,7 @@ export function AdminSharesPage() {
         ) : shares.length === 0 ? (
           <EmptyState title="공유 링크가 없습니다" />
         ) : (
-          <div className="card overflow-hidden">
+          <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

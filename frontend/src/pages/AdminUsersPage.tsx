@@ -136,7 +136,7 @@ export function AdminUsersPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 pt-4">
         <PageHeader align="start">
           <h1 className="text-lg font-semibold">사용자 관리</h1>
@@ -162,7 +162,7 @@ export function AdminUsersPage() {
         ) : users.length === 0 ? (
           <EmptyState title="사용자가 없습니다" />
         ) : (
-          <div className="card overflow-hidden">
+          <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

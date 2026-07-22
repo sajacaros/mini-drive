@@ -59,7 +59,7 @@ export function SharedWithMePage() {
   };
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 py-4">
         <h1 className="text-lg font-semibold">공유됨</h1>
         <p className="mt-0.5 text-sm text-muted">
@@ -79,7 +79,7 @@ export function SharedWithMePage() {
             hint="그룹에 초대되고 파일 권한을 받으면 여기에 표시됩니다."
           />
         ) : (
-          <div className="card overflow-hidden">
+          <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

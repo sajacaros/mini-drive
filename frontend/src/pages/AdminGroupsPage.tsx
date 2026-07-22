@@ -41,10 +41,10 @@ export function AdminGroupsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 py-4">
         <PageHeader>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-lg font-semibold">그룹</h1>
               <p className="mt-0.5 text-sm text-muted">전체 {total}개</p>
@@ -72,7 +72,7 @@ export function AdminGroupsPage() {
         ) : groups.length === 0 ? (
           <EmptyState title="그룹이 없습니다" />
         ) : (
-          <div className="card overflow-hidden">
+          <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

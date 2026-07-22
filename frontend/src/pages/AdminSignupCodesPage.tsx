@@ -187,10 +187,10 @@ export function AdminSignupCodesPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 py-4">
         <PageHeader>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-lg font-semibold">가입 코드</h1>
             <button className="btn btn-primary" onClick={openCreate}>
               코드 발급
@@ -207,7 +207,7 @@ export function AdminSignupCodesPage() {
         ) : codes.length === 0 ? (
           <EmptyState title="발급된 가입 코드가 없습니다" hint="코드를 발급하면 구성원이 가입할 수 있습니다." />
         ) : (
-          <div className="card overflow-hidden">
+          <div className="card overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

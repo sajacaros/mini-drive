@@ -748,11 +748,12 @@ export function FileBrowserPage({
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       {/* 헤더: breadcrumb + 액션 + 프로필 칩 */}
       <div className="border-b border-token px-6 py-4">
         <PageHeader>
-          <div className="flex items-center justify-between gap-4">
+          {/* 좁은 화면에서는 브레드크럼과 액션이 두 줄로 나뉜다(한 줄로 두면 업로드 버튼이 잘린다). */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
         <nav className="flex min-w-0 items-center gap-1 text-sm">
           {path.map((crumb, i) => (
             <span key={i} className="flex items-center gap-1">
@@ -772,7 +773,7 @@ export function FileBrowserPage({
           ))}
         </nav>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* 보기 전환: 목록 / 그리드(썸네일) */}
           <div className="flex items-center rounded-lg border border-token p-0.5">
             <button
@@ -1357,7 +1358,7 @@ export function SharedFolderBrowserPage() {
 
   if (Number.isNaN(id) || notFound) {
     return (
-      <div className="flex h-screen flex-col p-6">
+      <div className="flex h-full flex-col p-6">
         <ErrorState
           message="공유 폴더를 열 수 없습니다."
           onRetry={() => navigate("/", { replace: true })}
@@ -1368,7 +1369,7 @@ export function SharedFolderBrowserPage() {
 
   if (name == null) {
     return (
-      <div className="flex h-screen flex-col">
+      <div className="flex h-full flex-col">
         <LoadingState />
       </div>
     );
@@ -1488,7 +1489,7 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
 
 function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   return (
-    <div className="card overflow-hidden">
+    <div className="card overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">

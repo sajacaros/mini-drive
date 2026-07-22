@@ -65,7 +65,7 @@ function DownloadButton({ file, onDownload }: { file: FileNode; onDownload: (f: 
 
 function Table(p: FileListViewProps) {
   return (
-    <div className="card overflow-hidden">
+    <div className="card overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">

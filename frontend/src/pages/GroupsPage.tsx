@@ -72,10 +72,10 @@ export function GroupsPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       <div className="border-b border-token px-6 py-4">
         <PageHeader>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold">그룹</h1>
           <p className="mt-0.5 text-sm text-muted">파일 공유의 단위가 되는 그룹을 관리합니다.</p>
