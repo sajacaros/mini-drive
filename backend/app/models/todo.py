@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 
 class Routine(Base):
-    """반복 루틴 템플릿 (매일/특정 요일). 사용자별로 소유된다.
+    """반복 루틴 템플릿 (매일/특정 요일/매월 특정일). 사용자별로 소유된다.
 
     비활성화(is_active=False)하면 이후 날짜에는 더 이상 물질화되지 않지만, 이미 만들어진
     과거 TodoItem 은 이력으로 남는다. 삭제 시 파생 TodoItem 의 routine_id 는 SET NULL 되어
@@ -50,12 +50,14 @@ class Routine(Base):
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    # 'daily' | 'weekly' (models.enums.RoutineFrequency). native enum 미사용(VARCHAR).
+    # 'daily' | 'weekly' | 'monthly' (models.enums.RoutineFrequency). native enum 미사용(VARCHAR).
     frequency: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'daily'")
     )
-    # weekly 일 때만 의미 — "0,1,2" 형태(월=0..일=6) 콤마 구분. daily 면 NULL.
+    # weekly 일 때만 의미 — "0,1,2" 형태(월=0..일=6) 콤마 구분. 그 외 주기면 NULL.
     days_of_week: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # monthly 일 때만 의미 — 1~31. 그 외 주기면 NULL.
+    day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )

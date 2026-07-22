@@ -44,6 +44,7 @@ def _routine_response(routine: Routine) -> RoutineResponse:
         title=routine.title,
         frequency=RoutineFrequency(routine.frequency),
         days_of_week=days_to_list(routine.days_of_week),
+        day_of_month=routine.day_of_month,
         is_active=routine.is_active,
         sort_order=routine.sort_order,
         created_at=routine.created_at,
@@ -85,6 +86,7 @@ async def create_routine(
             title=payload.title,
             frequency=payload.frequency,
             days_of_week=payload.days_of_week,
+            day_of_month=payload.day_of_month,
         )
     except TodoServiceError as exc:
         raise _http_error(exc) from exc
@@ -106,6 +108,7 @@ async def update_routine(
             title=payload.title,
             frequency=payload.frequency,
             days_of_week=payload.days_of_week,
+            day_of_month=payload.day_of_month,
             is_active=payload.is_active,
             sort_order=payload.sort_order,
         )

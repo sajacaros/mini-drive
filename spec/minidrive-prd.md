@@ -342,7 +342,7 @@ interface ThemeContextType {
 | 항목 | 내용 |
 |---|---|
 | **데일리 투두** | 날짜별 항목 CRUD, 상태 `pending`/`done`/`skipped`, `sort_order` 기반 드래그 정렬 |
-| **반복 루틴** | `daily`(매일) 또는 `weekly`(요일 지정, 월=0..일=6). 해당 날짜를 **처음 조회하는 시점**에 그날의 `todo_items` 로 물질화하며(멱등, 빈 레코드 미적재) 기준일은 KST |
+| **반복 루틴** | `daily`(매일) · `weekly`(요일 지정, 월=0..일=6) · `monthly`(매월 특정일 하루, 1~31). 해당 날짜를 **처음 조회하는 시점**에 그날의 `todo_items` 로 물질화하며(멱등, 빈 레코드 미적재) 기준일은 KST. `monthly` 에서 그 달에 없는 날짜(2월 31일 등)는 말일로 당기지 않고 그 달만 건너뛴다 |
 | **비활성·삭제 처리** | 루틴 비활성화(`is_active=false`)는 이후 날짜의 물질화만 멈추고 과거 항목은 이력으로 남는다. 루틴 삭제 시 파생 항목의 `routine_id` 는 SET NULL 되어 임시 항목으로 보존 |
 | **중복 방지** | `(user_id, todo_date, routine_id)` 부분 유니크 인덱스(`routine_id IS NOT NULL`)로 이중 물질화 차단 |
 | **리포트** | 주별·월별 완료율(분모에서 `skipped` 제외)·streak·일별 추이·루틴별 달성률. 순수 조회로 계산 |
@@ -607,11 +607,11 @@ CREATE TABLE app_settings (
 
 | 테이블 | 주요 컬럼 |
 |---|---|
-| `routines` | `user_id`, `title`, `frequency`(`daily`/`weekly`), `days_of_week`(weekly 일 때 "0,1,2" 형태), `is_active`, `sort_order` |
+| `routines` | `user_id`, `title`, `frequency`(`daily`/`weekly`/`monthly`), `days_of_week`(weekly 일 때 "0,1,2" 형태), `day_of_month`(monthly 일 때 1~31), `is_active`, `sort_order` |
 | `todo_items` | `user_id`, `todo_date`(KST 기준), `title`, `status`(`pending`/`done`/`skipped`), `routine_id`(nullable, ON DELETE SET NULL), `sort_order`, `completed_at` |
 
 - 루틴 파생 항목의 이중 생성은 `(user_id, todo_date, routine_id)` **부분 유니크 인덱스**(`routine_id IS NOT NULL`)로 차단한다.
-- 물질화를 조회 시점에 수행하므로 별도 스케줄러·크론 테이블이 없다. 정의는 `backend/app/models/todo.py`, 마이그레이션 0011.
+- 물질화를 조회 시점에 수행하므로 별도 스케줄러·크론 테이블이 없다. 정의는 `backend/app/models/todo.py`, 마이그레이션 0011(+ `day_of_month` 는 0014).
 
 ---
 
@@ -731,7 +731,7 @@ groups · permissions · admin · todos.
 | `PATCH` | `/api/todos/{id}` | 제목·상태·정렬 순서 변경 |
 | `DELETE` | `/api/todos/{id}` | 할 일 삭제 |
 | `GET` | `/api/todos/routines` | 반복 루틴 목록 |
-| `POST` | `/api/todos/routines` | 루틴 생성 (`daily` / `weekly` + 요일) |
+| `POST` | `/api/todos/routines` | 루틴 생성 (`daily` / `weekly` + 요일 / `monthly` + 날짜) |
 | `PUT` | `/api/todos/routines/{id}` | 루틴 수정 (비활성화 포함) |
 | `DELETE` | `/api/todos/routines/{id}` | 루틴 삭제 (파생 항목은 `routine_id` SET NULL 로 보존) |
 | `GET` | `/api/todos/reports/weekly?date=` | `date` 가 속한 주(월~일) 리포트 — 완료율·streak·일별 추이·루틴별 달성률 |

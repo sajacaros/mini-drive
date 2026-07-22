@@ -487,7 +487,7 @@ export interface SignupCodeUpdateRequest {
 
 /** pending=빈칸(미완료), done=완료(v), failed=수행 실패(x — 명시적 미달성). */
 export type TodoStatus = "pending" | "done" | "failed";
-export type RoutineFrequency = "daily" | "weekly";
+export type RoutineFrequency = "daily" | "weekly" | "monthly";
 
 export interface Routine {
   id: number;
@@ -495,6 +495,8 @@ export interface Routine {
   frequency: RoutineFrequency;
   /** 월=0 .. 일=6. weekly 일 때만 채워짐. */
   days_of_week: number[];
+  /** 1~31. monthly 일 때만 채워짐. 그 달에 없는 날짜면 그 달은 건너뛴다. */
+  day_of_month: number | null;
   is_active: boolean;
   sort_order: number;
   created_at: string;
@@ -508,12 +510,14 @@ export interface RoutineCreateRequest {
   title: string;
   frequency: RoutineFrequency;
   days_of_week: number[];
+  day_of_month?: number | null;
 }
 
 export interface RoutineUpdateRequest {
   title?: string;
   frequency?: RoutineFrequency;
   days_of_week?: number[];
+  day_of_month?: number | null;
   is_active?: boolean;
   sort_order?: number;
 }

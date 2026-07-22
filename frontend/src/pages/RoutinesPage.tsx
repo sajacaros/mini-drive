@@ -1,7 +1,7 @@
 /**
- * 반복 루틴 관리 — "매일 운동" 같은 습관 템플릿. 매일/특정 요일 주기를 지정하면 해당 날짜의
- * 투두를 열 때 자동으로 채워진다(물질화). 비활성화하면 이후 날짜에는 더 채워지지 않고, 삭제하면
- * 과거 파생 항목은 임시 항목으로 남아 기록이 보존된다.
+ * 반복 루틴 관리 — "매일 운동" 같은 습관 템플릿. 매일/특정 요일/매월 특정일 주기를 지정하면
+ * 해당 날짜의 투두를 열 때 자동으로 채워진다(물질화). 비활성화하면 이후 날짜에는 더 채워지지
+ * 않고, 삭제하면 과거 파생 항목은 임시 항목으로 남아 기록이 보존된다.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -32,6 +32,8 @@ interface EditState {
   title: string;
   frequency: RoutineFrequency;
   days: number[];
+  /** monthly 전용 — 1~31. 주기를 오갈 때도 고른 값이 남도록 항상 들고 있는다. */
+  dayOfMonth: number;
 }
 
 const EMPTY_EDIT: EditState = {
@@ -39,7 +41,11 @@ const EMPTY_EDIT: EditState = {
   title: "",
   frequency: "daily",
   days: [],
+  dayOfMonth: 1,
 };
+
+/** 매월 루틴에서 고를 수 있는 날짜 1~31. */
+const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 
 export function RoutinesPage() {
   const toast = useToast();
@@ -68,7 +74,13 @@ export function RoutinesPage() {
 
   const openCreate = () => setEdit({ ...EMPTY_EDIT });
   const openEdit = (r: Routine) =>
-    setEdit({ id: r.id, title: r.title, frequency: r.frequency, days: r.days_of_week });
+    setEdit({
+      id: r.id,
+      title: r.title,
+      frequency: r.frequency,
+      days: r.days_of_week,
+      dayOfMonth: r.day_of_month ?? 1,
+    });
 
   const save = async () => {
     if (!edit) return;
@@ -87,6 +99,7 @@ export function RoutinesPage() {
         title,
         frequency: edit.frequency,
         days_of_week: edit.frequency === "weekly" ? edit.days : [],
+        day_of_month: edit.frequency === "monthly" ? edit.dayOfMonth : null,
       };
       if (edit.id === null) {
         await createRoutine(payload);
@@ -176,7 +189,7 @@ export function RoutinesPage() {
             <EmptyState
               icon={<RepeatIcon width={40} height={40} />}
               title="등록된 루틴이 없습니다"
-              hint="'루틴 추가'로 매일 또는 특정 요일에 반복할 습관을 만들어 보세요."
+              hint="'루틴 추가'로 매일·특정 요일·매월 특정일에 반복할 습관을 만들어 보세요."
             />
           ) : (
             <ul className="flex flex-col gap-2">
@@ -195,6 +208,8 @@ export function RoutinesPage() {
                     <div className="mt-1">
                       {r.frequency === "daily" ? (
                         <Badge tone="accent">매일</Badge>
+                      ) : r.frequency === "monthly" ? (
+                        <Badge tone="accent">매월 {r.day_of_month}일</Badge>
                       ) : (
                         <span className="inline-flex gap-1">
                           {r.days_of_week.map((d) => (
@@ -292,6 +307,12 @@ export function RoutinesPage() {
                   icon={<RepeatIcon width={15} height={15} />}
                   onClick={() => setEdit({ ...edit, frequency: "weekly" })}
                 />
+                <FreqButton
+                  active={edit.frequency === "monthly"}
+                  label="매월 특정일"
+                  icon={<CalendarIcon width={15} height={15} />}
+                  onClick={() => setEdit({ ...edit, frequency: "monthly" })}
+                />
               </div>
             </div>
 
@@ -318,6 +339,35 @@ export function RoutinesPage() {
                     );
                   })}
                 </div>
+              </div>
+            )}
+
+            {edit.frequency === "monthly" && (
+              <div>
+                <label className="mb-1.5 block text-sm font-medium" htmlFor="routine-day">
+                  날짜 선택
+                </label>
+                <div className="flex items-center gap-2">
+                  <select
+                    id="routine-day"
+                    className="input w-24"
+                    value={edit.dayOfMonth}
+                    onChange={(e) => setEdit({ ...edit, dayOfMonth: Number(e.target.value) })}
+                  >
+                    {MONTH_DAYS.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-sm text-muted">일</span>
+                </div>
+                {edit.dayOfMonth > 28 && (
+                  // 말일로 당겨 붙이지 않는다 — 없는 날은 그 달만 건너뛴다(서비스 규칙).
+                  <p className="mt-1.5 text-xs text-muted">
+                    {edit.dayOfMonth}일이 없는 달에는 만들어지지 않습니다.
+                  </p>
+                )}
               </div>
             )}
           </div>

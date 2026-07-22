@@ -65,14 +65,18 @@ async def create_routine(
     title: str,
     frequency: RoutineFrequency,
     days_of_week: list[int],
+    day_of_month: int | None = None,
 ) -> Routine:
     if frequency == RoutineFrequency.WEEKLY and not days_of_week:
         raise TodoServiceError(422, "주간 루틴은 요일을 1개 이상 선택해야 합니다.")
+    if frequency == RoutineFrequency.MONTHLY and day_of_month is None:
+        raise TodoServiceError(422, "매월 루틴은 날짜를 선택해야 합니다.")
     routine = Routine(
         user_id=user_id,
         title=title.strip(),
         frequency=frequency.value,
         days_of_week=days_to_str(days_of_week) if frequency == RoutineFrequency.WEEKLY else None,
+        day_of_month=day_of_month if frequency == RoutineFrequency.MONTHLY else None,
     )
     session.add(routine)
     await session.commit()
@@ -97,6 +101,7 @@ async def update_routine(
     title: str | None,
     frequency: RoutineFrequency | None,
     days_of_week: list[int] | None,
+    day_of_month: int | None,
     is_active: bool | None,
     sort_order: int | None,
 ) -> Routine:
@@ -108,18 +113,24 @@ async def update_routine(
         routine.frequency = frequency.value
     if days_of_week is not None:
         routine.days_of_week = days_to_str(days_of_week)
+    if day_of_month is not None:
+        routine.day_of_month = day_of_month
     if is_active is not None:
         routine.is_active = is_active
     if sort_order is not None:
         routine.sort_order = sort_order
 
-    # 최종 상태 정합성 — weekly 인데 요일이 없으면 거부.
+    # 최종 상태 정합성 — 주기가 요구하는 값이 없으면 거부하고, 쓰지 않는 값은 지운다.
     if routine.frequency == RoutineFrequency.WEEKLY.value and not days_to_list(
         routine.days_of_week
     ):
         raise TodoServiceError(422, "주간 루틴은 요일을 1개 이상 선택해야 합니다.")
-    if routine.frequency == RoutineFrequency.DAILY.value:
+    if routine.frequency == RoutineFrequency.MONTHLY.value and routine.day_of_month is None:
+        raise TodoServiceError(422, "매월 루틴은 날짜를 선택해야 합니다.")
+    if routine.frequency != RoutineFrequency.WEEKLY.value:
         routine.days_of_week = None
+    if routine.frequency != RoutineFrequency.MONTHLY.value:
+        routine.day_of_month = None
 
     await session.commit()
     await session.refresh(routine)
@@ -140,6 +151,8 @@ def routine_applies_on(routine: Routine, day: date) -> bool:
     """루틴이 특정 날짜에 항목을 만들어야 하는지.
 
     - daily 는 매일. weekly 는 그날 요일이 days_of_week 에 포함될 때.
+    - monthly 는 그날 일자가 day_of_month 와 같을 때. 그 달에 없는 날짜(2월 31일 등)는 아예
+      맞는 날이 없으므로 그 달만 건너뛴다 — 말일로 당겨 붙이지 않는다.
     - 루틴 생성일 이전 날짜에는 소급 적용하지 않는다(과거 소급 미달성 방지).
     """
     created_day = routine.created_at.astimezone(_KST).date()
@@ -147,6 +160,8 @@ def routine_applies_on(routine: Routine, day: date) -> bool:
         return False
     if routine.frequency == RoutineFrequency.DAILY.value:
         return True
+    if routine.frequency == RoutineFrequency.MONTHLY.value:
+        return routine.day_of_month is not None and day.day == routine.day_of_month
     return day.weekday() in set(days_to_list(routine.days_of_week))
 
 

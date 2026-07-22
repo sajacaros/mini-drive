@@ -46,10 +46,16 @@ class _FakeSession:
         return _Result(rows)
 
 
-def _routine(freq: str, days: str | None = None, created: dt.datetime | None = None) -> Routine:
+def _routine(
+    freq: str,
+    days: str | None = None,
+    created: dt.datetime | None = None,
+    day_of_month: int | None = None,
+) -> Routine:
     r = Routine()
     r.frequency = freq
     r.days_of_week = days
+    r.day_of_month = day_of_month
     r.created_at = created or dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
     return r
 
@@ -70,6 +76,22 @@ class TestRoutineApplies:
             day = base + dt.timedelta(days=offset)
             expected = day.weekday() in {0, 2, 4}
             assert routine_applies_on(r, day) is expected
+
+    def test_monthly_matches_only_that_day_each_month(self) -> None:
+        r = _routine("monthly", day_of_month=15, created=dt.datetime(2026, 1, 1, tzinfo=dt.UTC))
+        assert routine_applies_on(r, dt.date(2026, 7, 15)) is True
+        assert routine_applies_on(r, dt.date(2026, 8, 15)) is True
+        assert routine_applies_on(r, dt.date(2026, 7, 14)) is False
+        # 생성일 이전은 다른 주기와 마찬가지로 소급하지 않는다.
+        assert routine_applies_on(r, dt.date(2025, 12, 15)) is False
+
+    def test_monthly_skips_months_without_that_day(self) -> None:
+        """31일 루틴은 30일까지인 달을 통째로 건너뛴다 — 말일로 당겨 붙이지 않는다."""
+        r = _routine("monthly", day_of_month=31, created=dt.datetime(2026, 1, 1, tzinfo=dt.UTC))
+        assert routine_applies_on(r, dt.date(2026, 1, 31)) is True
+        # 2026-02 는 28일까지, 2026-04 는 30일까지 — 맞는 날짜 자체가 없다.
+        for day in (dt.date(2026, 2, 28), dt.date(2026, 4, 30)):
+            assert routine_applies_on(r, day) is False
 
 
 class TestBounds:

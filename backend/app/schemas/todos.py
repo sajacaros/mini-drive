@@ -27,11 +27,12 @@ def days_to_str(days: list[int] | None) -> str | None:
 
 
 class RoutineCreateRequest(BaseModel):
-    """반복 루틴 생성. weekly 면 days_of_week(월=0..일=6) 필수."""
+    """반복 루틴 생성. weekly 면 days_of_week(월=0..일=6), monthly 면 day_of_month(1~31) 필수."""
 
     title: str = Field(min_length=1, max_length=500)
     frequency: RoutineFrequency = RoutineFrequency.DAILY
     days_of_week: list[int] = Field(default_factory=list)
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
 
     @field_validator("days_of_week")
     @classmethod
@@ -43,11 +44,12 @@ class RoutineCreateRequest(BaseModel):
 
 
 class RoutineUpdateRequest(BaseModel):
-    """루틴 부분 수정 (제목/주기/요일/활성 여부/정렬)."""
+    """루틴 부분 수정 (제목/주기/요일/날짜/활성 여부/정렬)."""
 
     title: str | None = Field(default=None, min_length=1, max_length=500)
     frequency: RoutineFrequency | None = None
     days_of_week: list[int] | None = None
+    day_of_month: int | None = Field(default=None, ge=1, le=31)
     is_active: bool | None = None
     sort_order: int | None = None
 
@@ -67,6 +69,7 @@ class RoutineResponse(BaseModel):
     title: str
     frequency: RoutineFrequency
     days_of_week: list[int]
+    day_of_month: int | None = None
     is_active: bool
     sort_order: int
     created_at: datetime

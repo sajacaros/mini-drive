@@ -76,8 +76,12 @@ class TodoStatus(StrEnum):
 class RoutineFrequency(StrEnum):
     """반복 루틴 주기 (routines.frequency).
 
-    - DAILY: 매일. WEEKLY: 특정 요일(days_of_week 에 월=0..일=6 저장).
+    - DAILY: 매일.
+    - WEEKLY: 특정 요일(days_of_week 에 월=0..일=6 저장).
+    - MONTHLY: 매월 특정일 하루(day_of_month 에 1~31 저장). 그 달에 없는 날짜(2월 31일 등)는
+      그 달만 건너뛴다 — 말일로 당겨 붙이지 않는다.
     """
 
     DAILY = "daily"
     WEEKLY = "weekly"
+    MONTHLY = "monthly"
