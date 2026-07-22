@@ -634,7 +634,7 @@ CREATE TABLE app_settings (
 | Method | Endpoint | 설명 |
 |---|---|---|
 | `POST` | `/api/files/upload` | 파일 업로드 (multipart) |
-| `GET`  | `/api/files` | 파일/폴더 목록 (query: `parentId`, `page`, `size`) |
+| `GET`  | `/api/files` | 파일/폴더 목록 (query: `parentId`, `page`, `size`, `foldersOnly`) |
 | `GET`  | `/api/files/{id}` | 파일 메타데이터 |
 | `GET`  | `/api/files/{id}/download` | 게이트웨이 스트리밍 다운로드 |
 | `GET`  | `/api/files/{id}/versions` | 버전 히스토리 |
@@ -643,7 +643,14 @@ CREATE TABLE app_settings (
 | `POST` | `/api/files/{id}/delete` | 소프트 삭제 |
 | `POST` | `/api/files/{id}/permanent-delete` | 영구 삭제 |
 | `POST` | `/api/files` | 폴더 생성 |
+| `POST` | `/api/files/{id}/move` | 다른 폴더로 이동 (body: `parent_id`, null 이면 루트) |
 | `PUT`  | `/api/files/{id}` | 이름 변경 등 메타데이터 업데이트 |
+
+> **이동 규칙**: 출발지와 목적지 폴더 **양쪽에 write** 가 필요하다 — 이동은 목적지에서 보면
+> 생성이고 출발지에서 보면 제거이므로, 한쪽 권한만 보면 읽기 전용 폴더의 내용을 빼내거나 남의
+> 폴더에 항목을 밀어 넣을 수 있다. 폴더를 자기 자신이나 자기 하위로 이동하면 트리에서 떨어져
+> 나간 순환이 생기므로 400 으로 막는다. 대상 위치 동명 충돌은 409. 이동으로 상속 경로가 바뀌므로
+> 양쪽 경로의 이해관계자(경로상 폴더 소유자 + 권한 부여 그룹의 멤버) 권한 캐시를 무효화한다.
 
 ### 6.3 공유
 

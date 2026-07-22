@@ -17,9 +17,15 @@ export async function listFiles(
   parentId: number | null,
   page = 1,
   size = 50,
+  foldersOnly = false,
 ): Promise<FileListResponse> {
   const { data } = await apiClient.get<FileListResponse>("/files", {
-    params: { parentId: parentId ?? undefined, page, size },
+    params: {
+      parentId: parentId ?? undefined,
+      page,
+      size,
+      foldersOnly: foldersOnly || undefined,
+    },
   });
   return data;
 }
@@ -138,6 +144,14 @@ export async function createFolder(name: string, parentId: number | null): Promi
 
 export async function renameFile(id: number, name: string): Promise<FileNode> {
   const { data } = await apiClient.put<FileNode>(`/files/${id}`, { name });
+  return data;
+}
+
+/** 다른 폴더로 이동. parentId 가 null 이면 내 드라이브 루트. */
+export async function moveFile(id: number, parentId: number | null): Promise<FileNode> {
+  const { data } = await apiClient.post<FileNode>(`/files/${id}/move`, {
+    parent_id: parentId,
+  });
   return data;
 }
 

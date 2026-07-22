@@ -9,6 +9,7 @@ import {
   getFile,
   listFiles,
   listRecent,
+  moveFile,
   removeFavorite,
   renameFile,
   reuploadFile,
@@ -19,6 +20,7 @@ import { checkPermission, listSharedWithMe } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
 import { FavoriteStar } from "@/components/FavoriteStar";
 import { Modal } from "@/components/Modal";
+import { MoveModal } from "@/components/MoveModal";
 import { PageHeader } from "@/components/PageHeader";
 import { PermissionModal } from "@/components/PermissionModal";
 import { PreviewModal } from "@/components/PreviewModal";
@@ -37,6 +39,7 @@ import {
   HistoryIcon,
   InboxIcon,
   ListIcon,
+  MoveIcon,
   PauseIcon,
   PlayIcon,
   PlusIcon,
@@ -49,7 +52,7 @@ import {
 } from "@/components/icons";
 import { downloadFile } from "@/lib/download";
 import { subscribeFileEvents } from "@/lib/fileEvents";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
 import {
@@ -91,6 +94,17 @@ const SHARED_VIRTUAL_ID = -1;
 
 /** 권한 수준 순위 — 다중 그룹 공유 시 최고 권한을 고를 때 사용. */
 const PERM_RANK: Record<string, number> = { read: 1, write: 2, manage: 3, owner: 4 };
+
+/**
+ * 페이지 안에서 시작된 항목 드래그를 표시하는 커스텀 MIME. OS 파일 드롭(업로드)과 구분하는
+ * 유일한 단서다 — dragover 시점에는 dataTransfer 의 **값**을 읽을 수 없고 types 만 볼 수 있어,
+ * 값이 아니라 타입의 존재 여부로 판단한다.
+ */
+const DRAG_MIME = "application/x-minidrive-item";
+
+function isInternalDrag(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes(DRAG_MIME);
+}
 
 interface Crumb {
   id: number | null;
@@ -173,6 +187,14 @@ export function FileBrowserPage({
   const [folderName, setFolderName] = useState("");
   const [renameTarget, setRenameTarget] = useState<FileNode | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [moveTarget, setMoveTarget] = useState<FileNode | null>(null);
+  /**
+   * 드롭 하이라이트 대상. 폴더 행은 id, breadcrumb 은 그 crumb 의 id(루트는 null)라
+   * 둘을 구분하려고 종류를 함께 담는다.
+   */
+  const [dropTarget, setDropTarget] = useState<{ kind: "row" | "crumb"; id: number | null } | null>(
+    null,
+  );
   const [shareTarget, setShareTarget] = useState<FileNode | null>(null);
   const [permTarget, setPermTarget] = useState<FileNode | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileNode | null>(null);
@@ -190,6 +212,11 @@ export function FileBrowserPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const versionInputRef = useRef<HTMLInputElement>(null);
+  /**
+   * 현재 끌고 있는 항목. dataTransfer 에는 id 만 실어 보내고(브라우저가 drag 중에는 값을
+   * 읽지 못하게 막는다) 실제 노드는 ref 로 들고 있는다 — 같은 페이지 안의 이동이라 충분하다.
+   */
+  const draggingRef = useRef<FileNode | null>(null);
   const current = path[path.length - 1];
   const parentId = current.id;
 
@@ -675,6 +702,11 @@ export function FileBrowserPage({
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragOver(false);
+    // 페이지 안에서 항목을 끌어온 것이면 업로드가 아니라 "현재 폴더로 이동"이다.
+    if (isInternalDrag(e)) {
+      onDropOnFolder(e, parentId, current.name);
+      return;
+    }
     if (!canWrite) return;
     // dataTransfer 는 핸들러가 반환되면 무효화되므로 await 전에 동기적으로 꺼낸다.
     const entries = entriesFromDrop(e.dataTransfer);
@@ -699,6 +731,43 @@ export function FileBrowserPage({
     } catch (err) {
       toast.error(extractErrorMessage(err, "폴더 생성에 실패했습니다."));
     }
+  };
+
+  // --- 이동 (드래그 앤 드롭 + 이동 다이얼로그) ------------------------------
+
+  /**
+   * 항목을 다른 폴더로 옮긴다. 성공/실패 토스트까지 여기서 처리해 드롭과 다이얼로그가
+   * 같은 동작을 공유하게 한다. 대상이 현재 폴더와 같으면 요청조차 보내지 않는다.
+   */
+  const runMove = async (file: FileNode, targetId: number | null, targetName: string) => {
+    if (targetId === parentId) return;
+    try {
+      await moveFile(file.id, targetId);
+      toast.success(
+        `"${file.name}"을(를) "${targetName}"${roParticle(targetName)} 이동했습니다.`,
+      );
+      await reload();
+    } catch (err) {
+      toast.error(extractErrorMessage(err, "이동에 실패했습니다."));
+    }
+  };
+
+  const submitMove = async (targetId: number | null, targetName: string) => {
+    if (!moveTarget) return;
+    await runMove(moveTarget, targetId, targetName);
+    setMoveTarget(null);
+  };
+
+  /** 드롭 대상(폴더 행 / breadcrumb)이 항목을 받았을 때. */
+  const onDropOnFolder = (e: DragEvent, targetId: number | null, targetName: string) => {
+    const dragged = draggingRef.current;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget(null);
+    setDragOver(false);
+    draggingRef.current = null;
+    if (!dragged || dragged.id === targetId) return;
+    void runMove(dragged, targetId, targetName);
   };
 
   const submitRename = async () => {
@@ -755,22 +824,40 @@ export function FileBrowserPage({
           {/* 좁은 화면에서는 브레드크럼과 액션이 두 줄로 나뉜다(한 줄로 두면 업로드 버튼이 잘린다). */}
           <div className="flex flex-wrap items-center justify-between gap-3">
         <nav className="flex min-w-0 items-center gap-1 text-sm">
-          {path.map((crumb, i) => (
-            <span key={i} className="flex items-center gap-1">
-              {i > 0 && <span className="text-muted">/</span>}
-              <button
-                className={`truncate rounded px-1.5 py-0.5 ${
-                  i === path.length - 1
-                    ? "font-semibold"
-                    : "text-muted hover:text-[color:var(--text-primary)]"
-                }`}
-                onClick={() => goToCrumb(i)}
-                disabled={i === path.length - 1}
-              >
-                {crumb.name}
-              </button>
-            </span>
-          ))}
+          {path.map((crumb, i) => {
+            // 상위 경로는 드롭 대상이다 — 항목을 breadcrumb 에 떨어뜨려 한 단계 위로 꺼낸다.
+            // 현재 폴더 자신과 "공유" 가상 폴더는 대상이 될 수 없다.
+            const isCrumbDroppable =
+              i < path.length - 1 && crumb.id !== SHARED_VIRTUAL_ID && canWrite;
+            const isCrumbActive =
+              dropTarget?.kind === "crumb" && dropTarget.id === crumb.id;
+            return (
+              <span key={i} className="flex items-center gap-1">
+                {i > 0 && <span className="text-muted">/</span>}
+                <button
+                  className={`truncate rounded px-1.5 py-0.5 ${
+                    i === path.length - 1
+                      ? "font-semibold"
+                      : "text-muted hover:text-[color:var(--text-primary)]"
+                  } ${isCrumbActive ? "bg-[color:var(--bg-muted)] ring-1 ring-[color:var(--accent)]" : ""}`}
+                  onClick={() => goToCrumb(i)}
+                  disabled={i === path.length - 1}
+                  onDragOver={(e) => {
+                    if (!isCrumbDroppable || !isInternalDrag(e)) return;
+                    e.preventDefault();
+                    setDropTarget({ kind: "crumb", id: crumb.id });
+                  }}
+                  onDragLeave={() => setDropTarget(null)}
+                  onDrop={(e) => {
+                    if (!isCrumbDroppable) return;
+                    onDropOnFolder(e, crumb.id, crumb.name);
+                  }}
+                >
+                  {crumb.name}
+                </button>
+              </span>
+            );
+          })}
         </nav>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -880,6 +967,11 @@ export function FileBrowserPage({
         // 주입된다). 안정적인 드롭 대상 선택자를 남겨 둔다.
         data-testid="dropzone"
         onDragOver={(e) => {
+          // 내부 드래그는 "현재 폴더로 이동" — 업로드 오버레이를 띄우지 않는다.
+          if (isInternalDrag(e)) {
+            if (canWrite) e.preventDefault();
+            return;
+          }
           if (!canWrite) return;
           e.preventDefault();
           setDragOver(true);
@@ -1068,7 +1160,30 @@ export function FileBrowserPage({
               onDelete: (f: FileNode) => setDeleteTarget(f),
               onVersions: (f: FileNode) => setVersionsTarget(f),
               onNewVersion: startVersionUpload,
+              onMove: (f: FileNode) => setMoveTarget(f),
               onToggleFavorite,
+              // 드래그 이동은 "공유" 가상 목록처럼 컨테이너에 쓰기가 없는 곳에서는 끈다.
+              dragEnabled: canWrite && !atVirtualShared,
+              dropTargetId: dropTarget?.kind === "row" ? dropTarget.id : null,
+              onDragStartItem: (f: FileNode, e: DragEvent) => {
+                draggingRef.current = f;
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData(DRAG_MIME, String(f.id));
+              },
+              onDragEndItem: () => {
+                draggingRef.current = null;
+                setDropTarget(null);
+              },
+              onDragOverFolder: (f: FileNode, e: DragEvent) => {
+                // 자기 자신 위로는 놓을 수 없다 — 하이라이트도 주지 않는다.
+                if (!isInternalDrag(e) || draggingRef.current?.id === f.id) return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "move";
+                setDropTarget({ kind: "row", id: f.id });
+              },
+              onDragLeaveFolder: () => setDropTarget(null),
+              onDropOnFolderRow: (f: FileNode, e: DragEvent) => onDropOnFolder(e, f.id, f.name),
               // 내 드라이브 루트에서만 상단에 "공유" 가상 폴더 행을 고정한다.
               onOpenShared: showSharedVirtualRow ? openSharedVirtual : undefined,
             };
@@ -1234,6 +1349,14 @@ export function FileBrowserPage({
           autoFocus
         />
       </Modal>
+
+      {/* 이동 대상 폴더 선택 */}
+      <MoveModal
+        target={moveTarget}
+        currentParentId={parentId}
+        onClose={() => setMoveTarget(null)}
+        onMove={submitMove}
+      />
 
       {/* 삭제 확인 */}
       <Modal
@@ -1402,9 +1525,20 @@ interface FileRowProps {
   onDelete: (f: FileNode) => void;
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
+  onMove: (f: FileNode) => void;
   onToggleFavorite: (f: FileNode) => void;
   /** 지정 시 목록 상단에 "공유" 가상 폴더 행을 고정 노출한다(내 드라이브 루트 전용). */
   onOpenShared?: () => void;
+  // --- 드래그 이동 ---
+  /** 항목을 끌 수 있는지(컨테이너에 쓰기 권한이 있을 때만). */
+  dragEnabled: boolean;
+  /** 현재 드롭 하이라이트 중인 폴더 행 id. */
+  dropTargetId: number | null;
+  onDragStartItem: (f: FileNode, e: DragEvent) => void;
+  onDragEndItem: () => void;
+  onDragOverFolder: (f: FileNode, e: DragEvent) => void;
+  onDragLeaveFolder: () => void;
+  onDropOnFolderRow: (f: FileNode, e: DragEvent) => void;
 }
 
 /** 권한 셀 — owner 는 "소유자"로 구분해 강조하고, 그 외는 라벨/톤 배지로 표시. */
@@ -1475,6 +1609,9 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
       )}
       {canWrite && (
         <>
+          <IconAction title="이동" onClick={() => p.onMove(f)}>
+            <MoveIcon width={16} height={16} />
+          </IconAction>
           <IconAction title="이름 변경" onClick={() => p.onRename(f)}>
             <RenameIcon width={16} height={16} />
           </IconAction>
@@ -1527,7 +1664,20 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
             </tr>
           )}
           {items.map((f) => (
-            <tr key={f.id} className="group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)]">
+            <tr
+              key={f.id}
+              className={`group border-b border-token last:border-0 hover:bg-[color:var(--bg-muted)] ${
+                p.dropTargetId === f.id
+                  ? "bg-[color:var(--bg-muted)] outline outline-2 -outline-offset-2 outline-[color:var(--accent)]"
+                  : ""
+              }`}
+              draggable={p.dragEnabled && rowCanWrite(f, p.canWrite)}
+              onDragStart={(e) => p.onDragStartItem(f, e)}
+              onDragEnd={p.onDragEndItem}
+              onDragOver={f.is_folder ? (e) => p.onDragOverFolder(f, e) : undefined}
+              onDragLeave={f.is_folder ? p.onDragLeaveFolder : undefined}
+              onDrop={f.is_folder ? (e) => p.onDropOnFolderRow(f, e) : undefined}
+            >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <button
@@ -1603,7 +1753,18 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
         </button>
       )}
       {items.map((f) => (
-        <div key={f.id} className="group card relative flex flex-col overflow-hidden p-0">
+        <div
+          key={f.id}
+          className={`group card relative flex flex-col overflow-hidden p-0 ${
+            p.dropTargetId === f.id ? "ring-2 ring-[color:var(--accent)]" : ""
+          }`}
+          draggable={p.dragEnabled && rowCanWrite(f, p.canWrite)}
+          onDragStart={(e) => p.onDragStartItem(f, e)}
+          onDragEnd={p.onDragEndItem}
+          onDragOver={f.is_folder ? (e) => p.onDragOverFolder(f, e) : undefined}
+          onDragLeave={f.is_folder ? p.onDragLeaveFolder : undefined}
+          onDrop={f.is_folder ? (e) => p.onDropOnFolderRow(f, e) : undefined}
+        >
           {/* 즐겨찾기 별 — 활성이면 항상, 아니면 hover 시 노출 */}
           <span className="absolute right-1.5 top-1.5 z-10">
             <FavoriteStar active={f.is_favorite} onToggle={() => p.onToggleFavorite(f)} />

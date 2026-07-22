@@ -88,6 +88,12 @@ class FileRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
 
 
+class FileMoveRequest(BaseModel):
+    """다른 폴더로 이동 (PRD 6.2 POST /api/files/{id}/move). parent_id 생략/null 이면 루트."""
+
+    parent_id: int | None = None
+
+
 class FileVersionResponse(BaseModel):
     """버전 히스토리 항목 (PRD 3.3, 6.2). 오브젝트 키는 노출하지 않는다."""
 

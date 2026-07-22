@@ -274,33 +274,44 @@ async def _resolve_parent(
     return parent
 
 
-def _child_listing_query(parent_id: int) -> Select:
+def _child_listing_query(parent_id: int, folders_only: bool = False) -> Select:
     """활성 하위 항목 — 폴더 우선, 이름순 (PRD 6.2)."""
-    return (
-        select(File)
-        .where(File.parent_folder_id == parent_id, File.is_deleted.is_(False))
-        .order_by(File.is_folder.desc(), File.name.asc())
+    query = select(File).where(
+        File.parent_folder_id == parent_id, File.is_deleted.is_(False)
     )
+    if folders_only:
+        query = query.where(File.is_folder.is_(True))
+    return query.order_by(File.is_folder.desc(), File.name.asc())
 
 
 async def list_children(
-    session: AsyncSession, user: User, parent_id: int | None, page: int, size: int
+    session: AsyncSession,
+    user: User,
+    parent_id: int | None,
+    page: int,
+    size: int,
+    folders_only: bool = False,
 ) -> tuple[list[File], int]:
-    """폴더 내 항목 목록 + 총 개수 (페이지네이션)."""
+    """폴더 내 항목 목록 + 총 개수 (페이지네이션).
+
+    folders_only 는 이동 대상 폴더 선택기용이다 — 파일이 수백 개인 폴더에서도 하위 폴더가
+    페이지 밖으로 밀려나지 않게 한다.
+    """
     parent = await _resolve_parent(session, user, parent_id)
 
-    total = (
-        await session.execute(
-            select(func.count())
-            .select_from(File)
-            .where(File.parent_folder_id == parent.id, File.is_deleted.is_(False))
-        )
-    ).scalar_one()
+    count_query = (
+        select(func.count())
+        .select_from(File)
+        .where(File.parent_folder_id == parent.id, File.is_deleted.is_(False))
+    )
+    if folders_only:
+        count_query = count_query.where(File.is_folder.is_(True))
+    total = (await session.execute(count_query)).scalar_one()
 
     offset = (page - 1) * size
     rows = (
         await session.execute(
-            _child_listing_query(parent.id).offset(offset).limit(size)
+            _child_listing_query(parent.id, folders_only).offset(offset).limit(size)
         )
     ).scalars().all()
     return list(rows), total
@@ -404,6 +415,84 @@ async def rename_file(
         actor_id=user.id,
         name=file.name,
     )
+    return file
+
+
+# --- 이동 (PRD 6.2) ---------------------------------------------------------
+
+# 대상 폴더의 조상 경로에 이동 대상이 있는지. 폴더를 자기 자신이나 자기 자손 아래로 넣으면
+# 트리에서 떨어져 나간 순환이 생기므로(부모를 따라 올라가도 루트에 닿지 못한다) 미리 막는다.
+# depth 0(대상 폴더 자신)도 포함하므로 "자기 안으로 이동"도 이 한 쿼리로 걸린다.
+_IS_SELF_OR_DESCENDANT_SQL = text(
+    """
+    WITH RECURSIVE ancestors AS (
+        SELECT id, parent_folder_id FROM files WHERE id = :target_id
+        UNION ALL
+        SELECT f.id, f.parent_folder_id
+        FROM files f JOIN ancestors a ON f.id = a.parent_folder_id
+    )
+    SELECT 1 FROM ancestors WHERE id = :moving_id LIMIT 1
+    """
+)
+
+
+async def move_file(
+    session: AsyncSession, user: User, file_id: int, target_parent_id: int | None
+) -> File:
+    """다른 폴더로 이동 (PRD 6.2 POST /api/files/{id}/move). 대상 위치 동명 충돌 시 409.
+
+    출발지와 목적지 **양쪽에 write** 가 필요하다 — 이동은 목적지에서 보면 생성이고 출발지에서
+    보면 제거라서, 한쪽 권한만으로 허용하면 읽기 전용 폴더의 내용을 빼돌리거나 남의 폴더에
+    항목을 밀어 넣을 수 있다.
+
+    이동으로 조상 경로가 바뀌면 상속 권한 판정 결과도 바뀐다. 판정 자체는 조회 시점에 하지만
+    사용자별 캐시가 남아 있으므로 양쪽 경로의 이해관계자 캐시를 무효화한다(PRD 1.4).
+    """
+    file = await ensure_file_access(session, user, await get_file(session, file_id), need="write")
+    if file.parent_folder_id is None:
+        raise FileServiceError(400, "루트 폴더는 이동할 수 없습니다.")
+    if file.is_deleted:
+        raise FileServiceError(409, "삭제된 항목은 이동할 수 없습니다.")
+
+    source_parent_id = file.parent_folder_id
+    target = await _resolve_parent(session, user, target_parent_id, need="write")
+    if target.id == source_parent_id:
+        return file  # 이미 그 폴더에 있다 — 조작 없이 성공으로 취급한다.
+
+    if file.is_folder:
+        cycle = (
+            await session.execute(
+                _IS_SELF_OR_DESCENDANT_SQL,
+                {"target_id": target.id, "moving_id": file.id},
+            )
+        ).first()
+        if cycle is not None:
+            raise FileServiceError(400, "폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.")
+
+    # 출발지에서의 제거 권한 — 대상 항목 write 만으로는 부족하다(위 docstring 참고).
+    await _resolve_parent(session, user, source_parent_id, need="write")
+
+    file.parent_folder_id = target.id
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise FileServiceError(409, "이동할 위치에 같은 이름의 항목이 있습니다.") from exc
+    await session.refresh(file)
+
+    await permissions_service.invalidate_path_stakeholders(
+        session, [source_parent_id, target.id]
+    )
+    # 출발지·목적지 두 폴더 모두 목록이 바뀌므로 각각 발행한다 — 한쪽만 보내면 다른 쪽을 보고
+    # 있는 클라이언트가 갱신되지 않는다.
+    for container_id in (source_parent_id, target.id):
+        await file_events_service.publish_file_event(
+            type="move",
+            file_id=file.id,
+            parent_folder_id=container_id,
+            actor_id=user.id,
+            name=file.name,
+        )
     return file
 
 

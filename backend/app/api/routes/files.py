@@ -34,6 +34,7 @@ from app.schemas.files import (
     BatchUploadResponse,
     DownloadTicketResponse,
     FileListResponse,
+    FileMoveRequest,
     FileRenameRequest,
     FileResponse,
     FileVersionListResponse,
@@ -384,10 +385,16 @@ async def list_files(
     parent_id: Annotated[int | None, Query(alias="parentId")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 50,
+    folders_only: Annotated[bool, Query(alias="foldersOnly")] = False,
 ) -> FileListResponse:
-    """폴더 내 항목 목록 (폴더 우선 + 이름순, 페이지네이션) — PRD 6.2."""
+    """폴더 내 항목 목록 (폴더 우선 + 이름순, 페이지네이션) — PRD 6.2.
+
+    foldersOnly=true 면 하위 폴더만 반환한다(이동 대상 선택기).
+    """
     try:
-        items, total = await files_service.list_children(session, user, parent_id, page, size)
+        items, total = await files_service.list_children(
+            session, user, parent_id, page, size, folders_only
+        )
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     await favorites_service.annotate_is_favorite(session, user, items)
@@ -712,6 +719,18 @@ async def rename(
     """이름 변경 (PRD 6.2). 동명 충돌 시 409."""
     try:
         file = await files_service.rename_file(session, user, file_id, payload.name)
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return FileResponse.model_validate(file)
+
+
+@router.post("/{file_id}/move", response_model=FileResponse)
+async def move(
+    file_id: int, payload: FileMoveRequest, user: CurrentUser, session: DbSession
+) -> FileResponse:
+    """다른 폴더로 이동 (PRD 6.2). 대상 위치 동명 충돌 시 409, 순환 이동은 400."""
+    try:
+        file = await files_service.move_file(session, user, file_id, payload.parent_id)
     except FileServiceError as exc:
         raise _http_error(exc) from exc
     return FileResponse.model_validate(file)

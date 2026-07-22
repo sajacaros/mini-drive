@@ -305,6 +305,15 @@ export const ChevronRightIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 폴더 안으로 들어가는 화살표 — 다른 폴더로 이동. */
+export const MoveIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.69.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-3" />
+    <path d="M2 13h10" />
+    <path d="m9 10 3 3-3 3" />
+  </svg>
+);
+
 export const FlameIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5Z" />

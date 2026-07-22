@@ -431,6 +431,43 @@ async def invalidate_group_members(session: AsyncSession, group_id: int) -> None
     await invalidate_users(await _active_member_ids(session, group_id))
 
 
+# 주어진 폴더들의 조상 경로에서 (a) 각 노드의 소유자와 (b) 그 노드에 권한이 부여된 그룹을 모은다.
+# 이동으로 조상 경로가 바뀌면 이 두 집합이 상속 판정 결과가 달라질 수 있는 사용자 전부다.
+_PATH_STAKEHOLDERS_SQL = text(
+    """
+    WITH RECURSIVE ancestors AS (
+        SELECT id, parent_folder_id, user_id FROM files WHERE id IN :file_ids
+        UNION ALL
+        SELECT f.id, f.parent_folder_id, f.user_id
+        FROM files f JOIN ancestors a ON f.id = a.parent_folder_id
+    )
+    SELECT DISTINCT a.user_id AS user_id, p.group_id AS group_id
+    FROM ancestors a
+    LEFT JOIN file_group_permissions p ON p.file_id = a.id
+    """
+).bindparams(bindparam("file_ids", expanding=True))
+
+
+async def invalidate_path_stakeholders(
+    session: AsyncSession, folder_ids: Iterable[int | None]
+) -> None:
+    """주어진 폴더들의 조상 경로에 이해관계가 있는 사용자의 권한 캐시를 무효화한다.
+
+    항목이 폴더 사이를 이동하면 상속 경로가 통째로 바뀐다. 영향을 받는 사람은 두 부류다 —
+    경로상의 폴더 **소유자**(조상 소유로 manage 를 얻거나 잃는다)와 경로상의 폴더에 권한이
+    부여된 **그룹의 멤버**(상속 권한을 얻거나 잃는다). 경로 깊이만큼만 훑으므로 비용이 작다.
+    """
+    ids = [fid for fid in folder_ids if fid is not None]
+    if not ids:
+        return
+    rows = (await session.execute(_PATH_STAKEHOLDERS_SQL, {"file_ids": ids})).all()
+
+    user_ids = {r.user_id for r in rows}
+    for group_id in {r.group_id for r in rows if r.group_id is not None}:
+        user_ids.update(await _active_member_ids(session, group_id))
+    await invalidate_users(user_ids)
+
+
 # --- 권한 관리 인가 헬퍼 -----------------------------------------------------
 
 
