@@ -2,10 +2,13 @@
  * 인증 사용자 공통 레이아웃 — 사이드 네비 + 저장 용량 표시. 프로필 칩은 각 페이지 헤더(PageHeader)
  * 우측에 표시된다.
  *
- * 사이드바는 두 가지로 접힌다:
- *  - 데스크톱(md+): 240px ↔ 아이콘 레일(64px) 토글. 선택은 localStorage 에 남아 다음 방문에도 유지된다.
+ * 사이드바는 세 가지로 접힌다:
+ *  - 데스크톱(md+): 240px ↔ 아이콘 레일(64px) 토글(헤더의 햄버거). 선택은 localStorage 에 남아
+ *    다음 방문에도 유지된다.
  *  - 모바일(<md): 화면 밖 서랍(off-canvas). 기본은 닫힘이고 상단 바의 햄버거로 연다. 390px 화면에서
  *    240px 사이드바가 늘 자리를 차지하면 본문에 150px 밖에 남지 않아 표가 통째로 화면 밖으로 밀린다.
+ *  - 섹션(드라이브/할 일/관리): 라벨 클릭으로 각각 접고 펼친다. 메뉴가 계속 늘어날 것을 대비한
+ *    구조로, 섹션별 선택 역시 localStorage 에 남는다. 기본은 모두 펼침.
  *
  * 높이 규약: 이 레이아웃이 h-screen 을 소유하고 각 페이지는 h-full 로 그 안을 채운다. 페이지가
  * 직접 h-screen 을 쓰면 모바일 상단 바 높이만큼 화면 밖으로 넘쳐 body 가 세로로 흔들린다.
@@ -23,13 +26,13 @@ import {
   CalendarIcon,
   ChartIcon,
   CheckCircleIcon,
+  ChevronDownIcon,
   DriveIcon,
   FolderIcon,
   HistoryIcon,
   LinkIcon,
   LockIcon,
   MenuIcon,
-  PanelLeftIcon,
   RepeatIcon,
   ShieldIcon,
   StarIcon,
@@ -39,6 +42,20 @@ import {
 } from "./icons";
 
 const COLLAPSE_KEY = "minidrive.nav.collapsed";
+const SECTIONS_KEY = "minidrive.nav.sections";
+
+/** localStorage 의 섹션 접힘 상태. 파싱 실패나 과거 포맷은 "모두 펼침"으로 되돌린다. */
+function loadClosedSections(): Record<string, boolean> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, boolean>;
+    }
+  } catch {
+    // ignore — 아래에서 기본값으로 떨어진다.
+  }
+  return {};
+}
 
 export function Layout() {
   const { user } = useAuthStore();
@@ -67,6 +84,16 @@ export function Layout() {
     setCollapsed((v) => {
       localStorage.setItem(COLLAPSE_KEY, v ? "0" : "1");
       return !v;
+    });
+  };
+
+  // 섹션별 접힘 — 값이 없는 섹션은 펼침. 나중에 섹션이 늘어도 키만 추가하면 된다.
+  const [closedSections, setClosedSections] = useState<Record<string, boolean>>(loadClosedSections);
+  const toggleSection = (id: string) => {
+    setClosedSections((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      localStorage.setItem(SECTIONS_KEY, JSON.stringify(next));
+      return next;
     });
   };
 
@@ -116,7 +143,11 @@ export function Layout() {
           drawerOpen ? "translate-x-0" : "-translate-x-full"
         } ${collapsed ? "md:w-16" : "md:w-60"}`}
       >
-        <div className={`flex items-center ${collapsed ? "md:justify-center md:px-0" : ""} px-5 py-5`}>
+        <div
+          className={`flex items-center px-5 py-5 ${
+            collapsed ? "md:flex-col md:gap-3 md:px-0" : ""
+          }`}
+        >
           <Link
             to="/"
             className="flex min-w-0 items-center gap-2 transition-opacity hover:opacity-80"
@@ -129,7 +160,17 @@ export function Layout() {
               Flex Drive
             </span>
           </Link>
-          {/* 모바일 서랍 닫기 — 데스크톱에는 없다(레일 토글이 그 역할). */}
+          {/* 데스크톱 햄버거 — 아이콘 레일(64px) ↔ 전체(240px) 토글. */}
+          <button
+            className={`btn btn-ghost hidden p-1.5 md:flex ${collapsed ? "" : "ml-auto"}`}
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "메뉴 펼치기" : "메뉴 접기"}
+            aria-pressed={collapsed}
+            title={collapsed ? "메뉴 펼치기" : "메뉴 접기"}
+          >
+            <MenuIcon width={18} height={18} />
+          </button>
+          {/* 모바일 서랍 닫기 — 데스크톱에는 없다(햄버거가 레일 토글 역할). */}
           <button
             className="btn btn-ghost ml-auto p-1.5 md:hidden"
             onClick={() => setDrawerOpen(false)}
@@ -139,27 +180,32 @@ export function Layout() {
           </button>
         </div>
 
-        <nav className={`flex flex-1 flex-col gap-1 ${collapsed ? "md:px-2" : ""} px-3`}>
-          {/* 드라이브 */}
-          <SectionLabel
+        <nav className={`flex flex-1 flex-col ${collapsed ? "md:px-2" : ""} px-3`}>
+          <NavSection
             icon={<DriveIcon width={13} height={13} />}
             label="드라이브"
             collapsed={collapsed}
-          />
-          <NavItem to="/" icon={<FolderIcon />} label="내 드라이브" collapsed={collapsed} end />
-          <NavItem to="/favorites" icon={<StarIcon />} label="즐겨찾기" collapsed={collapsed} />
-          <NavItem to="/recent" icon={<HistoryIcon />} label="최근" collapsed={collapsed} />
-          <NavItem to="/groups" icon={<UsersIcon />} label="그룹" collapsed={collapsed} />
-          <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" collapsed={collapsed} />
-          <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" collapsed={collapsed} />
+            open={!closedSections["drive"]}
+            onToggle={() => toggleSection("drive")}
+          >
+            <NavItem to="/" icon={<FolderIcon />} label="내 드라이브" collapsed={collapsed} end />
+            <NavItem to="/favorites" icon={<StarIcon />} label="즐겨찾기" collapsed={collapsed} />
+            <NavItem to="/recent" icon={<HistoryIcon />} label="최근" collapsed={collapsed} />
+            <NavItem to="/groups" icon={<UsersIcon />} label="그룹" collapsed={collapsed} />
+            <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" collapsed={collapsed} />
+            <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" collapsed={collapsed} />
+          </NavSection>
 
-          {/* 할 일 */}
-          <div className="mt-4">
-            <SectionLabel
-              icon={<CheckCircleIcon width={13} height={13} />}
-              label="할 일"
-              collapsed={collapsed}
-            />
+          <NavSection
+            icon={<CheckCircleIcon width={13} height={13} />}
+            label="할 일"
+            collapsed={collapsed}
+            open={!closedSections["todo"]}
+            onToggle={() => toggleSection("todo")}
+            // 섹션을 접어도 오늘 진행률은 보이게 라벨 옆으로 올린다.
+            badge={todoBadge}
+            className="mt-4"
+          >
             <NavItem
               to="/todo"
               icon={<CalendarIcon />}
@@ -172,15 +218,17 @@ export function Layout() {
             />
             <NavItem to="/routines" icon={<RepeatIcon />} label="반복 루틴" collapsed={collapsed} />
             <NavItem to="/todo/reports" icon={<ChartIcon />} label="리포트" collapsed={collapsed} />
-          </div>
+          </NavSection>
 
           {(user?.role === "admin" || user?.role === "super_admin") && (
-            <div className="mt-4">
-              <SectionLabel
-                icon={<ShieldIcon width={13} height={13} />}
-                label="관리"
-                collapsed={collapsed}
-              />
+            <NavSection
+              icon={<ShieldIcon width={13} height={13} />}
+              label="관리"
+              collapsed={collapsed}
+              open={!closedSections["admin"]}
+              onToggle={() => toggleSection("admin")}
+              className="mt-4"
+            >
               <NavItem to="/admin" icon={<DriveIcon />} label="대시보드" collapsed={collapsed} end />
               <NavItem to="/admin/users" icon={<UsersIcon />} label="사용자" collapsed={collapsed} />
               <NavItem
@@ -197,7 +245,7 @@ export function Layout() {
                 collapsed={collapsed}
               />
               <NavItem to="/admin/audit" icon={<HistoryIcon />} label="감사 로그" collapsed={collapsed} />
-            </div>
+            </NavSection>
           )}
         </nav>
 
@@ -228,23 +276,9 @@ export function Layout() {
           </p>
         </div>
 
-        <div className="border-t border-token px-4 py-3">
-          <div className={collapsed ? "md:hidden" : ""}>
-            <ThemePicker />
-          </div>
-          {/* 레일 토글 — 데스크톱 전용. 모바일은 상단 바 햄버거로 여닫는다. */}
-          <button
-            className={`btn btn-ghost mt-2 hidden w-full md:flex ${
-              collapsed ? "md:mt-0 md:justify-center" : "justify-start"
-            }`}
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? "메뉴 펼치기" : "메뉴 접기"}
-            aria-pressed={collapsed}
-            title={collapsed ? "메뉴 펼치기" : "메뉴 접기"}
-          >
-            <PanelLeftIcon width={18} height={18} />
-            {!collapsed && <span className="text-sm">메뉴 접기</span>}
-          </button>
+        {/* 레일 모드에서는 ThemePicker 가 숨어 빈 칸만 남으므로 통째로 감춘다. */}
+        <div className={`border-t border-token px-4 py-3 ${collapsed ? "md:hidden" : ""}`}>
+          <ThemePicker />
         </div>
       </aside>
 
@@ -285,24 +319,55 @@ export function Layout() {
   );
 }
 
-/** 네비 섹션 구분 라벨 (드라이브 / 할 일 / 관리). 레일 모드에서는 아이콘만 남긴다. */
-function SectionLabel({
+/**
+ * 접을 수 있는 네비 섹션 (드라이브 / 할 일 / 관리). 라벨이 토글 버튼이고 접힘 여부는 부모가
+ * localStorage 로 유지한다. 레일 모드에서는 아이콘만 남지만 토글은 그대로 동작한다.
+ */
+function NavSection({
   icon,
   label,
+  badge,
   collapsed,
+  open,
+  onToggle,
+  className,
+  children,
 }: {
   icon: React.ReactNode;
   label: string;
+  /** 섹션이 접혀 항목 배지가 안 보일 때 라벨 옆에 대신 보여줄 카운트. */
+  badge?: string;
   collapsed: boolean;
+  open: boolean;
+  onToggle: () => void;
+  className?: string;
+  children: React.ReactNode;
 }) {
   return (
-    <div
-      className={`flex items-center gap-1.5 px-3 pb-1 text-xs font-semibold uppercase tracking-wide text-muted ${
-        collapsed ? "md:justify-center md:px-0" : ""
-      }`}
-    >
-      {icon}
-      <span className={collapsed ? "md:hidden" : ""}>{label}</span>
+    <div className={className}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        title={label}
+        className={`flex w-full items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold uppercase tracking-wide text-muted transition-colors hover:bg-[color:var(--bg-muted)] hover:text-[color:var(--text-primary)] ${
+          collapsed ? "md:justify-center md:px-0" : ""
+        }`}
+      >
+        {icon}
+        <span className={collapsed ? "md:sr-only" : ""}>{label}</span>
+        {badge && !open && (
+          <span className={`tabular-nums ${collapsed ? "md:hidden" : ""}`}>{badge}</span>
+        )}
+        <ChevronDownIcon
+          width={14}
+          height={14}
+          className={`ml-auto transition-transform ${open ? "" : "-rotate-90"} ${
+            collapsed ? "md:hidden" : ""
+          }`}
+        />
+      </button>
+      {open && <div className="mt-1 flex flex-col gap-1">{children}</div>}
     </div>
   );
 }
