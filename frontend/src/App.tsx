@@ -22,6 +22,7 @@ import { RegisterPage } from "@/pages/RegisterPage";
 import { RoutinesPage } from "@/pages/RoutinesPage";
 import { SetupPage } from "@/pages/SetupPage";
 import { SharesPage } from "@/pages/SharesPage";
+import { TodoMonthPage } from "@/pages/TodoMonthPage";
 import { TodoPage } from "@/pages/TodoPage";
 import { TodoReportsPage } from "@/pages/TodoReportsPage";
 import { TrashPage } from "@/pages/TrashPage";
@@ -71,6 +72,7 @@ function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<FileBrowserPage />} />
             <Route path="/todo" element={<TodoPage />} />
+            <Route path="/todo/month" element={<TodoMonthPage />} />
             <Route path="/routines" element={<RoutinesPage />} />
             <Route path="/todo/reports" element={<TodoReportsPage />} />
             <Route path="/favorites" element={<FavoritesPage />} />

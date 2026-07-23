@@ -15,7 +15,9 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatBytes, formatPercent } from "@/lib/format";
+import { todayStr } from "@/lib/localDate";
 import { useAuthStore } from "@/store/auth";
+import { useTodoBadgeStore } from "@/store/todoBadge";
 import { ThemePicker } from "./ThemePicker";
 import {
   CalendarIcon,
@@ -71,6 +73,17 @@ export function Layout() {
   useEffect(() => {
     setDrawerOpen(false);
   }, [location.key]);
+
+  // "오늘 할 일" 배지 — 페이지를 오갈 때마다 가볍게 따라잡는다. /todo 는 페이지가 같은 조회를
+  // 직접 수행해 reportDay 로 밀어 주므로 건너뛴다(중복 호출 + 동시 물질화 경쟁 방지).
+  const { date: badgeDate, done: badgeDone, total: badgeTotal, refresh: refreshBadge } =
+    useTodoBadgeStore();
+  useEffect(() => {
+    if (location.pathname === "/todo") return;
+    void refreshBadge();
+  }, [location.key, location.pathname, refreshBadge]);
+  const todoBadge =
+    badgeDate === todayStr() && badgeTotal > 0 ? `(${badgeDone}/${badgeTotal})` : undefined;
 
   useEffect(() => {
     if (!drawerOpen) return;
@@ -147,7 +160,16 @@ export function Layout() {
               label="할 일"
               collapsed={collapsed}
             />
-            <NavItem to="/todo" icon={<CalendarIcon />} label="오늘 할 일" collapsed={collapsed} end />
+            <NavItem
+              to="/todo"
+              icon={<CalendarIcon />}
+              label="오늘 할 일"
+              badge={todoBadge}
+              collapsed={collapsed}
+              end
+              // 월간 보기는 같은 메뉴의 다른 화면이다 — end 매칭에서 빠지므로 직접 밝힌다.
+              forceActive={location.pathname === "/todo/month"}
+            />
             <NavItem to="/routines" icon={<RepeatIcon />} label="반복 루틴" collapsed={collapsed} />
             <NavItem to="/todo/reports" icon={<ChartIcon />} label="리포트" collapsed={collapsed} />
           </div>
@@ -289,14 +311,20 @@ function NavItem({
   to,
   icon,
   label,
+  badge,
   end,
   collapsed,
+  forceActive,
 }: {
   to: string;
   icon: React.ReactNode;
   label: string;
+  /** 라벨 오른쪽에 붙는 보조 카운트 (예: "(2/5)"). 레일 모드에서는 라벨과 함께 숨긴다. */
+  badge?: string;
   end?: boolean;
   collapsed: boolean;
+  /** end 매칭 밖의 하위 화면(예: /todo/month)에서도 이 메뉴를 활성으로 표시한다. */
+  forceActive?: boolean;
 }) {
   return (
     <NavLink
@@ -307,7 +335,7 @@ function NavItem({
         `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
           collapsed ? "md:justify-center md:px-0" : ""
         } ${
-          isActive
+          isActive || forceActive
             ? "bg-[color:var(--bg-muted)] text-accent"
             : // 호버 시 배경만 bg-muted 로 바뀌고 글씨가 text-secondary 로 남으면 대비가
               // 3.6:1 까지 떨어진다(게임보이 라이트). .btn-ghost:hover 처럼 글씨도 같이 올린다.
@@ -318,6 +346,11 @@ function NavItem({
       {icon}
       {/* 레일 모드에서도 접근성 이름은 남긴다(스크린리더·테스트가 라벨로 찾는다). */}
       <span className={collapsed ? "md:sr-only" : ""}>{label}</span>
+      {badge && (
+        <span className={`ml-auto text-xs tabular-nums text-muted ${collapsed ? "md:hidden" : ""}`}>
+          {badge}
+        </span>
+      )}
     </NavLink>
   );
 }

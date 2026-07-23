@@ -21,6 +21,7 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Routine, TodoItem
@@ -217,7 +218,13 @@ async def ensure_day_materialized(
         created = True
 
     if created:
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            # 같은 날을 동시에 연 다른 요청(예: 사이드바 배지 + 페이지)이 먼저 물질화한
+            # 경우 — 유니크 인덱스(uq_todo_items_routine_day)가 막는다. 항목은 이미
+            # 존재하므로 되돌리고 그대로 진행한다.
+            await session.rollback()
 
 
 # --- 투두 항목 조회 / CRUD ---------------------------------------------------

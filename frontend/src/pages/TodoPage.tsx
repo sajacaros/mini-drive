@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { extractErrorMessage } from "@/api/client";
 import { createTodo, deleteTodo, getDay, updateTodo } from "@/api/todos";
@@ -28,6 +28,7 @@ import {
   XIcon,
 } from "@/components/icons";
 import { addDays, formatDayLabel, todayStr } from "@/lib/localDate";
+import { useTodoBadgeStore } from "@/store/todoBadge";
 
 /** 체크를 누를 때 도는 순서. 빈칸 → 완료(v) → 실패(x) → 빈칸. */
 const NEXT_STATUS: Record<TodoStatus, TodoStatus> = {
@@ -46,7 +47,12 @@ export function TodoPage() {
   const toast = useToast();
   const navigate = useNavigate();
 
-  const [date, setDate] = useState(() => todayStr());
+  // 월간 보기 등에서 특정 날짜로 들어올 수 있게 ?date=YYYY-MM-DD 를 초기값으로 받는다.
+  const [searchParams] = useSearchParams();
+  const [date, setDate] = useState(() => {
+    const q = searchParams.get("date");
+    return q && /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : todayStr();
+  });
   const [day, setDayData] = useState<TodoDayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +75,13 @@ export function TodoPage() {
   useEffect(() => {
     void load(date);
   }, [load, date]);
+
+  // 사이드 네비 "오늘 할 일" 배지 동기화 — 오늘 데이터를 들고 있는 동안은 체크/추가/삭제가
+  // 반영된 카운트를 그대로 밀어 준다(store 가 오늘이 아니면 무시한다).
+  const reportDay = useTodoBadgeStore((s) => s.reportDay);
+  useEffect(() => {
+    if (day) reportDay(day);
+  }, [day, reportDay]);
 
   const isToday = date === todayStr();
   const items = day?.items ?? [];
@@ -214,6 +227,13 @@ export function TodoPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                className="btn btn-secondary"
+                onClick={() => navigate("/todo/month")}
+              >
+                <CalendarIcon width={16} height={16} />
+                월간
+              </button>
               <button
                 className="btn btn-secondary"
                 onClick={() => navigate("/routines")}
