@@ -18,8 +18,9 @@ if TYPE_CHECKING:  # 런타임 임포트 순환 회피 — from_share 팩토리 
 class ShareCreateRequest(BaseModel):
     """공유 링크 생성 (PRD 6.3 POST /api/shares).
 
-    permission 은 Phase 1 에서 read/download 만 허용한다(편집 권한은 Phase 5). file_id 가
-    폴더면 서비스가 400 을 낸다. password 는 옵션이며 argon2 로 해싱해 저장한다.
+    permission 은 Phase 1 에서 read/download 만 허용한다(편집 권한은 Phase 5). file_id 는
+    파일/폴더 모두 가능하다 — 폴더면 방문자가 하위 전체를 ZIP 으로 받는다. password 는
+    옵션이며 argon2 로 해싱해 저장한다.
     """
 
     file_id: int
@@ -39,6 +40,7 @@ class ShareResponse(BaseModel):
     id: int
     file_id: int
     file_name: str
+    is_folder: bool = False
     share_url: str
     permission: str
     is_active: bool
@@ -56,6 +58,7 @@ class ShareResponse(BaseModel):
         share: Share,
         file_name: str,
         *,
+        is_folder: bool = False,
         view_count: int = 0,
         last_access_at: datetime | None = None,
     ) -> ShareResponse:
@@ -67,6 +70,7 @@ class ShareResponse(BaseModel):
             id=share.id,
             file_id=share.file_id,
             file_name=file_name,
+            is_folder=is_folder,
             share_url=share.share_url,
             permission=share.permission,
             is_active=share.is_active,
@@ -109,6 +113,7 @@ class SharePublicMeta(BaseModel):
     """
 
     file_name: str
+    is_folder: bool = False
     size: int
     mime_type: str | None = None
     permission: str
@@ -120,3 +125,40 @@ class SharePasswordRequest(BaseModel):
     """공개 다운로드 시 전달하는 비밀번호(필요 시). 본문 전체가 옵션이다."""
 
     password: str | None = None
+
+
+class ShareListRequest(BaseModel):
+    """폴더 공유 웹 탐색 목록 요청. folder_id 생략 시 공유 루트."""
+
+    password: str | None = None
+    folder_id: int | None = None
+
+
+class SharePublicCrumb(BaseModel):
+    """탐색 경로의 한 칸 (브레드크럼). 공유 루트가 경로의 시작점이다."""
+
+    id: int
+    name: str
+
+
+class SharePublicEntry(BaseModel):
+    """폴더 공유 목록의 한 항목 — 방문자에게 보여줄 최소 정보만 담는다(키/소유자 등 제외)."""
+
+    id: int
+    name: str
+    is_folder: bool
+    size: int
+    mime_type: str | None = None
+    updated_at: datetime
+
+
+class ShareFolderListing(BaseModel):
+    """폴더 공유 웹 탐색 응답 (POST /api/public/shares/{shareUrl}/list).
+
+    breadcrumbs 는 공유 루트→현재 폴더 순. 이 응답에 도달했다는 것은 활성·미만료·비밀번호를
+    이미 통과했다는 뜻이다.
+    """
+
+    folder: SharePublicCrumb
+    breadcrumbs: list[SharePublicCrumb]
+    entries: list[SharePublicEntry]

@@ -4,6 +4,13 @@
 초과가 즉시 반영된다. presigned URL 은 브라우저에 노출하지 않고, X-Accel-Redirect 로 nginx→
 MinIO 스트리밍을 유도한다(라우트에서 gateway_download_response 로 응답).
 
+폴더 공유는 방문자가 웹에서 트리를 탐색하고(목록/개별 미리보기/개별 다운로드), 전체 또는
+하위 폴더를 스트리밍 ZIP 으로 받을 수 있다(archives 재사용). 접근 판정은 방문자가 아니라
+**공유 생성자** 권한으로 한다 — 생성자가 볼 수 없는 하위 항목은 목록에도 ZIP 에도 나가지
+않는다. 하위 항목 접근은 매번 "공유된 루트의 자손인가"를 재귀 CTE 로 검증한다 — 이 검증이
+없으면 공유 링크 하나로 임의 파일을 열람하는 구멍이 된다. 폴더 공유는 다운로드 횟수 제한
+(max_downloads)을 두지 않는다 — 접근 제한 수단은 만료 기간(과 비밀번호)뿐이다.
+
 상태별 응답(PRD 10장):
   - 공유 없음            → 404
   - is_active = FALSE    → 410 (비활성화 즉시 차단)
@@ -24,9 +31,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
 from app.models import File, Share, User
-from app.models.enums import SharePermission
+from app.models.enums import SharePermission, UserStatus
+from app.services import archives as archives_service
 from app.services import permissions as permissions_service
 from app.services import previews as previews_service
+from app.services.archives import ArchivePlan
+from app.services.files import FileServiceError
 from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
 
@@ -74,9 +84,10 @@ async def create_share(
     expires_at: datetime | None,
     password: str | None,
     max_downloads: int | None,
-) -> tuple[Share, str]:
-    """공유 링크 생성 (PRD 6.3). 소유자 또는 write 이상 권한자, 폴더 불가. (share, 파일명) 반환.
+) -> tuple[Share, str, bool]:
+    """공유 링크 생성 (PRD 6.3). 소유자 또는 write 이상 권한자. (share, 이름, 폴더 여부) 반환.
 
+    폴더도 공유할 수 있다 — 방문자는 하위 전체를 ZIP 으로 내려받는다(plan_share_archive).
     share_url 은 secrets.token_urlsafe 로 생성하고 유니크 충돌 시 재생성한다.
     """
     try:
@@ -98,9 +109,8 @@ async def create_share(
             raise ShareServiceError(404, "파일을 찾을 수 없습니다.")
         if not permissions_service.permission_covers(level, "write"):
             raise ShareServiceError(403, "이 파일을 공유할 권한이 없습니다.")
-    if file.is_folder:
-        raise ShareServiceError(400, "폴더는 공유할 수 없습니다.")
     file_name = file.name
+    is_folder = file.is_folder
 
     if expires_at is not None:
         if expires_at.tzinfo is None:
@@ -110,6 +120,12 @@ async def create_share(
 
     if max_downloads is not None and max_downloads < 1:
         raise ShareServiceError(422, "max_downloads 는 1 이상이어야 합니다.")
+    # 폴더 공유는 횟수 제한 없이 열어 둔다 — 접근 제한은 만료 기간(과 비밀번호)으로만.
+    # 개별 파일을 몇 번이고 받는 탐색형 공유에서 횟수는 의미 있는 단위가 아니기 때문이다.
+    if is_folder and max_downloads is not None:
+        raise ShareServiceError(
+            422, "폴더 공유는 다운로드 횟수 제한을 지원하지 않습니다."
+        )
 
     password_hash = hash_password(password) if password else None
 
@@ -131,7 +147,7 @@ async def create_share(
             await session.rollback()
             continue
         await session.refresh(share)
-        return share, file_name
+        return share, file_name, is_folder
 
     raise ShareServiceError(500, "공유 링크 생성에 실패했습니다. 다시 시도해 주세요.")
 
@@ -143,14 +159,14 @@ async def list_shares(
     active: bool | None = None,
     page: int = 1,
     size: int = 20,
-) -> tuple[list[tuple[Share, str]], int]:
-    """내 공유 링크 목록 (파일명 포함, 최신순) — PRD 6.3. ((share, 파일명) 목록, 총 개수).
+) -> tuple[list[tuple[Share, str, bool]], int]:
+    """내 공유 링크 목록 (파일명 포함, 최신순) — PRD 6.3. ((share, 이름, 폴더 여부) 목록, 총 개수).
 
     active 는 활성/비활성 탭 필터(None 이면 전체). 총 개수는 필터를 적용한 뒤 센다 —
     페이지 수 계산이 현재 탭 기준이어야 하기 때문이다.
     """
     base = (
-        select(Share, File.name)
+        select(Share, File.name, File.is_folder)
         .join(File, Share.file_id == File.id)
         .where(Share.created_by == user.id)
     )
@@ -167,7 +183,7 @@ async def list_shares(
             .limit(size)
         )
     ).all()
-    return [(share, name) for share, name in rows], total
+    return [(share, name, is_folder) for share, name, is_folder in rows], total
 
 
 async def get_owned_share(session: AsyncSession, user: User, share_id: int) -> Share:
@@ -249,16 +265,17 @@ async def _try_increment(session: AsyncSession, share_id: int) -> bool:
     return row is not None
 
 
-async def authorize_share_download(
+async def authorize_share_access(
     session: AsyncSession,
     share_url: str,
     password: str | None,
-) -> tuple[File, str]:
-    """공개 다운로드 인가 + 횟수 소모 (PRD 6.3, 10장). presign 은 하지 않는다.
+) -> tuple[Share, File]:
+    """공개 접근 공통 관문 — 횟수는 소모하지 않는다. (share, file) 반환.
 
-    검증 순서: 활성 → 만료 → 파일 존재 → 비밀번호(불일치 401) → max_downloads(초과 410).
-    통과 시 download_count 를 원자적으로 증가하고 (file, permission) 을 반환한다.
-    직접 다운로드와 티켓 발급이 공유하는 공통 관문이다.
+    검증 순서: 활성 → 만료 → 파일 존재 → 비밀번호(불일치 401 — 열거/타이밍 노출을 줄이기
+    위해 오류 메시지는 일반화한다). 다운로드 계열은 이후 consume_download_quota 로 횟수를
+    소모한다 — 폴더 공유는 그 사이에 아카이브 계획(413 상한 검사)이 끼어들 수 있어야 하므로
+    인가와 소모를 분리했다.
     """
     share = await _get_by_url(session, share_url)
     _ensure_accessible(share)
@@ -267,35 +284,199 @@ async def authorize_share_download(
     if file is None or file.is_deleted:
         raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
 
-    # 비밀번호 검증 — 열거/타이밍 노출을 줄이기 위해 오류 메시지는 일반화한다.
     if share.password_hash is not None:
         if not password or not verify_password(password, share.password_hash):
             raise ShareServiceError(401, "비밀번호가 필요하거나 올바르지 않습니다.")
 
-    # 다운로드 횟수 원자적 증가 — 초과면 410. (비밀번호 통과 후에만 카운트를 소모한다.)
+    return share, file
+
+
+async def consume_download_quota(session: AsyncSession, share: Share) -> None:
+    """다운로드 횟수 원자적 소모 — 초과면 410. 비밀번호(인가) 통과 후에만 호출한다."""
     if not await _try_increment(session, share.id):
         raise ShareServiceError(410, "다운로드 횟수를 모두 사용한 공유 링크입니다.")
 
-    return file, share.permission
+
+async def presign_share_file(
+    storage: StorageService, file: File
+) -> tuple[str, str, str]:
+    """단일 파일 공유의 스트리밍 준비 — 내부 presign(60s)을 nginx `/_minio/` 경로로 변환.
+
+    반환: (internal_redirect, filename, mime). 인가·횟수 소모는 호출자가 끝냈어야 한다.
+    """
+    presigned = await storage.presign_get_async(file.file_key)
+    internal = storage.to_internal_redirect(presigned)
+    return internal, file.name, file.mime_type or "application/octet-stream"
 
 
-async def prepare_share_download(
+# 하위 노드에서 부모를 따라 뿌리까지 올라가는 체인. 공유 루트가 체인에 있으면 "공유 트리 안"
+# 이고, 그 체인이 곧 브레드크럼이 된다. 삭제된 조상이 끼어 있으면 체인이 끊겨 자연히 배제된다.
+_UP_CHAIN_SQL = text(
+    """
+    WITH RECURSIVE up AS (
+        SELECT id, name, parent_folder_id, 0 AS depth
+        FROM files WHERE id = :node AND is_deleted = FALSE
+        UNION ALL
+        SELECT f.id, f.name, f.parent_folder_id, up.depth + 1
+        FROM files f JOIN up ON f.id = up.parent_folder_id
+        WHERE f.is_deleted = FALSE
+    )
+    SELECT id, name, depth FROM up ORDER BY depth
+    """
+)
+
+
+async def _get_active_creator(session: AsyncSession, share: Share) -> User:
+    """공유 생성자 — 폴더 공유의 접근 판정 주체. 없거나 비활성이면 410 (링크 즉시 차단)."""
+    creator = await session.get(User, share.created_by)
+    if creator is None or creator.status != UserStatus.ACTIVE:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    return creator
+
+
+async def _resolve_share_node(
+    session: AsyncSession, root: File, node_id: int
+) -> tuple[File, list[tuple[int, str]]]:
+    """node_id 가 공유 루트의 자손(또는 루트 자신)인지 검증한다. 트리 밖이면 404 —
+    존재 여부를 노출하지 않는다. (node, 루트→node 브레드크럼[(id, name)]) 반환.
+    """
+    node = await session.get(File, node_id)
+    if node is None or node.is_deleted:
+        raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
+    rows = (await session.execute(_UP_CHAIN_SQL, {"node": node_id})).all()
+    chain = [(row.id, row.name) for row in rows]  # node → … → 최상위 순
+    for idx, (chain_id, _name) in enumerate(chain):
+        if chain_id == root.id:
+            return node, list(reversed(chain[: idx + 1]))
+    raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
+
+
+async def authorize_share_child(
+    session: AsyncSession,
+    share_url: str,
+    password: str | None,
+    node_id: int,
+) -> tuple[Share, File, list[tuple[int, str]]]:
+    """폴더 공유 안의 하위 항목 접근 인가. (share, node, 브레드크럼) 반환.
+
+    공유 인가(활성/만료/비밀번호) → 루트가 폴더인지(400) → node 가 트리 안인지(404) →
+    생성자 권한이 하위까지 미치는지(inherit 없는 부여면 404 — 목록에도 없던 항목이다).
+    """
+    share, root = await authorize_share_access(session, share_url, password)
+    if not root.is_folder:
+        raise ShareServiceError(400, "폴더 공유가 아닙니다.")
+    creator = await _get_active_creator(session, share)
+    node, crumbs = await _resolve_share_node(session, root, node_id)
+    if node.id != root.id and not await permissions_service.can_access_descendants(
+        session, creator, root
+    ):
+        raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
+    return share, node, crumbs
+
+
+async def list_share_folder(
+    session: AsyncSession,
+    share_url: str,
+    password: str | None,
+    folder_id: int | None,
+) -> tuple[Share, File, list[tuple[int, str]], list[File]]:
+    """폴더 공유의 웹 탐색 목록. (share, 현재 폴더, 루트→현재 브레드크럼, 자식들) 반환.
+
+    folder_id 가 None 이면 공유 루트. 생성자 권한이 하위까지 미치지 않으면 루트를 빈
+    폴더로 보여준다 — ZIP 이 빈 폴더만 담는 것과 같은 기준이다.
+    """
+    share, root = await authorize_share_access(session, share_url, password)
+    if not root.is_folder:
+        raise ShareServiceError(400, "폴더 공유가 아닙니다.")
+    creator = await _get_active_creator(session, share)
+
+    descend = await permissions_service.can_access_descendants(session, creator, root)
+    if folder_id is None or folder_id == root.id:
+        target, crumbs = root, [(root.id, root.name)]
+    else:
+        if not descend:
+            raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
+        target, crumbs = await _resolve_share_node(session, root, folder_id)
+        if not target.is_folder:
+            raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
+
+    if not descend:
+        return share, target, crumbs, []
+
+    children = (
+        (
+            await session.execute(
+                select(File)
+                .where(
+                    File.parent_folder_id == target.id,
+                    File.is_deleted.is_(False),
+                )
+                .order_by(File.is_folder.desc(), File.name.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return share, target, crumbs, list(children)
+
+
+async def prepare_share_child_preview(
     session: AsyncSession,
     storage: StorageService,
     share_url: str,
     password: str | None,
-) -> tuple[str, str, str, str]:
-    """공개 다운로드 준비 (PRD 6.3, 10장).
+    file_id: int,
+) -> tuple[PreviewPlan, str, int]:
+    """폴더 공유 안의 파일 하나 미리보기 (횟수와 무관). (plan, filename, share_id) 반환."""
+    share, node, _crumbs = await authorize_share_child(
+        session, share_url, password, file_id
+    )
+    if node.is_folder:
+        raise ShareServiceError(400, "폴더는 미리볼 수 없습니다.")
+    plan = await previews_service.build_preview_plan(storage, node)
+    return plan, node.name, share.id
 
-    인가+횟수 소모 후 내부 presign(60s)을 nginx `/_minio/` 경로로 변환해 반환한다.
-    반환: (internal_redirect, filename, mime, permission).
+
+async def plan_share_archive(
+    session: AsyncSession, share: Share, folder: File
+) -> ArchivePlan:
+    """공유된 폴더를 ZIP 아카이브 계획으로 펼친다 (개수/용량 상한 검사 포함).
+
+    방문자는 익명이므로 접근 판정은 **공유 생성자** 권한으로 한다 — 생성자가 지금 볼 수
+    있는 범위만 나간다(생성 뒤 권한이 회수됐거나 계정이 비활성이면 410). 상한 초과(413)는
+    그대로 올리고, 그 외 실패는 내부 사정을 숨기고 410 으로 일반화한다.
+
+    folder 는 공유 루트 자체이거나 그 자손 폴더다(하위 폴더 ZIP) — 자손 검증은 호출자
+    (authorize_share_child / prepare_ticketed_share_archive)가 끝냈어야 한다.
     """
-    file, permission = await authorize_share_download(session, share_url, password)
-    presigned = await storage.presign_get_async(file.file_key)
-    internal = storage.to_internal_redirect(presigned)
-    mime = file.mime_type or "application/octet-stream"
-    # permission=read 여도 Phase 1 은 다운로드와 동일 취급하되, 구분은 응답에 담아 전달한다.
-    return internal, file.name, mime, permission
+    creator = await _get_active_creator(session, share)
+    try:
+        return await archives_service.plan_archive(session, creator, [folder.id])
+    except FileServiceError as exc:
+        if exc.status_code == 413:
+            raise ShareServiceError(413, exc.detail) from exc
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.") from exc
+
+
+async def prepare_ticketed_share_archive(
+    session: AsyncSession, share_id: int, file_id: int
+) -> ArchivePlan:
+    """공개 폴더 공유 티켓 소비 후 ZIP 계획 재수립. 인가·횟수 소모는 발급 시 끝났으므로,
+    스트리밍 직전 판정(트리 소속·생성자 권한·상한)만 다시 한다.
+
+    file_id 는 공유 루트 또는 그 자손 폴더(하위 폴더 ZIP) — 발급 시 검증했지만 그 사이
+    이동/삭제됐을 수 있어 다시 확인한다.
+    """
+    share = await session.get(Share, share_id)
+    if share is None:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    root = await session.get(File, share.file_id)
+    if root is None or root.is_deleted or not root.is_folder:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    folder, _crumbs = await _resolve_share_node(session, root, file_id)
+    if not folder.is_folder:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    return await plan_share_archive(session, share, folder)
 
 
 async def authorize_share_view(
@@ -306,16 +487,9 @@ async def authorize_share_view(
     """공개 미리보기 인가 (PRD 3.2, 3.4). 활성/만료/파일/비밀번호를 검증하되 download_count 는
     소모하지 않는다 — 미리보기는 다운로드 횟수 제한과 무관하다. 폴더는 400. (share, file) 반환.
     """
-    share = await _get_by_url(session, share_url)
-    _ensure_accessible(share)
-    file = await session.get(File, share.file_id)
-    if file is None or file.is_deleted:
-        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    share, file = await authorize_share_access(session, share_url, password)
     if file.is_folder:
         raise ShareServiceError(400, "폴더는 미리볼 수 없습니다.")
-    if share.password_hash is not None:
-        if not password or not verify_password(password, share.password_hash):
-            raise ShareServiceError(401, "비밀번호가 필요하거나 올바르지 않습니다.")
     return share, file
 
 
@@ -345,7 +519,4 @@ async def prepare_ticketed_share_download(
     file = await session.get(File, file_id)
     if file is None or file.is_deleted:
         raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
-    presigned = await storage.presign_get_async(file.file_key)
-    internal = storage.to_internal_redirect(presigned)
-    mime = file.mime_type or "application/octet-stream"
-    return internal, file.name, mime
+    return await presign_share_file(storage, file)

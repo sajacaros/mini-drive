@@ -13,7 +13,7 @@ import {
   LoadingState,
   Pagination,
 } from "@/components/ui";
-import { CopyIcon, LinkIcon } from "@/components/icons";
+import { CopyIcon, FolderIcon, LinkIcon } from "@/components/icons";
 import { formatDateTime } from "@/lib/format";
 
 const PAGE_SIZE = 20;
@@ -132,7 +132,12 @@ export function SharesPage() {
                   <tr key={s.id} className="border-b border-token last:border-0">
                     <td className="px-4 py-2.5">
                       <div className="flex flex-col">
-                        <span className="truncate font-medium">{s.file_name}</span>
+                        <span className="flex min-w-0 items-center gap-1.5 font-medium">
+                          {s.is_folder && (
+                            <FolderIcon width={14} height={14} className="shrink-0 text-muted" />
+                          )}
+                          <span className="truncate">{s.file_name}</span>
+                        </span>
                         <span className="truncate text-xs text-muted">
                           {s.permission === "read" ? "읽기 전용" : "다운로드 허용"}
                           {s.password_required && " · 비밀번호"}

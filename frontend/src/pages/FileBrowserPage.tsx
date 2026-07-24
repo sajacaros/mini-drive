@@ -1728,10 +1728,18 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
   return (
     <>
       {f.is_folder && (
-        // 폴더는 하위 전체를 ZIP 하나로 묶어 받는다 (backend 스트리밍).
-        <IconAction title="ZIP 으로 다운로드" onClick={() => p.onDownload(f)}>
-          <DownloadIcon width={16} height={16} />
-        </IconAction>
+        <>
+          {/* 폴더는 하위 전체를 ZIP 하나로 묶어 받는다 (backend 스트리밍). */}
+          <IconAction title="ZIP 으로 다운로드" onClick={() => p.onDownload(f)}>
+            <DownloadIcon width={16} height={16} />
+          </IconAction>
+          {/* 폴더 공유 — 방문자는 하위 전체를 ZIP 으로 받는다. 파일과 같은 기준(write 이상). */}
+          {canWrite && (
+            <IconAction title="공유" onClick={() => p.onShare(f)}>
+              <ShareIcon width={16} height={16} />
+            </IconAction>
+          )}
+        </>
       )}
       {!f.is_folder && (
         <>

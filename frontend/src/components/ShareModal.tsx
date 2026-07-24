@@ -1,4 +1,4 @@
-/** 파일 공유 링크 생성 모달 — 만료일/비밀번호/최대 다운로드 옵션 + 생성 URL 복사. */
+/** 파일/폴더 공유 링크 생성 모달 — 만료일/비밀번호/최대 다운로드 옵션 + 생성 URL 복사. */
 
 import { useState } from "react";
 
@@ -59,7 +59,8 @@ export function ShareModal({
         // datetime-local(로컬 시각) → ISO 문자열로 변환해 전송.
         expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
         password: password || null,
-        max_downloads: maxDownloads ? Number(maxDownloads) : null,
+        // 폴더 공유는 횟수 제한이 없다(백엔드 422) — 만료 기간으로만 제한한다.
+        max_downloads: !file.is_folder && maxDownloads ? Number(maxDownloads) : null,
       });
       setCreated(share);
       onCreated?.(share);
@@ -121,8 +122,15 @@ export function ShareModal({
       ) : (
         <div className="flex flex-col gap-4">
           <p className="truncate text-sm text-muted">
-            대상 파일: <span className="font-medium text-[color:var(--text-primary)]">{file?.name}</span>
+            대상 {file?.is_folder ? "폴더" : "파일"}:{" "}
+            <span className="font-medium text-[color:var(--text-primary)]">{file?.name}</span>
           </p>
+          {file?.is_folder && (
+            <p className="text-xs text-muted">
+              방문자는 웹에서 폴더를 탐색하며 항목을 받거나 전체를 ZIP 으로 받을 수 있습니다.
+              횟수 제한 없이 만료 기간으로만 제한됩니다.
+            </p>
+          )}
 
           <div>
             <label className="label">권한</label>
@@ -164,20 +172,22 @@ export function ShareModal({
             />
           </div>
 
-          <div>
-            <label className="label" htmlFor="maxDl">
-              최대 다운로드 횟수 (선택)
-            </label>
-            <input
-              id="maxDl"
-              type="number"
-              min={1}
-              className="input"
-              placeholder="제한 없음"
-              value={maxDownloads}
-              onChange={(e) => setMaxDownloads(e.target.value)}
-            />
-          </div>
+          {!file?.is_folder && (
+            <div>
+              <label className="label" htmlFor="maxDl">
+                최대 다운로드 횟수 (선택)
+              </label>
+              <input
+                id="maxDl"
+                type="number"
+                min={1}
+                className="input"
+                placeholder="제한 없음"
+                value={maxDownloads}
+                onChange={(e) => setMaxDownloads(e.target.value)}
+              />
+            </div>
+          )}
         </div>
       )}
     </Modal>

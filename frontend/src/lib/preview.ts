@@ -71,15 +71,8 @@ export class SharePreviewError extends Error {
   }
 }
 
-/**
- * 공개 공유 미리보기 (무인증). 비밀번호가 있으면 body 에 담는다. 다운로드 횟수는 소모하지 않는다.
- * 415 → unsupported, 401(비밀번호)/410(만료)/400(폴더) 등은 SharePreviewError 로 던진다.
- */
-export async function fetchPublicSharePreview(
-  shareUrl: string,
-  password?: string,
-): Promise<PreviewResult> {
-  const res = await fetch(withBase(`/api/public/shares/${shareUrl}/preview`), {
+async function fetchSharePreviewByPath(path: string, password?: string): Promise<PreviewResult> {
+  const res = await fetch(withBase(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: password ?? null }),
@@ -100,4 +93,27 @@ export async function fetchPublicSharePreview(
   const contentType = res.headers.get("content-type") ?? "";
   const truncated = res.headers.get("x-preview-truncated") === "true";
   return await toResult(contentType, await res.blob(), truncated);
+}
+
+/**
+ * 공개 공유 미리보기 (무인증). 비밀번호가 있으면 body 에 담는다. 다운로드 횟수는 소모하지 않는다.
+ * 415 → unsupported, 401(비밀번호)/410(만료)/400(폴더) 등은 SharePreviewError 로 던진다.
+ */
+export async function fetchPublicSharePreview(
+  shareUrl: string,
+  password?: string,
+): Promise<PreviewResult> {
+  return fetchSharePreviewByPath(`/api/public/shares/${shareUrl}/preview`, password);
+}
+
+/** 폴더 공유 안의 파일 하나 미리보기 — 규약은 단일 공유 미리보기와 같다. */
+export async function fetchPublicShareChildPreview(
+  shareUrl: string,
+  fileId: number,
+  password?: string,
+): Promise<PreviewResult> {
+  return fetchSharePreviewByPath(
+    `/api/public/shares/${shareUrl}/files/${fileId}/preview`,
+    password,
+  );
 }

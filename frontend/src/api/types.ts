@@ -151,6 +151,8 @@ export interface Share {
   id: number;
   file_id: number;
   file_name: string;
+  /** 폴더 공유 여부 — 방문자는 하위 전체를 ZIP 으로 받는다. */
+  is_folder: boolean;
   share_url: string;
   permission: string;
   is_active: boolean;
@@ -192,8 +194,33 @@ export interface ShareCreateRequest {
 }
 
 /** 공개(무인증) 공유 메타 (GET /api/public/shares/{shareUrl}). */
+/** 폴더 공유 탐색 경로의 한 칸 (루트→현재). */
+export interface SharePublicCrumb {
+  id: number;
+  name: string;
+}
+
+/** 폴더 공유 목록의 한 항목 (방문자에게 보여줄 최소 정보). */
+export interface SharePublicEntry {
+  id: number;
+  name: string;
+  is_folder: boolean;
+  size: number;
+  mime_type: string | null;
+  updated_at: string;
+}
+
+/** 폴더 공유 웹 탐색 응답 (POST /api/public/shares/{shareUrl}/list). */
+export interface ShareFolderListing {
+  folder: SharePublicCrumb;
+  breadcrumbs: SharePublicCrumb[];
+  entries: SharePublicEntry[];
+}
+
 export interface SharePublicMeta {
   file_name: string;
+  /** 폴더 공유면 웹 탐색(list)이 가능하고, 전체/하위 폴더는 ZIP 으로 내려온다. */
+  is_folder: boolean;
   size: number;
   mime_type: string | null;
   permission: string;

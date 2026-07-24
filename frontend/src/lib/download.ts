@@ -73,8 +73,8 @@ export class ShareDownloadError extends Error {
   }
 }
 
-export async function downloadSharedFile(shareUrl: string, password?: string): Promise<void> {
-  const res = await fetch(withBase(`/api/public/shares/${shareUrl}/download-ticket`), {
+async function requestShareTicket(path: string, password?: string): Promise<void> {
+  const res = await fetch(withBase(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password: password ?? null }),
@@ -93,4 +93,23 @@ export async function downloadSharedFile(shareUrl: string, password?: string): P
 
   const ticket = (await res.json()) as DownloadTicketResponse;
   navigateToDownload(ticket.url);
+}
+
+export async function downloadSharedFile(shareUrl: string, password?: string): Promise<void> {
+  await requestShareTicket(`/api/public/shares/${shareUrl}/download-ticket`, password);
+}
+
+/**
+ * 폴더 공유 안의 항목 하나 다운로드 — 파일은 원본, 하위 폴더는 ZIP.
+ * 트리 밖 file_id 는 404 로 거절된다(공유 범위 검증은 백엔드가 매번 한다).
+ */
+export async function downloadSharedChild(
+  shareUrl: string,
+  fileId: number,
+  password?: string,
+): Promise<void> {
+  await requestShareTicket(
+    `/api/public/shares/${shareUrl}/files/${fileId}/download-ticket`,
+    password,
+  );
 }

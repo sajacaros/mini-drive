@@ -3,7 +3,8 @@
 시나리오: admin 부트스트랩 → alice 승인/로그인 → 업로드 → 공유 생성 → 무인증 메타 조회 →
 무인증 다운로드(X-Accel-Redirect + presigned URL 로 MinIO 직접 GET 바이트 일치) →
 비밀번호 공유(오답 401 / 정답 200) → 만료 공유 410(메타·다운로드) →
-max_downloads 소진 410 → 폴더 공유 400 → 없는 URL 404 →
+max_downloads 소진 410 → 폴더 공유 ZIP(직접/티켓, max_downloads 422) → 웹 탐색(목록/
+브레드크럼/개별·하위 ZIP 다운로드/미리보기/트리 밖 404/비밀번호 관문) → 없는 URL 404 →
 비활성화(DELETE) 후 즉시 410 차단 → 목록 활성/비활성 탭 필터 + 페이지네이션 →
 공유 있는 파일 영구 삭제 성공(FK 이슈 해결 + shares 행 제거).
 
@@ -13,7 +14,9 @@ env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.
 from __future__ import annotations
 
 import asyncio
+import io
 import sys
+import zipfile
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -215,14 +218,147 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         assert r.status_code == 410, r.text
         _ok("max_downloads 소진 후 410")
 
-        # --- 폴더 공유 400 / 없는 URL 404 ------------------------------------
+        # --- 폴더 공유: 메타 is_folder → ZIP 다운로드(직접/티켓) / 미리보기 400 --
+        # 구조: folder-x/{inner.bin, note.txt, sub/{deep.bin}}
         r = await c.post("/api/files", headers=alice_h, json={"name": "folder-x"})
         folder_id = r.json()["id"]
-        r = await c.post("/api/shares", headers=alice_h, json={"file_id": folder_id})
+        r = await c.post(
+            "/api/files", headers=alice_h, json={"name": "sub", "parent_id": folder_id}
+        )
+        sub_id = r.json()["id"]
+
+        async def _upload_into(parent: int, name: str, data: bytes, mime: str) -> int:
+            resp = await c.post(
+                "/api/files/upload",
+                headers=alice_h,
+                files={"file": (name, data, mime)},
+                data={"parent_id": str(parent)},
+            )
+            assert resp.status_code == 201, resp.text
+            return resp.json()["id"]
+
+        inner_id = await _upload_into(
+            folder_id, "inner.bin", PAYLOAD, "application/octet-stream"
+        )
+        note_id = await _upload_into(folder_id, "note.txt", b"hello note", "text/plain")
+        await _upload_into(sub_id, "deep.bin", PAYLOAD, "application/octet-stream")
+
+        # 폴더 공유는 횟수 제한을 지원하지 않는다 — 기간(만료)으로만 제한.
+        r = await c.post(
+            "/api/shares",
+            headers=alice_h,
+            json={"file_id": folder_id, "max_downloads": 3},
+        )
+        assert r.status_code == 422, r.text
+        r = await c.post(
+            "/api/shares",
+            headers=alice_h,
+            json={"file_id": folder_id, "permission": "download"},
+        )
+        assert r.status_code == 201, r.text
+        assert r.json()["is_folder"] is True
+        fol_url = r.json()["share_url"]
+        r = await c.get(f"/api/public/shares/{fol_url}")
+        assert r.status_code == 200 and r.json()["is_folder"] is True, r.text
+        _ok("폴더 공유 생성 (max_downloads 422) + 메타 is_folder")
+
+        # 직접 다운로드 — backend 스트리밍 ZIP, 폴더 구조와 바이트가 그대로.
+        r = await c.post(f"/api/public/shares/{fol_url}/download")
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/zip", r.headers
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            assert "folder-x/inner.bin" in zf.namelist(), zf.namelist()
+            assert "folder-x/sub/deep.bin" in zf.namelist(), zf.namelist()
+            assert zf.read("folder-x/inner.bin") == PAYLOAD
+        # 폴더는 미리보기 불가(400), 티켓 흐름은 ZIP 으로 스트리밍.
+        r = await c.post(f"/api/public/shares/{fol_url}/preview")
         assert r.status_code == 400, r.text
+        r = await c.post(f"/api/public/shares/{fol_url}/download-ticket")
+        assert r.status_code == 200, r.text
+        r = await c.get(r.json()["url"])
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/zip", r.headers
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            assert zf.read("folder-x/sub/deep.bin") == PAYLOAD
+        _ok("폴더 공유 → 전체 ZIP (직접/티켓) + 폴더 미리보기 400")
+
+        # --- 폴더 공유 웹 탐색: 목록/브레드크럼/개별 다운로드/미리보기 ---------
+        r = await c.post(f"/api/public/shares/{fol_url}/list", json={})
+        assert r.status_code == 200, r.text
+        listing = r.json()
+        assert listing["folder"]["name"] == "folder-x"
+        assert [b["name"] for b in listing["breadcrumbs"]] == ["folder-x"]
+        # 폴더 우선 + 이름순 정렬.
+        assert [e["name"] for e in listing["entries"]] == ["sub", "inner.bin", "note.txt"]
+        # 하위 폴더로 이동 — 브레드크럼이 루트→현재.
+        r = await c.post(
+            f"/api/public/shares/{fol_url}/list", json={"folder_id": sub_id}
+        )
+        assert r.status_code == 200, r.text
+        sub_listing = r.json()
+        assert [b["name"] for b in sub_listing["breadcrumbs"]] == ["folder-x", "sub"]
+        assert [e["name"] for e in sub_listing["entries"]] == ["deep.bin"]
+        # 트리 밖 folder_id 는 404 (존재 여부 비노출) — 다른 파일 id 로 시도.
+        r = await c.post(
+            f"/api/public/shares/{fol_url}/list", json={"folder_id": cap_file}
+        )
+        assert r.status_code == 404, r.text
+        # 개별 파일 다운로드 (티켓) — 원본 바이트 그대로.
+        r = await c.post(
+            f"/api/public/shares/{fol_url}/files/{inner_id}/download-ticket"
+        )
+        assert r.status_code == 200, r.text
+        r = await c.get(r.json()["url"])
+        assert r.status_code == 200, r.text
+        accel = r.headers.get("x-accel-redirect")
+        assert accel, r.headers
+        assert await _direct_minio_bytes(accel) == PAYLOAD
+        # 하위 폴더 하나만 ZIP 으로.
+        r = await c.post(f"/api/public/shares/{fol_url}/files/{sub_id}/download-ticket")
+        assert r.status_code == 200, r.text
+        r = await c.get(r.json()["url"])
+        assert r.status_code == 200, r.text
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            # 폴더 엔트리("sub/")도 구조 보존용으로 담긴다.
+            assert zf.namelist() == ["sub/", "sub/deep.bin"], zf.namelist()
+            assert zf.read("sub/deep.bin") == PAYLOAD
+        # 트리 밖 파일 다운로드/미리보기는 404.
+        r = await c.post(
+            f"/api/public/shares/{fol_url}/files/{cap_file}/download-ticket"
+        )
+        assert r.status_code == 404, r.text
+        # 개별 파일 미리보기 — 텍스트는 인라인 본문, 바이너리는 415.
+        r = await c.post(f"/api/public/shares/{fol_url}/files/{note_id}/preview")
+        assert r.status_code == 200, r.text
+        assert r.text == "hello note"
+        r = await c.post(f"/api/public/shares/{fol_url}/files/{inner_id}/preview")
+        assert r.status_code == 415, r.text
+        _ok("폴더 공유 웹 탐색 (목록/브레드크럼/개별 다운로드/하위 ZIP/미리보기/트리 밖 404)")
+
+        # --- 비밀번호 걸린 폴더 공유: 목록도 비밀번호 관문을 지난다 ------------
+        r = await c.post(
+            "/api/shares",
+            headers=alice_h,
+            json={"file_id": folder_id, "password": "folder-pw"},
+        )
+        assert r.status_code == 201, r.text
+        pw_fol_url = r.json()["share_url"]
+        r = await c.post(f"/api/public/shares/{pw_fol_url}/list", json={})
+        assert r.status_code == 401, r.text
+        r = await c.post(
+            f"/api/public/shares/{pw_fol_url}/list", json={"password": "wrong"}
+        )
+        assert r.status_code == 401, r.text
+        r = await c.post(
+            f"/api/public/shares/{pw_fol_url}/list", json={"password": "folder-pw"}
+        )
+        assert r.status_code == 200, r.text
+        _ok("비밀번호 폴더 공유 목록 (없음/오답 401 → 정답 200)")
+
+        # --- 없는 URL 404 ------------------------------------------------------
         r = await c.get("/api/public/shares/does-not-exist")
         assert r.status_code == 404, r.text
-        _ok("폴더 공유 400 / 없는 URL 404")
+        _ok("없는 URL 404")
 
         # --- 비활성화(DELETE) 후 즉시 410 차단 -------------------------------
         dis_file = await _upload(c, alice_h, "disable-me.bin")
