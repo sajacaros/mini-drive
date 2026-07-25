@@ -52,6 +52,12 @@ export interface FileNode {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /**
+   * 자동 영구 삭제 예정 시각. 휴지통 목록에만 채워지는 파생 필드이며, 서버의 보존 기간이
+   * 0(자동 정리 비활성)이면 null 이다 (spec/trash-retention-purge.md).
+   * 보존 기간 자체는 따로 내려오지 않는다 — 필요하면 purge_at - deleted_at 으로 역산한다.
+   */
+  purge_at?: string | null;
   /** 내 즐겨찾기 여부 (Phase 8-2). 목록/단건 응답의 파생 필드, 없으면 false. */
   is_favorite: boolean;
   /** 조상 폴더 경로("내 드라이브 / A / B"). 최근·즐겨찾기 응답에만 채워지는 파생 필드. */

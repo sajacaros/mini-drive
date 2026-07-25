@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import Select, func, inspect, select, text, update
@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.metrics import observe_download_bytes
 from app.models import File, FileGroupPermission, FileVersion, Group, User
@@ -1262,6 +1263,15 @@ async def list_trash(session: AsyncSession, user: User) -> list[File]:
             .order_by(File.deleted_at.desc())
         )
     ).scalars().all()
+    # 파생 필드 purge_at — 자동 영구 삭제 예정 시각. 프론트가 보존 기간을 따로 받지 않고
+    # purge_at - deleted_at 으로 역산해 안내 문구를 만든다(spec/trash-retention-purge.md).
+    retention = settings.trash_retention_days
+    for row in rows:
+        row.purge_at = (  # type: ignore[attr-defined]
+            row.deleted_at + timedelta(days=retention)
+            if retention > 0 and row.deleted_at is not None
+            else None
+        )
     return list(rows)
 
 
@@ -1329,12 +1339,61 @@ async def permanent_delete(
 ) -> None:
     """영구 삭제 (PRD 6.2). 휴지통 항목만 허용. 폴더는 하위 전체 재귀.
 
-    MinIO 오브젝트(원본+버전) 삭제 + storage_used 감소 + files 행 삭제(versions CASCADE).
-    DB 를 먼저 확정하고 오브젝트는 best-effort 로 정리해 DB 를 진실 소스로 유지한다.
+    인가와 상태 검사만 하고 실제 삭제는 `purge_tree` 에 위임한다 — 보존 기간 자동 정리
+    (spec/trash-retention-purge.md)가 같은 함수를 호출해 할당량 회수·공유 링크 선삭제·
+    썸네일 제거가 두 경로에서 어긋나지 않게 한다.
     """
     file = await ensure_file_access(session, user, await get_file(session, file_id), need="manage")
     if not file.is_deleted:
         raise FileServiceError(409, "휴지통에 있는 항목만 영구 삭제할 수 있습니다.")
+    await purge_tree(session, storage, file, actor_id=user.id)
+
+
+async def subtree_stats(session: AsyncSession, root_id: int) -> tuple[int, int]:
+    """(하위 포함 행 수, 모든 버전 크기 합계). 삭제하지 않고 규모만 센다 — dry-run 용."""
+    row = (
+        await session.execute(
+            text(
+                _SUBTREE_CTE + " SELECT count(*) AS n FROM files WHERE id IN (SELECT id FROM sub)"
+            ),
+            {"root": root_id},
+        )
+    ).one()
+    size = (
+        await session.execute(
+            text(
+                _SUBTREE_CTE
+                + " SELECT COALESCE(SUM(v.size), 0) AS total FROM file_versions v "
+                "WHERE v.file_id IN (SELECT id FROM sub)"
+            ),
+            {"root": root_id},
+        )
+    ).one()
+    return int(row.n), int(size.total)
+
+
+async def purge_tree(
+    session: AsyncSession,
+    storage: StorageService,
+    file: File,
+    *,
+    actor_id: int | None,
+    publish: bool = True,
+) -> tuple[int, int]:
+    """휴지통 항목 하나와 하위 전체를 영구 삭제한다. **인가는 호출자 책임.**
+
+    MinIO 오브젝트(원본+버전) 삭제 + storage_used 감소 + files 행 삭제(versions CASCADE).
+    DB 를 먼저 확정하고 오브젝트는 best-effort 로 정리해 DB 를 진실 소스로 유지한다.
+
+    actor_id 는 사용자의 수동 삭제면 그 사용자, 자동 정리면 None. publish=False 면 이벤트를
+    발행하지 않는다(배치 정리의 폭주 상한 — 초과분은 소유자별 요약으로 접는다).
+    반환: (삭제한 files 행 수, 회수한 바이트 합계).
+    """
+    # 발행에 쓸 값은 DELETE 전에 캡처한다 — 행이 사라진 뒤 ORM 속성 접근은 재조회를 유발한다
+    # (soft_delete 의 같은 주석 참조).
+    # (root_owner_id — 아래 size_by_owner 루프의 owner_id 와 이름이 겹치지 않게 한다.)
+    root_id, parent_id, name = file.id, file.parent_folder_id, file.name
+    root_owner_id = file.user_id
 
     # 1) 삭제할 오브젝트 키와 회수할 용량을 수집한다.
     #    storage_used 는 모든 버전 크기 합계를 반영하므로(스냅샷 포함), 회수량도 file_versions
@@ -1347,7 +1406,7 @@ async def permanent_delete(
                 + " SELECT f.file_key, f.thumbnail_key FROM files f "
                 "WHERE f.id IN (SELECT id FROM sub) AND f.is_folder = FALSE"
             ),
-            {"root": file.id},
+            {"root": root_id},
         )
     ).all()
     keys: set[str] = {r.file_key for r in file_rows if r.file_key}
@@ -1365,7 +1424,7 @@ async def permanent_delete(
                 "JOIN files f ON f.id = v.file_id "
                 "WHERE v.file_id IN (SELECT id FROM sub)"
             ),
-            {"root": file.id},
+            {"root": root_id},
         )
     ).all()
     size_by_owner: dict[int, int] = {}
@@ -1379,17 +1438,31 @@ async def permanent_delete(
     #    공유 링크는 이력 보존 대상이지만 원본 파일 자체가 사라지는 영구 삭제에서는 함께 소멸한다.
     await session.execute(
         text(_SUBTREE_CTE + " DELETE FROM shares WHERE file_id IN (SELECT id FROM sub)"),
-        {"root": file.id},
+        {"root": root_id},
     )
-    await session.execute(
+    deleted = await session.execute(
         text(_SUBTREE_CTE + " DELETE FROM files WHERE id IN (SELECT id FROM sub)"),
-        {"root": file.id},
+        {"root": root_id},
     )
+    rows = deleted.rowcount or 0
     for owner_id, size in size_by_owner.items():
         if size:
             await _release_quota(session, owner_id, size)
     await session.commit()
 
-    # 3) 오브젝트 정리 — best-effort (실패해도 DB 는 이미 일관).
+    # 3) 삭제 사실을 알린다 — 열려 있는 휴지통 화면이 갱신되도록. 소프트 삭제/복원과 달리
+    #    행이 사라져 구독자 필터가 조회로 판정할 수 없으므로 소유자 전용 이벤트를 쓴다.
+    if publish:
+        await file_events_service.publish_purge_event(
+            file_id=root_id,
+            parent_folder_id=parent_id,
+            actor_id=actor_id,
+            name=name,
+            owner_id=root_owner_id,
+        )
+
+    # 4) 오브젝트 정리 — best-effort (실패해도 DB 는 이미 일관).
     if keys:
         await storage.delete_many_async(list(keys))
+
+    return rows, sum(size_by_owner.values())

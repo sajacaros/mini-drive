@@ -53,6 +53,22 @@ services:
           cpus: "2.0"
           memory: 1G
 
+  # 휴지통 자동 정리 사이드카 — 하루 1회만 일하므로 리소스는 작게.
+  # 컨테이너 로그가 유일한 관측 경로라(감사 로그에는 남기지 않는다) JSON 로깅을 함께 켠다.
+  purger:
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DEBUG: "false"
+      ENVIRONMENT: production
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
   frontend:
     restart: unless-stopped
     logging: *default-logging

@@ -15,6 +15,7 @@
 - **인증/가입**: JWT(access + refresh 회전, Redis 폐기), argon2 해싱. 가입은 **관리자 발급 가입 코드**로만 가능하며 코드 검증 즉시 활성화됩니다(만료일·사용 횟수 제한, 원자적 소모).
 - **첫 부팅 셋업 위저드**: admin 이 없으면 `/setup` 에서 첫 관리자 계정 + 초기 가입 코드 + 기본 할당량을 한 번에 설정하고 셋업이 잠깁니다. 비상 복구용 CLI `python -m app.cli create-admin` 제공.
 - **파일 관리**: 드래그 앤 드롭 스트리밍 업로드(최대 10 GB), 폴더, 목록/그리드(썸네일) 뷰, 휴지통(소프트 삭제)/영구 삭제, 사용자별 저장 용량 할당량(DB 원자 갱신).
+- **휴지통 보존 기간**: 버린 지 `TRASH_RETENTION_DAYS` 가 지난 항목을 전용 사이드카(`purger`)가 하루 1회 정해진 시각(KST)에 영구 삭제하고 용량을 회수합니다. 휴지통 목록은 항목마다 남은 기간(`3일 후 삭제`)을 보여주며, 정리 결과는 SSE 로 열려 있는 화면에 즉시 반영됩니다. **기본값 7일(활성)** — 끄려면 `TRASH_RETENTION_DAYS=0`, 기존 스택 업그레이드 시 주의사항은 [운영](#휴지통-보존-기간-자동-영구-삭제) 참조.
 - **ZIP 다운로드**: 폴더는 하위 구조 그대로, 여러 항목은 체크박스(Ctrl/Cmd·Shift 클릭도 지원)로 골라 한 번에 내려받습니다. 서버가 MinIO 에서 읽은 청크를 그대로 무압축 ZIP 프레임에 실어 스트리밍하므로 임시 파일을 만들지 않습니다(한 번에 파일 500개 / 2 GB 까지).
 - **통합 드라이브**: 내 드라이브 루트 상단에 **가상 "공유" 폴더**를 고정 노출해, 내 파일과 그룹으로 공유받은 항목을 하나의 브레드크럼(내 드라이브 > 공유 > 폴더)으로 탐색합니다. 목록 뷰에 소유자/그룹/권한 컬럼을 표시하고, 행별 액션은 그 항목의 유효 권한으로 게이팅합니다.
 - **실시간 반영·즐겨찾기·최근 항목**: 파일 변경을 SSE(`/api/files/events`)로 푸시해 목록이 새로고침 없이 갱신되고, 즐겨찾기(★)와 최근 열람 항목을 별도 화면으로 제공합니다.
@@ -146,7 +147,8 @@ docker compose logs backend | grep '"request_id": "<id>"'
 백엔드가 `GET /metrics` 로 Prometheus 지표를 노출합니다:
 `http_requests_total{method,path,status}`, `http_request_duration_seconds`(히스토그램),
 `minidrive_upload_bytes_total`, `minidrive_download_bytes_total`,
-`rate_limit_rejections_total{scope}`. `path` 라벨은 실제 경로가 아닌 **라우트 템플릿**입니다.
+`rate_limit_rejections_total{scope}`, `minidrive_trash_purged_total`,
+`minidrive_trash_purged_bytes_total`. `path` 라벨은 실제 경로가 아닌 **라우트 템플릿**입니다.
 
 `/metrics` 는 **게이트웨이(nginx)에서 외부 접근을 차단**(`deny all` → 403)하며, 내부 도커
 네트워크의 스크레이퍼만 `backend:8000/metrics` 로 접근합니다. Prometheus 스크레이프 예:
@@ -157,6 +159,12 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["backend:8000"]   # minidrive 네트워크 내부에서 실행 시
+
+  # 휴지통 정리 카운터는 사이드카 프로세스에 쌓이므로 별도 대상입니다(backend 에는 안 보입니다).
+  - job_name: minidrive-purger
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["purger:8000"]
 ```
 
 ```bash
@@ -166,6 +174,52 @@ docker compose exec backend python -c "import urllib.request; print(urllib.reque
 # 외부(게이트웨이)에서는 차단됨 → 403
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost/metrics
 ```
+
+### 휴지통 보존 기간 (자동 영구 삭제)
+
+휴지통에 버린 지 `TRASH_RETENTION_DAYS` 일이 지난 항목을 **`purger` 사이드카**가 매일
+`TRASH_PURGE_HOUR`(KST, 기본 4시)에 영구 삭제하고 용량을 회수합니다. 설계 근거는
+[`spec/trash-retention-purge.md`](spec/trash-retention-purge.md) 에 있습니다.
+
+| 환경변수 | 기본값 | 설명 |
+|---|---|---|
+| `TRASH_RETENTION_DAYS` | `7` | 보존 일수. **설정하지 않아도 자동 정리가 켜집니다.** 끄려면 `0` 을 명시하세요 |
+| `TRASH_PURGE_HOUR` | `4` | 실행 시각(KST, 0~23). 벽시계 기준이라 컨테이너를 재시작해도 시각이 밀리지 않습니다 |
+
+- 사이드카는 backend 와 **같은 이미지**를 쓰고 entrypoint 만 덮으므로 빌드가 늘지 않습니다
+  (마이그레이션은 backend 만 실행합니다).
+- 삭제는 사용자가 휴지통에서 누르는 영구 삭제와 **같은 코드 경로**를 타므로, 소유자별 할당량
+  회수·공유 링크 정리·썸네일 삭제가 동일하게 적용됩니다.
+- 정리 결과는 SSE 로 발행되어 열려 있는 휴지통 화면이 새로고침 없이 갱신됩니다. 목록에는
+  항목별 남은 기간(`3일 후 삭제`)이 표시됩니다.
+
+> ⚠️ **이미 운영 중인 스택을 업그레이드할 때 주의.** 기본값이 켜져 있으므로, 별도 설정 없이
+> 올리면 **첫 회차가 7일이 지난 기존 휴지통 항목을 한꺼번에 영구 삭제**합니다. 되돌릴 수
+> 없으니 올리기 전에 규모를 확인하고, 원치 않으면 `.env` 에 `TRASH_RETENTION_DAYS=0` 을
+> 먼저 넣으세요.
+
+```bash
+# 1. 규모 확인 — 아무것도 지우지 않고 대상 건수와 회수될 용량만 출력 (건별 로그 포함)
+#    (아직 안 켠 스택이라면 이 명령에만 값을 주면 됩니다: -e TRASH_RETENTION_DAYS=7)
+docker compose exec backend python -m app.cli purge-trash --dry-run
+
+# 2. 그대로 두면 기본 7일로 켜집니다. 끄려면 .env 에 TRASH_RETENTION_DAYS=0 후 재기동
+docker compose up -d backend purger
+
+# 3. 즉시 1회 실행 (다음 실행 시각까지 기다리지 않고 검증할 때)
+docker compose exec backend python -m app.cli purge-trash --once
+
+# 4. 동작 확인 — 다음 실행 시각과 회차 결과가 한 줄씩 남습니다
+docker compose logs -f purger
+```
+
+수동 실행(`--once`)과 사이드카가 겹쳐도 안전합니다 — 회차 전체를 Redis 리스로 감싸며, 잠금을
+잡지 못한 쪽은 조용히 건너뜁니다. `TRASH_RETENTION_DAYS=0` 이면 사이드카는 그 사실을 한 번
+로그로 남기고 유휴 대기합니다(재시작 루프 방지).
+
+> 자동 삭제 이력은 **컨테이너 로그에만** 남고 감사 로그(`audit_logs`)에는 기록하지 않습니다 —
+> 그 테이블은 행위자(`actor_id`)가 필수인 사람 행위 기록이기 때문입니다. 로그는 로테이션되므로
+> 장기 보관이 필요하면 로그 수집기로 내보내세요.
 
 ### 백업 / 복원 (PRD 12장)
 
@@ -260,7 +314,7 @@ flex-drive/
 ├── backend/                 # FastAPI 백엔드
 │   ├── app/
 │   │   ├── main.py          # 앱 팩토리 + /health + 로깅/메트릭 미들웨어
-│   │   ├── cli.py           # 비상용 admin 생성 CLI
+│   │   ├── cli.py           # 운영 CLI (비상용 admin 생성, 휴지통 자동 정리 purge-trash)
 │   │   ├── core/            # config, database, redis, security
 │   │   ├── api/routes/      # auth, setup, users, files, shares, groups, permissions, admin, todos
 │   │   ├── services/        # 도메인 서비스 계층 (files, permissions, todos, avatars, tickets …)

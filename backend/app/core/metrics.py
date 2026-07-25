@@ -11,6 +11,8 @@
 - minidrive_upload_bytes_total                       — 업로드 저장 바이트 누적
 - minidrive_download_bytes_total                     — 다운로드 인가 바이트 누적
 - rate_limit_rejections_total{scope}                 — rate limit 429 거부 수
+- minidrive_trash_purged_total                       — 보존 기간 초과 자동 영구 삭제 항목 수
+- minidrive_trash_purged_bytes_total                 — 자동 영구 삭제로 회수한 바이트 누적
 
 노출은 `/metrics`(app.main) 이며, 게이트웨이(nginx)에서 외부 접근을 차단한다(내부 스크레이프 전용).
 """
@@ -51,6 +53,16 @@ rate_limit_rejections_total = Counter(
     labelnames=("scope",),
 )
 
+trash_purged_total = Counter(
+    "minidrive_trash_purged_total",
+    "보존 기간 초과로 자동 영구 삭제된 항목 수(하위 포함)",
+)
+
+trash_purged_bytes_total = Counter(
+    "minidrive_trash_purged_bytes_total",
+    "자동 영구 삭제로 회수된 저장 용량 바이트 누적",
+)
+
 
 def observe_request(method: str, path: str, status: int, duration_seconds: float) -> None:
     """요청 1건의 카운터/히스토그램을 기록한다 (미들웨어에서 호출)."""
@@ -70,6 +82,14 @@ def observe_download_bytes(n: int) -> None:
 
 def observe_rate_limit_rejection(scope: str) -> None:
     rate_limit_rejections_total.labels(scope=scope).inc()
+
+
+def observe_trash_purged(rows: int, nbytes: int) -> None:
+    """휴지통 자동 정리 1회차의 삭제 행 수/회수 바이트를 기록한다."""
+    if rows > 0:
+        trash_purged_total.inc(rows)
+    if nbytes > 0:
+        trash_purged_bytes_total.inc(nbytes)
 
 
 def render_metrics() -> tuple[bytes, str]:

@@ -2,6 +2,31 @@
 # 기동:  docker compose up -d --build
 # 환경변수는 .env 파일에서 읽는다 (.env.example 참조). 미설정 시 아래 기본값 사용.
 
+# backend 와 purger(휴지통 자동 정리 사이드카)가 같은 환경을 공유한다 — 환경변수를 한 곳에서만
+# 관리하기 위한 앵커다. 새 변수를 추가할 때 두 서비스에 각각 적지 않는다.
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
+  MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
+  MINIO_SECURE: "false"
+  JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  REDIS_URL: redis://redis:6379/0
+  # rate limiting 토글 — 기본 true(운영 안전). E2E 는 한 계정이 짧은 시간에 다수
+  # 업로드/로그인을 수행해 분당 한도에 걸리므로, 테스트 실행 시 RATE_LIMIT_ENABLED=false 로
+  # 기동해 비활성화한다 (config.py: "테스트 편의" 스위치).
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  # 휴지통 보존 기간 (spec/trash-retention-purge.md). 기본 7일 = 설정 없이도 자동 정리가 켜진다.
+  # 끄려면 TRASH_RETENTION_DAYS=0 을 명시한다. 기존 스택을 업그레이드한다면 첫 회차가 예전
+  # 항목을 한꺼번에 지우므로 규모부터 확인:
+  #   docker compose exec backend python -m app.cli purge-trash --dry-run
+  TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-7}
+  TRASH_PURGE_HOUR: ${TRASH_PURGE_HOUR:-4}
+  # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
+  # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
+
 services:
   # ── 게이트웨이 (유일한 외부 진입점) ──────────────────
   nginx:
@@ -20,33 +45,41 @@ services:
 
   # ── 백엔드 (FastAPI) ────────────────────────────────
   backend:
+    image: flex-drive-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
     # 호스트 포트 미노출 — 모든 트래픽은 nginx 게이트웨이 경유 (rate limiting/TLS 우회 방지)
     expose:
       - "8000"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
-      MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
-      MINIO_SECURE: "false"
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      REDIS_URL: redis://redis:6379/0
-      # rate limiting 토글 — 기본 true(운영 안전). E2E 는 한 계정이 짧은 시간에 다수
-      # 업로드/로그인을 수행해 분당 한도에 걸리므로, 테스트 실행 시 RATE_LIMIT_ENABLED=false 로
-      # 기동해 비활성화한다 (config.py: "테스트 편의" 스위치).
-      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
-      # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
-      # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
+    environment: *backend-env
     depends_on:
       db:
         condition: service_healthy
       minio:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - minidrive
+
+  # ── 휴지통 자동 정리 (하루 1회, KST TRASH_PURGE_HOUR) ─
+  # spec/trash-retention-purge.md. backend 와 같은 이미지를 쓰므로 빌드 비용이 없다.
+  purger:
+    image: flex-drive-backend:latest
+    # entrypoint 를 덮어 쓴다 — 기본 entrypoint 는 alembic upgrade head 를 선행 실행하므로
+    # 그대로 두면 backend 와 동시에 마이그레이션을 돌려 경합한다. 스키마는 backend 가 책임진다.
+    entrypoint: ["python", "-m", "app.cli", "purge-trash", "--loop"]
+    environment: *backend-env
+    # 정리 카운터(minidrive_trash_purged_*)는 이 프로세스의 레지스트리에 쌓이므로 backend 의
+    # /metrics 로는 보이지 않는다. 스크레이프 대상은 purger:8000 이다(호스트 미노출).
+    expose:
+      - "8000"
+    depends_on:
+      # 마이그레이션 선행 보장은 backend 기동 순서에 맡긴다(정리는 첫 실행 시각까지 자므로
+      # 기동 직후 DB 를 건드리지 않는다).
+      backend:
+        condition: service_started
       redis:
         condition: service_healthy
     networks:

@@ -25,6 +25,9 @@ class FileResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None = None
+    # 파생 필드 — 자동 영구 삭제 예정 시각(휴지통 목록에서만 채운다).
+    # 보존 기간이 0(자동 정리 비활성)이면 None. spec/trash-retention-purge.md
+    purge_at: datetime | None = None
     # 파생 필드 (Phase 8-2) — 서비스가 File 인스턴스에 부착하면 채워지고, 없으면 False.
     is_favorite: bool = False
     # 파생 필드 — 조상 폴더 경로("내 드라이브 / A / B"). 최근·즐겨찾기 목록에서 위치 표기용.

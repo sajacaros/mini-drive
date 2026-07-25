@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -69,6 +70,20 @@ class Settings(BaseSettings):
     # 이 값을 넘는 파일은 클라이언트가 배치에 담지 않고 기존 단일/재개 업로드 경로로 보낸다.
     max_batch_files: int = 200
     max_batch_bytes: int = 64 * 1024 * 1024           # 64 MiB
+
+    # 휴지통 보존 기간 — 자동 영구 삭제 (spec/trash-retention-purge.md).
+    # 기본값 7 = 설정을 주지 않아도 자동 정리가 켜진다. 끄려면 명시적으로 0 을 준다.
+    # **업그레이드 주의**: 기존 배포는 deleted_at 이 오래 전부터 쌓여 있어, 이 값을 그대로 받으면
+    # 첫 회차가 기한 초과분을 한꺼번에 지운다. 올리기 전에 규모를 확인한다(아무것도 지우지 않는다):
+    #     python -m app.cli purge-trash --dry-run
+    # purge_hour 는 KST 기준 실행 시각 — 되돌릴 수 없는 삭제라 사람이 안 쓰는 시간에 돈다.
+    # purge_batch 는 한 트랜잭션의 크기 제한이며 하루 처리량 제한이 아니다(한 회차 안에서
+    # 배치가 상한보다 적게 돌아올 때까지 반복한다).
+    trash_retention_days: int = Field(default=7, ge=0)
+    trash_purge_hour: int = Field(default=4, ge=0, le=23)
+    trash_purge_batch: int = Field(default=200, ge=1)
+    # 회차당 개별 SSE 이벤트 상한. 초과하면 소유자별 요약 1건으로 접는다(이벤트 폭주 방지).
+    trash_purge_event_cap: int = Field(default=200, ge=0)
 
 
 @lru_cache

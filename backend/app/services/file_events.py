@@ -34,7 +34,8 @@ FILE_EVENTS_CHANNEL = "file-events"
 KEEPALIVE_SECONDS = 30.0
 
 # 이벤트 타입 — 짧은 문자열. 프론트가 parent_folder_id 기준으로 현재 폴더 갱신을 판단한다.
-EventType = str  # upload | version | folder | rename | move | delete | restore | permission
+# purge(영구 삭제)만 예외로 휴지통 화면 전용이며 별도 발행 함수를 쓴다(publish_purge_event).
+EventType = str  # upload | version | folder | rename | move | delete | restore | permission | purge
 
 
 async def _normalize_container(parent_folder_id: int | None) -> int | None:
@@ -72,27 +73,99 @@ async def publish_file_event(
 
     Redis 장애 시 경고만 남기고 조용히 넘어간다 — 발행 실패가 파일 조작을 되돌리면 안 된다.
     """
-    payload: dict[str, Any] = {
-        "type": type,
-        "file_id": file_id,
-        "parent_folder_id": await _normalize_container(parent_folder_id),
-        "actor_id": actor_id,
-        "name": name,
-        "ts": ts or datetime.now(UTC).isoformat(),
-    }
+    await _publish(
+        {
+            "type": type,
+            "file_id": file_id,
+            "parent_folder_id": await _normalize_container(parent_folder_id),
+            "actor_id": actor_id,
+            "name": name,
+            "ts": ts or datetime.now(UTC).isoformat(),
+        }
+    )
+
+
+async def _publish(payload: dict[str, Any]) -> None:
+    """페이로드 1건을 채널로 발행한다 (fail-open 공통부)."""
     try:
         await redis_client.publish(FILE_EVENTS_CHANNEL, json.dumps(payload))
     except Exception:  # noqa: BLE001 - fail-open, 발행 실패는 파일 조작을 막지 않는다
-        _log.warning("file_event_publish_failed", type=type, file_id=file_id)
+        _log.warning(
+            "file_event_publish_failed",
+            type=payload.get("type"),
+            file_id=payload.get("file_id"),
+        )
+
+
+async def publish_purge_event(
+    *,
+    file_id: int,
+    parent_folder_id: int | None,
+    actor_id: int | None,
+    name: str,
+    owner_id: int,
+) -> None:
+    """영구 삭제 이벤트 (spec/trash-retention-purge.md).
+
+    `publish_file_event` 와 분리한 이유는 **판정 방식이 다르기** 때문이다. 영구 삭제는 files
+    행이 사라지므로 구독자 필터가 행을 조회해 권한을 판정할 수 없다(`user_can_receive_event`
+    참조). 그래서 페이로드에 `owner_id` 를 실어 자기완결적으로 만들고, 필터는 소유자만
+    통과시킨다 — 소프트 삭제 항목은 어떤 목록에도 노출되지 않으므로 화면이 바뀌는 사람은
+    삭제 루트의 소유자뿐이다.
+
+    `parent_folder_id` 는 `_normalize_container` 로 정규화하지 않는다. 이 이벤트의 소비자는
+    휴지통 화면이라 컨테이너 매칭을 쓰지 않고, 배치 정리에서 항목마다 DB 를 한 번 더 잡는
+    비용이 무의미하다. 파일 브라우저는 `type === "purge"` 를 무시한다.
+
+    actor_id 는 사용자의 수동 영구 삭제면 그 사용자, 자동 정리면 None(행위자 없음)이다.
+    """
+    await _publish(
+        {
+            "type": "purge",
+            "file_id": file_id,
+            "parent_folder_id": parent_folder_id,
+            "actor_id": actor_id,
+            "name": name,
+            "owner_id": owner_id,
+            "ts": datetime.now(UTC).isoformat(),
+        }
+    )
+
+
+async def publish_purge_summary(*, owner_id: int, purged: int) -> None:
+    """소유자별 영구 삭제 요약 (이벤트 폭주 상한 초과분).
+
+    개별 이벤트 대신 "N건이 정리됐다"만 알린다. `file_id` 가 없으므로 프론트는 행 제거 대신
+    목록 전체를 재조회한다.
+    """
+    await _publish(
+        {
+            "type": "purge",
+            "file_id": None,
+            "parent_folder_id": None,
+            "actor_id": None,
+            "name": None,
+            "owner_id": owner_id,
+            "purged": purged,
+            "ts": datetime.now(UTC).isoformat(),
+        }
+    )
 
 
 async def user_can_receive_event(user: User, event: dict[str, Any]) -> bool:
     """구독자 권한 필터 — 이벤트 대상 파일에 user 가 read 이상 접근 가능한지 (Phase 8-1).
 
     소유자는 즉시 통과. 그 외에는 그룹 권한(조회 시 판정, 사용자 단위 Redis 캐시 재사용)이
-    존재하면(read 이상) 통과한다. 파일 행이 없으면(영구 삭제 등) 전달하지 않는다. 소프트
-    삭제는 행이 남으므로 정상 판정된다. 판정은 요청과 무관한 짧은 세션으로 수행한다.
+    존재하면(read 이상) 통과한다. 파일 행이 없으면 전달하지 않는다. 소프트 삭제는 행이 남으므로
+    정상 판정된다. 판정은 요청과 무관한 짧은 세션으로 수행한다.
+
+    예외는 `purge`(영구 삭제)다 — 행이 이미 없어 조회로 판정할 수 없으므로 페이로드의
+    `owner_id` 로만 판정한다(`publish_purge_event` 참조). 요약 이벤트는 `file_id` 가 없어
+    이 분기가 아래 타입 가드보다 **먼저** 와야 한다.
     """
+    if event.get("type") == "purge":
+        owner_id = event.get("owner_id")
+        return isinstance(owner_id, int) and owner_id == user.id
     file_id = event.get("file_id")
     if not isinstance(file_id, int):
         return False

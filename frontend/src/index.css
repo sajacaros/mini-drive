@@ -239,6 +239,10 @@ body {
 .text-danger {
   color: var(--danger);
 }
+/* 아직 실패가 아닌 임박 경고(예: 휴지통 자동 삭제 D-3)용 — danger 와 구분한다. */
+.text-warning {
+  color: var(--warning);
+}
 .border-token {
   border-color: var(--border-color);
 }

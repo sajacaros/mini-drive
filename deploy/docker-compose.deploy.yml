@@ -19,6 +19,29 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "5"
 
+# backend 와 purger(휴지통 자동 정리 사이드카)가 공유하는 환경. 새 변수는 여기 한 곳에만.
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-minidrive}
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+  MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
+  MINIO_SECURE: "false"
+  JWT_SECRET: ${JWT_SECRET}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  REDIS_URL: redis://redis:6379/0
+  DEBUG: "false"
+  ENVIRONMENT: production
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  METRICS_ENABLED: "true"
+  # 휴지통 보존 기간 (spec/trash-retention-purge.md). 기본 7일 = 설정 없이도 자동 정리가 켜진다.
+  # 끄려면 TRASH_RETENTION_DAYS=0 을 명시한다. 기존 스택 업그레이드 시 규모부터 확인:
+  #   docker compose -f docker-compose.deploy.yml exec backend \
+  #     python -m app.cli purge-trash --dry-run
+  TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-7}
+  TRASH_PURGE_HOUR: ${TRASH_PURGE_HOUR:-4}
+
 services:
   # ── 게이트웨이 (기존 host nginx 가 여기로 프록시) ─────
   nginx:
@@ -50,21 +73,7 @@ services:
     logging: *default-logging
     expose:
       - "8000"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-minidrive}
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-      MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
-      MINIO_SECURE: "false"
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      REDIS_URL: redis://redis:6379/0
-      DEBUG: "false"
-      ENVIRONMENT: production
-      LOG_FORMAT: json
-      LOG_LEVEL: INFO
-      METRICS_ENABLED: "true"
+    environment: *backend-env
     deploy:
       resources:
         limits:
@@ -75,6 +84,32 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - minidrive
+
+  # ── 휴지통 자동 정리 (하루 1회, KST TRASH_PURGE_HOUR) ─
+  # spec/trash-retention-purge.md. backend 와 같은 이미지를 쓰므로 별도 빌드가 없다.
+  purger:
+    image: flex-drive-backend:latest
+    restart: unless-stopped
+    logging: *default-logging
+    # entrypoint 를 덮어 쓴다 — 기본 entrypoint 의 alembic upgrade head 가 backend 와
+    # 동시에 돌면 경합한다. 스키마는 backend 가 책임진다.
+    entrypoint: ["python", "-m", "app.cli", "purge-trash", "--loop"]
+    environment: *backend-env
+    # 정리 카운터는 이 프로세스의 레지스트리에 쌓인다 — 스크레이프 대상은 purger:8000.
+    expose:
+      - "8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    depends_on:
+      backend:
+        condition: service_started
       redis:
         condition: service_healthy
     networks:

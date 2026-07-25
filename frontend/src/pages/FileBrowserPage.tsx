@@ -330,6 +330,10 @@ export function FileBrowserPage({
   useEffect(() => {
     const unsub = subscribeFileEvents({
       onEvent: (e) => {
+        // 영구 삭제는 휴지통 화면에서만 의미가 있다. 삭제 루트의 부모는 (그게 삭제 루트인
+        // 조건이라) 살아 있는 폴더이므로, 걸러내지 않으면 그 폴더를 보고 있는 사용자에게
+        // 무의미한 재조회를 일으킨다 — 영구 삭제된 항목은 어차피 이 목록에 없다.
+        if (e.type === "purge") return;
         // 현재 보고 있는 폴더의 변경만 반영(다른 폴더 이벤트는 무시). 내 액션 에코도 함께
         // 재조회한다(설계상 v1 단순화 허용).
         if (e.parent_folder_id === parentIdRef.current) scheduleReload();
