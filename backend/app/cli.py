@@ -23,6 +23,7 @@ from app.core.database import SessionFactory
 from app.core.logging import configure_logging, get_logger
 from app.core.security import PasswordPolicyError, validate_password_policy
 from app.services import trash as trash_service
+from app.services import wiki as wiki_service
 from app.services import wiki_indexer, wiki_llm
 from app.services.setup import admin_exists, create_admin_account
 from app.services.storage import get_storage
@@ -85,6 +86,20 @@ async def _purge_once(*, dry_run: bool) -> trash_service.PurgeResult:
         return await trash_service.purge_expired(session, get_storage(), dry_run=dry_run)
 
 
+async def _purge_wiki_trees() -> int:
+    """위키를 끈 뒤 유예가 지난 트리를 지운다 (spec/wiki-index.md).
+
+    휴지통 정리와 같은 회차에 얹는다 — 둘 다 "유예가 지난 파생물 정리"이고 하루 1회면 충분해서
+    사이드카를 새로 띄울 이유가 없다. 파일이 영구 삭제되는 경우는 wiki_documents 의
+    ON DELETE CASCADE 가 처리하므로 여기서 다루지 않는다.
+    """
+    if not settings.wiki_enabled:
+        return 0
+    async with SessionFactory() as session:
+        result = await wiki_service.purge_disabled_trees(session)
+    return result.deleted
+
+
 # 사이드카가 메트릭을 노출할 포트. backend 의 내부 포트와 같은 번호를 쓰되 컨테이너가 다르므로
 # 충돌하지 않는다 (스크레이프 대상은 `purger:8000`).
 _METRICS_PORT = 8000
@@ -142,8 +157,14 @@ async def _purge_trash(*, dry_run: bool, loop: bool) -> int:
         except Exception:  # noqa: BLE001 - 한 회차의 실패로 루프를 죽이지 않는다.
             log.exception("trash_purge_cycle_failed")
             continue
+        try:
+            wiki_trees = await _purge_wiki_trees()
+        except Exception:  # noqa: BLE001 - 위키 정리 실패가 휴지통 회차 보고를 막지 않는다
+            log.exception("wiki_tree_purge_failed")
+            wiki_trees = 0
         log.info(
             "trash_purge_done",
+            wiki_trees_purged=wiki_trees,
             roots=result.roots,
             rows=result.rows,
             bytes_reclaimed=result.bytes_reclaimed,

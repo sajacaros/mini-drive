@@ -1042,6 +1042,22 @@ async def set_wiki(
     return _wiki_state_response(overview)
 
 
+@router.delete("/{file_id}/wiki/tree", status_code=status.HTTP_204_NO_CONTENT)
+async def purge_wiki_tree(
+    file_id: int, user: CurrentUser, session: DbSession
+) -> Response:
+    """이 파일의 트리를 즉시 지운다 (유예를 기다리지 않음). 소유자·manage 만.
+
+    위키를 끄면 트리는 재켜기 비용 때문에 유예 기간 동안 보관된다. 규정상 파생물이 남으면
+    안 되는 경우를 위한 탈출구다(spec/wiki-index.md 「끄기 — 차단은 즉시, 삭제는 유예」).
+    """
+    try:
+        await wiki_service.purge_tree_now(session, user, file_id)
+    except WikiServiceError as exc:
+        raise _wiki_http_error(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 async def _direct_permission_response(
     session: DbSession, row: object
 ) -> DirectPermissionResponse:

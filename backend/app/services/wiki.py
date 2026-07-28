@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import posixpath
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -372,6 +372,77 @@ async def get_document(session: AsyncSession, file_id: int) -> Any | None:
             select(WikiDocument).where(WikiDocument.file_id == file_id)
         )
     ).scalars().first()
+
+
+@dataclass(frozen=True)
+class TreePurgeResult:
+    """유예가 지난 트리 정리 회차 결과."""
+
+    deleted: int = 0
+    disabled: bool = False
+
+
+async def purge_disabled_trees(session: AsyncSession) -> TreePurgeResult:
+    """위키를 끈 뒤 유예가 지난 트리를 지운다 (spec/wiki-index.md).
+
+    트리를 끄자마자 지우지 않는 이유는 재켜기 비용이다 — 트리는 문서 종속이고 권한 정보를
+    담지 않으므로 보관해도 유출이 아니다(조회 API 가 권한 체크를 타는 한). 실수로 껐다 켜면
+    비용 0 으로 복구된다.
+
+    반대로 "규정상 파생물이 남으면 안 된다"는 요구도 실재하므로 유예를 0 으로 두거나
+    `purge_tree_now` 로 즉시 지울 수 있다.
+
+    파일이 영구 삭제되는 경우는 여기서 다루지 않는다 — wiki_documents.file_id 의
+    ON DELETE CASCADE 가 함께 지운다.
+    """
+    from app.models import WikiDocument
+
+    settings = get_settings()
+    grace = settings.wiki_purge_grace_days
+    cutoff = datetime.now(UTC) - timedelta(days=grace)
+
+    rows = (
+        await session.execute(
+            select(WikiDocument.id, File.id)
+            .join(File, File.id == WikiDocument.file_id)
+            .where(
+                File.wiki_enabled.is_not(True),
+                File.wiki_disabled_at.is_not(None),
+                File.wiki_disabled_at <= cutoff,
+            )
+        )
+    ).all()
+    if not rows:
+        return TreePurgeResult()
+
+    doc_ids = [r[0] for r in rows]
+    await session.execute(delete(WikiDocument).where(WikiDocument.id.in_(doc_ids)))
+    await session.commit()
+    return TreePurgeResult(deleted=len(doc_ids))
+
+
+async def purge_tree_now(session: AsyncSession, actor: User, file_id: int) -> bool:
+    """유예를 기다리지 않고 이 파일의 트리를 즉시 지운다. 반환: 지웠는지 여부."""
+    from app.models import WikiDocument
+
+    file = await session.get(File, file_id)
+    if file is None:
+        raise WikiServiceError(404, "파일을 찾을 수 없습니다.")
+    if not await _can_publish(session, actor, file.id, file.user_id):
+        raise WikiServiceError(404, "파일을 찾을 수 없습니다.")
+
+    existed = (
+        await session.execute(
+            select(WikiDocument.id).where(WikiDocument.file_id == file_id)
+        )
+    ).scalars().first() is not None
+    if existed:
+        await session.execute(
+            delete(WikiDocument).where(WikiDocument.file_id == file_id)
+        )
+        _record_audit(session, actor.id, "wiki.purge_tree", file_id, None)
+    await session.commit()
+    return existed
 
 
 @dataclass(frozen=True)
