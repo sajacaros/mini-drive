@@ -10,6 +10,7 @@ from app.api.routes import (
     shares,
     todos,
     users,
+    wiki,
 )
 
 api_router = APIRouter(prefix="/api")
@@ -29,3 +30,4 @@ api_router.include_router(
 )
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(todos.router, prefix="/todos", tags=["todos"])
+api_router.include_router(wiki.router, prefix="/wiki", tags=["wiki"])

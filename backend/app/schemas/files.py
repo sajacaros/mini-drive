@@ -40,6 +40,9 @@ class FileResponse(BaseModel):
     owner_name: str = ""
     group_names: list[str] = Field(default_factory=list)
     permission: str = "owner"
+    # 파생 필드 (spec/wiki-index.md) — 위키 인덱싱 상태. 목록에서 배지로 쓴다.
+    # off | pending | indexing | ready | stale | failed. **null 을 쓰지 않는다.**
+    wiki_status: str = "off"
 
 
 class FileListResponse(BaseModel):

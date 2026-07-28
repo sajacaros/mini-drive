@@ -173,6 +173,14 @@ export const ShieldIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 위키 — 펼친 책. */
+export const BookIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M12 6.5C10.5 5 8.5 4.5 6 4.5H3v14h3c2.5 0 4.5.5 6 2 1.5-1.5 3.5-2 6-2h3v-14h-3c-2.5 0-4.5.5-6 2Z" />
+    <path d="M12 6.5v14" />
+  </svg>
+);
+
 /** 미리보기 — 눈. */
 export const EyeIcon = (p: IconProps) => (
   <svg {...base(p)}>

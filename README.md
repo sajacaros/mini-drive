@@ -27,6 +27,15 @@
 - **프로필**: 우상단 프로필 칩 → 모달에서 표시 이름·비밀번호 변경, 아바타 업로드(클라이언트 canvas 중앙 크롭 → 512×512 webp 변환). 아바타는 인증 fetch 로만 조회됩니다.
 - **시스템 관리자**: 사용자 관리(활성/비활성·할당량·role·표시 이름), 가입 코드 관리, 전체 그룹/공유 링크 통제, 스토리지 통계, 감사 로그. `super_admin` / `admin` 2단계 역할. **admin 도 파일 내용에는 접근 불가**(메타데이터만).
 
+### 위키 (문서 질의)
+
+- **인덱싱 토글**: 파일/폴더에 위키를 켜면 문서를 **절 단위 트리**로 색인해 질의 대상으로 만듭니다. 폴더에 켜면 하위로 상속되고, 파일에서 명시적으로 끄면 그 항목만 빠집니다(소유자 탈출구).
+- **질의**: 자연어로 물으면 **근거(파일·절·줄 번호)와 함께** 답합니다. 근거를 누르면 해당 문서 미리보기가 열립니다.
+- **권한이 곧 검색 범위**: 위키는 권한 체계를 새로 만들지 않습니다. 검색 대상은 **내가 열람할 수 있는 문서뿐**이며, 필터가 대상 선정 단계에 걸리므로 권한 없는 문서의 본문은 모델 컨텍스트에 들어가지도 않습니다.
+- **전사 공개**: `@전사` 시스템 그룹에 읽기 권한을 주는 것과 같습니다. 인덱싱과 **독립**이라 PDF·pptx 처럼 색인할 수 없는 형식도 전사 공유할 수 있습니다.
+- **대상 형식**: Markdown·HTML (HTML 은 제목 계층을 보존해 md 로 변환). 그 외 형식은 토글이 비활성으로 뜨고 이유를 표시합니다.
+- **사내 LLM 전용**: 문서 본문은 사내 vLLM 으로만 나갑니다. 외부 API 를 쓰지 않습니다.
+
 ### 할 일
 
 - **데일리 투두**: 날짜별 할 일 CRUD, 완료/건너뜀 상태, Pointer Events 기반 드래그 정렬(마우스·터치 통합).
@@ -45,6 +54,10 @@
                                     ├─▶ /api/    → backend (FastAPI)
                                     └─▶ /_minio/ → MinIO (X-Accel-Redirect 내부 전용)
                                                     backend ─▶ PostgreSQL / Redis / MinIO
+
+사이드카(같은 이미지, entrypoint 만 다름)
+  purger        하루 1회  휴지통 영구 삭제 + 위키 트리 유예 삭제
+  wiki-indexer  큐 구동   Redis 큐를 보고 문서를 색인 → 사내 vLLM
 ```
 
 - **게이트웨이 다운로드 모델**: 브라우저에 presigned URL 을 직접 발급하지 않고, FastAPI 가 매 요청 인가 후 `X-Accel-Redirect` 로 nginx→MinIO 스트리밍합니다. 공유 링크 비활성화 시 즉시 차단됩니다. 헤더를 실을 수 없는 브라우저 대용량 다운로드는 **일회성 다운로드 티켓**(Redis, TTL 60초, GETDEL 원자 소비)으로 인가합니다.
@@ -221,6 +234,32 @@ docker compose logs -f purger
 > 그 테이블은 행위자(`actor_id`)가 필수인 사람 행위 기록이기 때문입니다. 로그는 로테이션되므로
 > 장기 보관이 필요하면 로그 수집기로 내보내세요.
 
+### 위키 인덱싱
+
+Markdown·HTML 문서를 절 단위 트리로 색인해 질의할 수 있게 합니다. 설계 근거와 실측은
+[`spec/wiki-index.md`](spec/wiki-index.md) 에 있습니다.
+
+| 환경변수 | 기본값 | 설명 |
+|---|---|---|
+| `WIKI_ENABLED` | `true` | 끄면 사이드카가 유휴 대기하고 토글 API 가 503 을 냅니다 |
+| `WIKI_LLM_BASE_URL` | 사내 vLLM | OpenAI 호환 엔드포인트. **문서 본문이 이 주소로만 나갑니다** |
+| `WIKI_LLM_API_KEY` | (빈 값) | 미설정 시 401 — 색인은 되지만 요약이 본문 앞부분으로 대체됩니다 |
+| `WIKI_LLM_MODEL` | `hosted_vllm/solar-open2-250b` | `hosted_vllm/` 프리픽스는 떼고 전송합니다 |
+| `WIKI_LLM_REASONING_EFFORT` | `low` | 생성 계열은 `low` 로 충분합니다(아래) |
+| `WIKI_MAX_INPUT_BYTES` | `2MB` | 초과 파일은 토글이 비활성됩니다 |
+| `WIKI_PURGE_GRACE_DAYS` | `30` | 위키를 끈 뒤 트리를 실제로 지우기까지의 유예. `0` 이면 다음 회차에 삭제 |
+
+- **큐 구동**입니다(스케줄 아님). Redis 정렬 집합 하나로 큐·디바운스(10초)·합치기를 함께
+  처리하므로, 연속 버전업이 색인 한 번으로 접힙니다.
+- 상태는 `off → pending → indexing → ready`, 새 버전이 오면 `stale`, 실패는 `failed` 입니다.
+  **인덱싱 중에도 이전 트리로 계속 답합니다** — 문서를 검색에서 빼면 답변이 누락되기 때문입니다.
+- 토글을 켜면 DB 에 `pending` 행이 먼저 생깁니다. Redis 큐가 유실돼도(flush·재시작) 사이드카가
+  기동 시 고아를 찾아 다시 넣습니다.
+- **`reasoning_effort` 는 낮게 씁니다.** Solar-Open2 는 추론 모델이라 기본값에서 호출당 수백~수천
+  토큰을 태웁니다(실측: 요약 1건 11.4초/911토큰 → `low` 는 0.7초/44토큰). 생성 품질은 유지되지만
+  판정 계열은 `low` 에서 오판하므로, 판정이 필요한 곳은 호출부에서 올립니다.
+- GPU 를 대화형 질의와 나눠 쓰므로 색인 동시성은 낮게(3) 잡혀 있습니다.
+
 ### 백업 / 복원 (PRD 12장)
 
 실행 중인 스택을 대상으로 PostgreSQL(pg_dump custom format) + MinIO 버킷(mc mirror) 을 백업합니다.
@@ -287,13 +326,18 @@ cd backend && pytest
 ```bash
 docker compose run --rm \
   -v "$(pwd)/backend/app:/app/app" -v "$(pwd)/backend/tests:/app/tests" \
+  -v "$(pwd)/backend/alembic:/app/alembic" \
   -e RATE_LIMIT_ENABLED=false \
   --entrypoint sh backend -c "pip install -q httpx && python -m tests.integration_files"
 ```
 
 - `integration_admin` 은 rate limit 동작 자체를 검증하므로 `RATE_LIMIT_ENABLED` 를 끄지 않고 실행합니다.
 - `integration_resumable` 은 다청크 검증을 위해 `-e RESUMABLE_PART_SIZE=5242880` 을 함께 줍니다.
+- `alembic/` 도 함께 마운트하세요. 테스트는 스키마를 재생성한 뒤 head 로 stamp 하므로, 이미지에
+  없는 새 리비전이 있으면 `Can't locate revision` 으로 실패합니다.
 - **주의: 통합 테스트는 파괴적입니다** — dev DB/버킷을 초기화합니다. 운영 데이터가 있는 곳에서 실행하지 마세요.
+- 테스트가 `DROP TABLE` 에서 멈춘다면 **열려 있는 브라우저 탭**을 닫아 보세요. SSE 스트림
+  (`/api/files/events`)이 살아 있는 동안 DB 세션이 `idle in transaction` 으로 남아 DDL 을 막습니다.
 
 E2E(Playwright)는 기동된 게이트웨이(`http://localhost`)를 브라우저로 검증합니다 — SSE 실시간
 갱신, 즐겨찾기, 최근 항목 시나리오:
@@ -314,10 +358,10 @@ flex-drive/
 ├── backend/                 # FastAPI 백엔드
 │   ├── app/
 │   │   ├── main.py          # 앱 팩토리 + /health + 로깅/메트릭 미들웨어
-│   │   ├── cli.py           # 운영 CLI (비상용 admin 생성, 휴지통 자동 정리 purge-trash)
+│   │   ├── cli.py           # 운영 CLI (admin 생성, purge-trash, index-wiki)
 │   │   ├── core/            # config, database, redis, security
-│   │   ├── api/routes/      # auth, setup, users, files, shares, groups, permissions, admin, todos
-│   │   ├── services/        # 도메인 서비스 계층 (files, permissions, todos, avatars, tickets …)
+│   │   ├── api/routes/      # auth, setup, users, files, shares, groups, permissions, admin, todos, wiki
+│   │   ├── services/        # 도메인 서비스 계층 (files, permissions, todos, wiki* …)
 │   │   ├── models/ schemas/ # SQLAlchemy 모델 / Pydantic 스키마
 │   │   └── ...
 │   ├── alembic/             # DB 마이그레이션
@@ -353,7 +397,7 @@ flex-drive/
 | **4. 운영 안정성 + Admin** | 게이트웨이 정제, 로깅/메트릭, rate limiting, 백업, admin 대시보드 | ✅ |
 | **5. 고도화** | 재개 업로드, 썸네일, 미리보기, 공유 통계, UI 테마 4종 | ✅ |
 | **6. 셋업 위저드 + 가입 코드제** | 첫 부팅 셋업, 가입 승인제 → 가입 코드제 전환 | ✅ |
-| **7. LLM 위키 & 챗봇** | RAG 인덱싱 / 챗봇 / 전사 위키 | ⛔ 제거됨(2026-07-19 — 파일 공유 코어 집중, git 이력 보존) |
+| **7. LLM 위키 & 챗봇** | RAG 인덱싱 / 챗봇 / 전사 위키 | ⛔ 제거됨(2026-07-19 — 파일 공유 코어 집중, git 이력 보존). 2026-07-28 에 **벡터 없이** 재설계해 되살렸습니다 — 아래 「위키」 참조 |
 | **8. 드라이브 UX** | 파일 변경 SSE, 즐겨찾기, 최근 항목 ([`spec/drive-ux-phase8.md`](spec/drive-ux-phase8.md)) | ✅ |
 
 PRD 마일스톤 이후 추가된 작업(설계 문서 없이 커밋 단위로 진행):
@@ -363,5 +407,6 @@ PRD 마일스톤 이후 추가된 작업(설계 문서 없이 커밋 단위로 �
 | **서브패스 배포** | 런타임 `BASE_PATH` 주입, `deploy/` 배포 자산 | ✅ |
 | **통합 드라이브 + 프로필** | 가상 "공유" 폴더·권한 컬럼, 프로필 모달·아바타, `super_admin` 역할 | ✅ |
 | **할 일** | 데일리 투두, 반복 루틴 물질화, 주별·월별 리포트 | ✅ |
+| **위키** | 절 단위 트리 색인 + 근거 있는 질의. 벡터 DB 없이 사내 vLLM 만 사용 ([`spec/wiki-index.md`](spec/wiki-index.md)) | ✅ |
 
 델타 동기화는 웹 중심 서비스 특성상 범위에서 제외되었습니다(PRD 3.5).

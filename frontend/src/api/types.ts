@@ -66,6 +66,11 @@ export interface FileNode {
   owner_name?: string;
   /** 공유 그룹명 목록. 소유자 시점: 이 항목이 공유된 그룹들, 수신자 시점: 접근을 부여한 그룹. */
   group_names?: string[];
+  /**
+   * 위키 인덱싱 상태 (목록 배지용 파생 필드). 서버가 항상 값을 준다 — null 이 없어
+   * UI 분기가 새지 않는다. spec/wiki-index.md
+   */
+  wiki_status?: WikiStatus;
   /** 요청 사용자의 유효 권한. owner=소유자, 그 외 그룹 권한 수준. */
   permission?: "owner" | "read" | "write" | "manage";
 }
@@ -606,4 +611,78 @@ export interface TodoReport {
   longest_streak: number;
   daily: DailyPoint[];
   routines: RoutineStat[];
+}
+
+// --- 위키 (spec/wiki-index.md) ----------------------------------------------
+
+/**
+ * 인덱싱 상태. **null 이 없는 총체 함수**라 UI 가 분기를 빠뜨리지 않는다.
+ *
+ * `stale` 은 새 버전이 올라왔지만 재인덱싱이 아직 안 끝난 상태다. 이때도 구 트리로 계속
+ * 답하므로 검색이 멈추지 않는다.
+ */
+export type WikiStatus =
+  | "off"
+  | "pending"
+  | "indexing"
+  | "ready"
+  | "stale"
+  | "failed";
+
+/** 폴더 토글이 실제로 덮는 범위 — 확인 문구에 쓴다. */
+export interface WikiFolderScope {
+  target_count: number;
+  skipped_by_format: number;
+  skipped_by_size: number;
+  skipped_by_permission: number;
+}
+
+export interface WikiState {
+  file_id: number;
+  is_folder: boolean;
+  /** 유효 인덱싱 여부 — 자기 명시값이 없으면 조상에서 상속된 값. */
+  enabled: boolean;
+  /** 이 항목 자신에 명시값이 있는가. false 면 상속 중이다. */
+  explicit: boolean;
+  /** 그 값이 어디서 왔는지. 자기 자신이면 file_id 와 같다. */
+  source_file_id: number | null;
+  /** `@전사` read 직접 부여 여부 (전사 공개 체크박스 상태). */
+  public: boolean;
+  /** 인덱싱 대상인가 + 아니면 이유. 토글 비활성화와 사유 표기에 쓴다. */
+  indexable: boolean;
+  reason: string | null;
+  status: WikiStatus;
+  indexed_version: number | null;
+  /** 폴더일 때만 채워진다. */
+  folder_scope: WikiFolderScope | null;
+}
+
+export interface WikiDocumentItem {
+  file_id: number;
+  name: string;
+  owner_display_name: string;
+  status: WikiStatus;
+  version: number;
+  indexed_at: string | null;
+  node_count: number | null;
+}
+
+export interface WikiDocumentList {
+  items: WikiDocumentItem[];
+  total: number;
+}
+
+export interface WikiCitation {
+  file_id: number;
+  file_name: string;
+  node_id: string;
+  node_title: string;
+  /** 근거 앵커는 페이지가 아니라 **줄 번호**다 (md 트리의 좌표가 line_num). */
+  line_num: number;
+}
+
+export interface WikiAnswer {
+  answer: string;
+  citations: WikiCitation[];
+  searched_documents: number;
 }

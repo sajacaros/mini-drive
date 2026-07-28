@@ -35,7 +35,7 @@ KEEPALIVE_SECONDS = 30.0
 
 # 이벤트 타입 — 짧은 문자열. 프론트가 parent_folder_id 기준으로 현재 폴더 갱신을 판단한다.
 # purge(영구 삭제)만 예외로 휴지통 화면 전용이며 별도 발행 함수를 쓴다(publish_purge_event).
-EventType = str  # upload | version | folder | rename | move | delete | restore | permission | purge
+EventType = str  # upload | version | folder | rename | move | delete | restore | permission | purge | wiki
 
 
 async def _normalize_container(parent_folder_id: int | None) -> int | None:

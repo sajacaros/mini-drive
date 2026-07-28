@@ -36,6 +36,11 @@ class Group(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
+    # 시스템 그룹(@전사) — 사용자가 이름 변경·삭제·멤버 편집을 할 수 없다. 멤버십은 물질화하지
+    # 않고 get_user_group_ids 가 활성 사용자에게 항상 포함시킨다 (spec/wiki-index.md).
+    is_system: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -176,6 +176,28 @@ async def annotate_owner_names(
         f.owner_name = name_by_id.get(f.user_id, "")  # type: ignore[attr-defined]
 
 
+async def _annotate_wiki_status(
+    session: AsyncSession, files: Sequence[File]
+) -> None:
+    """목록 배지용 위키 상태를 배치로 부착한다 (spec/wiki-index.md).
+
+    행이 없으면 "off" 다 — 백엔드가 null 을 주지 않으므로 프런트가 분기를 빠뜨리지 않는다.
+    LEFT JOIN 하나면 되므로 항목당 조회(N+1)를 만들지 않는다.
+    """
+    from app.models import WikiDocument
+
+    rows = (
+        await session.execute(
+            select(WikiDocument.file_id, WikiDocument.status).where(
+                WikiDocument.file_id.in_([f.id for f in files])
+            )
+        )
+    ).all()
+    by_file = dict(rows)
+    for f in files:
+        f.wiki_status = by_file.get(f.id, "off")  # type: ignore[attr-defined]
+
+
 async def annotate_listing_meta(
     session: AsyncSession, user: User, files: Sequence[File]
 ) -> None:
@@ -194,6 +216,7 @@ async def annotate_listing_meta(
         return
 
     await annotate_owner_names(session, files)
+    await _annotate_wiki_status(session, files)
 
     # 파일들의 직접 부여(미만료)를 그룹명과 함께 한 번에 모은다 — 소유자의 "공유 대상" 표기와
     # 공유받은 항목의 직접 부여 매칭에 공용으로 쓴다. 그룹명순으로 안정 정렬.
@@ -1036,7 +1059,28 @@ async def _commit_new_version(
         actor_id=uploaded_by,
         name=file.name,
     )
+    await _enqueue_wiki_reindex(session, file)
     return file
+
+
+async def _enqueue_wiki_reindex(session: AsyncSession, file: File) -> None:
+    """위키가 켜진 파일이면 새 버전으로 재인덱싱을 예약한다 (spec/wiki-index.md).
+
+    버전업 경로가 여기 하나로 모이므로(재업로드·버전 복구·재개 업로드) 훅도 한 군데면 된다.
+    큐는 합치기라 짧은 간격의 연속 버전업이 인덱싱 한 번으로 접힌다. 지연 임포트는 순환을
+    피하기 위한 것이다(wiki 서비스가 permissions → groups 를 타고 files 를 참조한다).
+    """
+    from app.services import wiki as wiki_service
+    from app.services import wiki_queue
+
+    try:
+        state = await wiki_service.resolve_wiki_state(session, file.id)
+        if state.enabled and wiki_service.indexable(file).ok:
+            # 구 트리는 유지한 채 낡았음만 표시한다 — 재인덱싱이 끝날 때까지 그것으로 답한다.
+            await wiki_service.mark_stale(session, file.id)
+            await wiki_queue.enqueue(file.id)
+    except Exception:  # noqa: BLE001 - 인덱싱 예약 실패가 업로드를 되돌리면 안 된다
+        pass
 
 
 async def _safe_restore_object(

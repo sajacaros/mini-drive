@@ -1,7 +1,7 @@
 """권한 상속 판정 순수 로직 단위 테스트 (DB/Redis 불필요) — PRD 5.7.
 
 resolve_effective_permission 은 조상 경로에서 모은 권한 행으로 유효 권한을 계산한다.
-검증 축: 최근접 조상 우선 / 동거리 최고 수준 / inherit_to_children=FALSE 조상 무시 /
+검증 축: 조상 전체에서 최고 수준(누적) / inherit_to_children=FALSE 조상 무시 /
 만료 행 무시 / 자기 자신(depth 0)은 inherit 무관.
 """
 
@@ -39,7 +39,14 @@ def _row(
     )
 
 
-class TestClosestAncestorWins:
+class TestHighestLevelWins:
+    """누적(union) — 거리와 무관하게 조상 경로 전체에서 최고 수준이 적용된다 (2026-07-28 변경).
+
+    종전 규칙은 '가장 가까운 조상이 이긴다'였다. 권한 행이 사용자 소속 그룹 전체에 대해
+    수집되므로, 그 규칙은 재정의를 같은 그룹 안이 아니라 그룹을 가로질러 적용해
+    '그룹B 의 read 가 그룹A 의 manage 를 깎는' 간섭을 만들었다.
+    """
+
     def test_no_rows_returns_none(self) -> None:
         level, src = resolve_effective_permission([], NOW)
         assert level is None and src is None
@@ -48,16 +55,28 @@ class TestClosestAncestorWins:
         level, src = resolve_effective_permission([_row(0, "write", file_id=5)], NOW)
         assert level is GroupPermission.WRITE and src == 5
 
-    def test_closer_ancestor_overrides_farther(self) -> None:
-        # 부모(depth1)=read 가 조부(depth2)=manage 를 덮어쓴다 — 거리 우선(재정의).
+    def test_farther_higher_beats_closer_lower(self) -> None:
+        # 조부(depth2)=manage 가 부모(depth1)=read 를 이긴다 — 상위에서 준 권한이 살아있다.
         rows = [_row(2, "manage", file_id=20), _row(1, "read", file_id=10)]
         level, src = resolve_effective_permission(rows, NOW)
-        assert level is GroupPermission.READ and src == 10
+        assert level is GroupPermission.MANAGE and src == 20
 
-    def test_self_overrides_ancestor(self) -> None:
+    def test_ancestor_beats_lower_self_grant(self) -> None:
+        # 자기 자신의 read 도 조상의 manage 를 취소하지 못한다 — 낮추는 재정의는 표현 불가.
         rows = [_row(0, "read", file_id=1), _row(1, "manage", file_id=10)]
         level, src = resolve_effective_permission(rows, NOW)
-        assert level is GroupPermission.READ and src == 1
+        assert level is GroupPermission.MANAGE and src == 10
+
+    def test_closer_higher_still_wins(self) -> None:
+        rows = [_row(2, "read", file_id=20), _row(0, "manage", file_id=1)]
+        level, src = resolve_effective_permission(rows, NOW)
+        assert level is GroupPermission.MANAGE and src == 1
+
+    def test_tie_prefers_nearest_source(self) -> None:
+        # 같은 수준이면 출처는 가까운 쪽으로 보고한다(UI 의 '어디서 상속' 표기용).
+        rows = [_row(2, "write", file_id=20), _row(1, "write", file_id=10)]
+        level, src = resolve_effective_permission(rows, NOW)
+        assert level is GroupPermission.WRITE and src == 10
 
 
 class TestSameDistanceHighestLevel:
@@ -178,13 +197,14 @@ class TestResolveEffectiveGrant:
         )
         assert level is GroupPermission.READ and names == ["상위팀"]
 
-    def test_closest_ancestor_wins_over_farther(self) -> None:
+    def test_farther_higher_beats_closer_lower(self) -> None:
+        # 누적 — 조부의 manage 가 부모의 read 를 이긴다. 그룹명은 접근을 준 쪽 전부.
         rows = [
             _grant(2, 1, "조부팀", "manage", file_id=20),
             _grant(1, 2, "부모팀", "read", file_id=10),
         ]
         level, names = resolve_effective_grant(rows, NOW)
-        assert level is GroupPermission.READ and names == ["부모팀"]
+        assert level is GroupPermission.MANAGE and names == ["조부팀", "부모팀"]
 
     def test_same_depth_highest_level_all_names(self) -> None:
         # 같은 소스(동거리)의 여러 그룹 — 최고 수준 + 그룹명 모두(그룹명순 정렬 입력).
