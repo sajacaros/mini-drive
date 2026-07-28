@@ -97,7 +97,7 @@ def _perm_http_error(exc: PermissionServiceError) -> HTTPException:
 
 
 @router.get("/events")
-async def file_events(user: CurrentUser) -> StreamingResponse:
+async def file_events(user: CurrentUser, session: DbSession) -> StreamingResponse:
     """파일 변경 실시간 이벤트 스트림 (SSE, Phase 8-1).
 
     인증은 기존 Bearer 의존(fetch 스트리밍이 헤더를 붙인다 — EventSource 는 헤더 불가라 쓰지
@@ -106,7 +106,20 @@ async def file_events(user: CurrentUser) -> StreamingResponse:
 
     rate limit 은 이 경로에 걸지 않는다(장수명 스트림). 미들웨어는 async generator 를 그대로
     스트리밍하므로 워커를 막지 않는다.
+
+    **요청 세션을 스트림 시작 전에 놓아준다** — ZIP 스트리밍(`archive_download`)과 같은 이유이고
+    같은 처리다. FastAPI 의 의존성 수명은 요청 단위인데 스트리밍 응답은 클라이언트가 끊을
+    때까지 요청이 끝나지 않는다. 그대로 두면 `get_db` 가 잡은 커넥션이 인증 SELECT 를 한 채
+    스트림 수명 내내 `idle in transaction` 으로 남는다. SSE 는 ZIP 보다 오래 살아서(사용자가
+    화면을 열어둔 내내) 영향이 더 크다 — 실측으로 스트림 6개가 커넥션 6개를 붙들었고, 기본
+    풀은 5+10=15 라 드라이브를 열어둔 15명이면 고갈된다. DDL 도 막혀서 통합 테스트가
+    `DROP TABLE` 에서 멈추던 원인이기도 하다.
+
+    이 세션은 인증 이후 쓰이지 않는다. 구독자 권한 필터는 이벤트마다 짧은 세션을 따로 열고
+    (`file_events.user_can_receive_event`), 거기서 쓰는 것은 `user.id` 뿐이다.
+    `expire_on_commit=False` 라 close 로 detach 된 뒤에도 이미 적재된 컬럼은 그대로 읽힌다.
     """
+    await session.close()
     return StreamingResponse(
         file_events_service.subscribe_file_events(user),
         media_type="text/event-stream",
