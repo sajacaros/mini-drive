@@ -1,7 +1,7 @@
 """file_group_permissions 테이블 (PRD 5.7).
 
 명시적으로 부여한 권한만 저장한다. 상속은 물질화하지 않고 조회 시 recursive CTE 로
-가장 가까운 `inherit_to_children = TRUE` 권한을 판정한다 (PRD 2.2, 5.7).
+`inherit_to_children = TRUE` 인 조상 권한 전체에서 최고 수준을 판정한다 — 누적 (PRD 2.2, 5.7).
 """
 
 from __future__ import annotations

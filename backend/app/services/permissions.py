@@ -2,10 +2,17 @@
 
 설계 (PRD 5.7 — 물질화하지 않고 조회 시 판정):
   file_group_permissions 에는 **명시적 부여만** 저장한다. 판정 시 대상 파일에서 루트까지
-  조상 경로를 recursive CTE 로 올라가며, 사용자 소속 그룹들의 권한 행 중 **가장 가까운
-  조상의 것**을 적용한다(자기 자신 > 부모 > 조부…). 같은 거리에 여러 그룹 권한이 있으면
-  최고 수준(manage > write > read)을 적용한다. 조상 행이라도 inherit_to_children=FALSE 면
-  하위(자기 자신 제외)에 효력이 없고, expires_at 이 지난 행은 무효다.
+  조상 경로를 recursive CTE 로 올라가며, 사용자 소속 그룹들의 권한 행 **전체에서 최고
+  수준**(manage > write > read)을 적용한다 — 누적(union). 거리는 수준 결정에 관여하지 않고,
+  동수준일 때 출처 표기에만 쓴다. 조상 행이라도 inherit_to_children=FALSE 면 하위(자기 자신
+  제외)에 효력이 없고, expires_at 이 지난 행은 무효다.
+
+  누적으로 바꾼 이유 (2026-07-28) — 종전 '가장 가까운 조상이 이긴다'는 재정의로 권한을
+  낮추기 위한 규칙이었으나, 권한 행이 사용자 소속 그룹 전체에 대해 수집되므로 재정의가
+  그룹을 가로질러 작동했다. 그룹B 에 read 를 준 사람이 의도 없이 그룹A 관리자의 manage 를
+  깎는 간섭이 생긴다. 누적에서는 부여된 적 없는 권한이 생기지 않으며(최고 수준도 누군가
+  명시적으로 부여한 것이다), '상속받되 여기서만 낮추기'는 표현할 수 없어져 상위에서
+  inherit_to_children=FALSE 로 상속을 끊고 하위에 개별 부여하는 방식으로 대체한다.
 
 판정 로직의 순수 부분(resolve_effective_permission)은 DB 없이 단위 테스트 가능하도록 분리한다.
 
@@ -87,7 +94,17 @@ def resolve_effective_permission(
 
     - 만료 행(expires_at <= now) 제외.
     - 조상 행(depth > 0)은 inherit_to_children=TRUE 만 유효(자기 자신 depth 0 은 항상 유효).
-    - 남은 행 중 **가장 가까운 조상(min depth)** 만 적용하고, 동거리면 최고 수준을 택한다.
+    - 남은 행 **전체에서 최고 수준**을 택한다(누적). 동수준이면 가까운 쪽을 출처로 삼는다.
+
+    누적(union)인 이유 — 2026-07-28 변경. 종전 규칙은 '가장 가까운 조상이 이긴다'였고,
+    상위 폴더의 manage 가 하위의 read 에 덮이는 재정의를 의도한 것이었다. 그런데 권한 행은
+    **사용자가 속한 모든 그룹**에 대해 수집되므로(`_ANCESTOR_USER_GRANT_SQL`), 재정의가
+    같은 그룹 안이 아니라 **그룹을 가로질러** 작동했다. 그룹B 에 read 를 준 사람이 의도 없이
+    그룹A 관리자의 manage 를 깎는 간섭이 생긴다.
+
+    누적으로 바꿔도 없던 권한이 생기지는 않는다 — 올라가 봐야 manage 권한자가 이미 명시적으로
+    부여해 둔 수준까지다. 대신 '상속받되 여기서만 낮추기'는 표현할 수 없어지고, 좁히려면
+    상위에서 inherit_to_children=FALSE 로 상속을 끊고 하위에 개별 부여한다.
 
     반환: (유효 권한 수준, 그 권한이 부여된 파일 id). 없으면 (None, None).
     """
@@ -100,17 +117,8 @@ def resolve_effective_permission(
     if not applicable:
         return None, None
 
-    min_depth = min(r.depth for r in applicable)
-    best_level: GroupPermission | None = None
-    best_file: int | None = None
-    for r in applicable:
-        if r.depth != min_depth:
-            continue
-        level = GroupPermission(r.permission)
-        if best_level is None or _RANK[level] > _RANK[best_level]:
-            best_level = level
-            best_file = r.file_id
-    return best_level, best_file
+    best = max(applicable, key=lambda r: (_RANK[GroupPermission(r.permission)], -r.depth))
+    return GroupPermission(best.permission), best.file_id
 
 
 # --- 리스팅 메타 판정 (통합 드라이브 group_names/permission) ------------------
@@ -169,8 +177,9 @@ def resolve_effective_grant(
 ) -> tuple[GroupPermission | None, list[str]]:
     """조상 경로 권한 행들에서 유효 권한 수준 + 부여 그룹명을 판정한다 (PRD 5.7, 상속 포함).
 
-    resolve_effective_permission 과 동일한 규칙(만료/inherit 필터 → 최근접 조상 → 동거리 최고
-    수준)을 쓰되, 접근을 부여한 최근접 소스의 그룹명들을 함께 돌려준다(그룹 컬럼 표기용).
+    resolve_effective_permission 과 동일한 규칙(만료/inherit 필터 → 전체에서 최고 수준)을 쓰되,
+    **접근을 부여한 그룹명 전부**를 함께 돌려준다(그룹 컬럼 표기용 — 수준과 무관하게, 이 파일에
+    나를 접근하게 해주는 그룹들).
     반환: (유효 권한 수준, 부여 그룹명들). 없으면 (None, []).
     """
     applicable = [
@@ -181,10 +190,8 @@ def resolve_effective_grant(
     ]
     if not applicable:
         return None, []
-    min_depth = min(r.depth for r in applicable)
-    at_source = [r for r in applicable if r.depth == min_depth]
-    best = _highest(GroupPermission(r.permission) for r in at_source)
-    return best, _dedup(r.group_name for r in at_source)
+    best = _highest(GroupPermission(r.permission) for r in applicable)
+    return best, _dedup(r.group_name for r in applicable)
 
 
 # 조상 경로에서 사용자 소속 그룹의 권한 행을 그룹명과 함께 모은다 (리스팅 상속 폴백용).
@@ -287,8 +294,8 @@ async def _determine_access(
       1) **조상 폴더 소유** — 내 폴더 안에 협업자가 만든 항목은 내 소유 경로 아래에 있으므로
          소유자에 준하는 전권(manage)을 갖는다. 폴더를 소유한다는 것이 그 안의 항목에 대한
          상위 권한이므로, 하위에 부여된(더 낮은) 그룹 권한이 이를 끌어내리지 않는다 —
-         즉 최근접 조상 규칙의 예외이자 하한선이다.
-      2) **그룹 권한** — 최근접 조상 규칙(resolve_effective_permission).
+         즉 그룹 판정과 무관한 하한선이다.
+      2) **그룹 권한** — 누적 규칙(resolve_effective_permission).
     조상 소유가 성립하면 manage 가 최고 수준이므로 그대로 채택하고, 아니면 그룹 판정을 쓴다.
     """
     group_ids = await get_user_group_ids(session, user.id)
@@ -335,8 +342,8 @@ async def can_access_descendants(
       - 폴더 자신이나 조상을 내가 소유하면 하위 전체가 내 소유 경로 아래다(조상 소유 규칙).
       - 그룹 부여는 미만료 + inherit_to_children 인 행이 하나라도 있으면 하위로 이어진다.
         (하위에서는 그 행의 depth 가 하나 더 깊어질 뿐 판정 규칙은 같다.)
-    반대로 하위에서 권한이 **낮아지는** 경우는 없다 — 최근접 조상 규칙은 내 소속 그룹의
-    부여 행만 보고, 어떤 수준이든 read 는 포함하므로 접근이 끊기지 않는다.
+    반대로 하위에서 권한이 **낮아지는** 경우는 없다 — 누적 규칙에서는 하위의 부여가 상위를
+    깎지 못하고, 어떤 수준이든 read 는 포함하므로 접근이 끊기지 않는다.
     """
     if folder.user_id == user.id:
         return True
@@ -750,8 +757,12 @@ async def list_permissions(
 ) -> tuple[list[DirectGrant], list[InheritedGrant]]:
     """직접 부여 목록 + 유효 상속 권한 목록을 반환한다 (PRD 6.5/6.6 통합).
 
-    상속 목록은 그룹별로 가장 가까운 상속 조상(inherit_to_children=TRUE, 미만료) 한 건을 담되,
-    이 파일에 같은 그룹의 직접 부여가 있으면(재정의) 제외한다.
+    상속 목록은 그룹별로 가장 가까운 상속 조상(inherit_to_children=TRUE, 미만료) 한 건을 담는다.
+
+    같은 그룹의 직접 부여가 있어도 상속 항목을 **숨기지 않는다** — 판정이 누적으로 바뀌면서
+    (resolve_effective_permission, 2026-07-28) 직접 부여가 상속을 취소하지 못하기 때문이다.
+    직접 read + 상속 manage 면 유효 권한은 manage 인데, 상속 행을 감추면 관리자가 화면에서
+    read 로 읽는다. 두 행을 모두 보여주고 실제 유효 수준은 둘 중 높은 쪽이다.
     """
     file = await _get_file(session, file_id)
     await _require_manage(session, actor, file)
@@ -776,16 +787,16 @@ async def list_permissions(
         )
         for p, name in direct_rows
     ]
-    direct_group_ids = {d.group_id for d in direct}
 
     now = datetime.now(UTC)
     ancestor_rows = (
         await session.execute(_ANCESTOR_ALL_PERM_SQL, {"file_id": file_id})
     ).all()
     # 그룹별 최근접 상속 권한 한 건 (미만료 + inherit_to_children). ORDER BY depth ASC 이므로 첫 건.
+    # 쿼리가 depth > 0 만 뽑으므로 자기 자신 부여는 애초에 섞이지 않는다(그건 direct 목록이 담는다).
     inherited_by_group: dict[int, InheritedGrant] = {}
     for r in ancestor_rows:
-        if r.group_id in direct_group_ids or r.group_id in inherited_by_group:
+        if r.group_id in inherited_by_group:
             continue
         if not r.inherit_to_children:
             continue
