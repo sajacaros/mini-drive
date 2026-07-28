@@ -9,11 +9,20 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.wiki import WikiDocumentItem, WikiDocumentListResponse
+from app.schemas.wiki import (
+    WikiAskRequest,
+    WikiAskResponse,
+    WikiCitation,
+    WikiDocumentItem,
+    WikiDocumentListResponse,
+)
 from app.services import wiki as wiki_service
+from app.services import wiki_query
+from app.services.storage import get_storage
+from app.services.wiki_llm import WikiLLMError
 
 router = APIRouter()
 
@@ -45,4 +54,36 @@ async def list_documents(
             for i in items
         ],
         total=total,
+    )
+
+
+@router.post("/ask", response_model=WikiAskResponse)
+async def ask(
+    payload: WikiAskRequest, user: CurrentUser, session: DbSession
+) -> WikiAskResponse:
+    """인덱싱된 문서에 질의한다 (spec/wiki-index.md).
+
+    검색 대상은 **이 사용자가 접근할 수 있는 문서뿐**이다 — 권한 필터를 대상 선정 단계에
+    걸므로, 권한 없는 문서의 본문은 모델 컨텍스트에 아예 들어가지 않는다.
+    """
+    question = payload.question.strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="질문이 비어 있습니다.")
+    try:
+        result = await wiki_query.ask(session, get_storage(), user, question)
+    except WikiLLMError as exc:
+        raise HTTPException(status_code=503, detail=f"위키 모델 호출 실패: {exc}") from exc
+    return WikiAskResponse(
+        answer=result.answer,
+        citations=[
+            WikiCitation(
+                file_id=c.file_id,
+                file_name=c.file_name,
+                node_id=c.node_id,
+                node_title=c.node_title,
+                line_num=c.line_num,
+            )
+            for c in result.citations
+        ],
+        searched_documents=result.searched_documents,
     )

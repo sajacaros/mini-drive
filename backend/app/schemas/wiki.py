@@ -71,3 +71,29 @@ class WikiDocumentItem(BaseModel):
 class WikiDocumentListResponse(BaseModel):
     items: list[WikiDocumentItem]
     total: int
+
+
+class WikiAskRequest(BaseModel):
+    """위키 질의 (POST /api/wiki/ask)."""
+
+    question: str
+
+
+class WikiCitation(BaseModel):
+    """답변 근거 — 클릭하면 그 파일의 해당 줄로 이동한다.
+
+    앵커가 페이지가 아니라 **줄 번호**인 것은 md 트리의 좌표가 line_num 이기 때문이다
+    (page_index 는 PDF 경로 전용이고 v1 은 md/html 만 다룬다).
+    """
+
+    file_id: int
+    file_name: str
+    node_id: str
+    node_title: str
+    line_num: int
+
+
+class WikiAskResponse(BaseModel):
+    answer: str
+    citations: list[WikiCitation]
+    searched_documents: int
