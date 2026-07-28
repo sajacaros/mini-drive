@@ -152,7 +152,8 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert scope is not None, r.text
         assert scope["target_count"] == 2, scope  # guide.md + page.html
         assert scope["skipped_by_format"] == 1, scope  # plan.pdf
-        _ok(f"폴더 scope — 대상 {scope['target_count']}건, 형식 제외 {scope['skipped_by_format']}건")
+        targets, skipped = scope["target_count"], scope["skipped_by_format"]
+        _ok(f"폴더 scope — 대상 {targets}건, 형식 제외 {skipped}건")
 
         # 5. 발행 권한 없는 사용자에게는 404 (존재 은닉)
         r = await c.get(f"/api/files/{md_id}/wiki", headers=bob_h)
@@ -161,10 +162,15 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert r.status_code == 404, r.text
         _ok("발행 권한 없는 사용자 — 조회·변경 모두 404")
 
-        # 문서 목록은 아직 인덱싱 전이라 비어 있다 (워커는 다음 단계)
+        # 문서 목록에는 인덱싱 전(pending) 항목도 나온다 — 폴더를 켜고 하나씩 올라오는 것을
+        # 지켜볼 수 있어야 한다. 검색은 ready/stale 만 보므로 미완성 트리가 답변에 쓰이지 않는다.
         r = await c.get("/api/wiki/documents", headers=alice_h)
-        assert r.status_code == 200 and r.json()["total"] == 0, r.text
-        _ok("문서 목록 — 인덱싱 전이므로 0건")
+        assert r.status_code == 200, r.text
+        items = {d["name"]: d for d in r.json()["items"]}
+        assert set(items) == {"guide.md", "page.html"}, items
+        assert all(d["status"] == "pending" for d in items.values()), items
+        assert all(d["node_count"] is None for d in items.values()), items
+        _ok("문서 목록 — 인덱싱 전 항목이 pending 으로 노출 (트리는 아직 없음)")
 
     await engine.dispose()
     print("\n위키 토글 API 통합 시나리오 전체 통과.")

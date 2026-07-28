@@ -19,6 +19,7 @@ from __future__ import annotations
 import posixpath
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
@@ -32,6 +33,20 @@ from app.services import permissions as permissions_service
 # md 경로만 쓴다. PDF 는 목차 판정 루프에서 막히고, 사내 PDF 의 43% 는 추출 텍스트가 아예
 # 없어 OCR 이 필요하다 — 둘 다 v1 범위 밖이다(spec/wiki-index.md 「왜 PDF 가 v1 에 없는가」).
 INDEXABLE_EXTENSIONS = frozenset({".md", ".markdown", ".html", ".htm"})
+
+
+class WikiStatus(StrEnum):
+    """인덱싱 상태. **null 을 쓰지 않는 총체 함수**다 — UI 가 분기를 빠뜨리지 않게 한다.
+
+    OFF 만 `wiki_documents` 행 없이 파생되는 값이고, 나머지는 행의 status 그대로다.
+    """
+
+    OFF = "off"  # 인덱싱 대상이 아니거나 꺼져 있음 (트리 없음)
+    PENDING = "pending"  # 켜짐, 큐 대기
+    INDEXING = "indexing"  # 워커 처리 중
+    READY = "ready"  # 최신 트리
+    STALE = "stale"  # 트리는 있으나 현재 버전보다 낡음
+    FAILED = "failed"  # 실패 (직전 트리가 있으면 그대로 유지된다)
 
 
 class WikiServiceError(Exception):
@@ -292,9 +307,72 @@ async def _sync_queue(
 
     effective = await resolve_wiki_state(session, file.id)
     if effective.enabled:
+        await mark_pending(session, targets)
         await wiki_queue.enqueue(targets)
     else:
         await wiki_queue.drop(targets)
+
+
+async def mark_pending(session: AsyncSession, file_ids: list[int]) -> None:
+    """대상들을 `pending` 으로 올린다 (없으면 행을 만든다).
+
+    워커가 만들 때까지 기다리지 않는 이유가 둘이다 —
+    ① 상태가 비어 있는 구간이 없어져 UI 가 "켰는데 아무 표시도 없는" 상태를 겪지 않는다.
+    ② **Redis 큐가 유실돼도 복구할 수 있다.** 큐는 flush·재시작으로 사라질 수 있는데, 그때
+       켜져 있으면서 인덱싱 안 된 파일이 어디에도 안 남으면 영영 처리되지 않는다. Postgres 에
+       pending 행이 있으면 워커가 고아를 찾아 다시 넣는다(wiki_indexer.requeue_orphans).
+
+    이미 최신(ready + 같은 버전)인 것은 건드리지 않는다 — 멱등.
+    """
+    from app.models import WikiDocument
+
+    if not file_ids:
+        return
+    rows = (
+        await session.execute(
+            select(WikiDocument, File)
+            .join(File, File.id == WikiDocument.file_id)
+            .where(WikiDocument.file_id.in_(file_ids))
+        )
+    ).all()
+    existing = {doc.file_id: (doc, file) for doc, file in rows}
+
+    for fid in file_ids:
+        entry = existing.get(fid)
+        if entry is None:
+            file = await session.get(File, fid)
+            if file is None:
+                continue
+            session.add(
+                WikiDocument(
+                    file_id=fid, version=file.current_version, status=WikiStatus.PENDING
+                )
+            )
+            continue
+        doc, file = entry
+        if doc.status == WikiStatus.READY and doc.version == file.current_version:
+            continue
+        doc.status = WikiStatus.PENDING
+    await session.commit()
+
+
+async def mark_stale(session: AsyncSession, file_id: int) -> None:
+    """새 버전이 올라왔음을 표시한다.
+
+    **트리는 그대로 둔다** — 재인덱싱이 끝날 때까지 구 트리로 답한다. 문서를 검색에서 빼면
+    답변이 누락되므로, 낡았다는 사실만 표시하고 계속 쓰게 한다.
+    """
+    from app.models import WikiDocument
+
+    doc = (
+        await session.execute(
+            select(WikiDocument).where(WikiDocument.file_id == file_id)
+        )
+    ).scalars().first()
+    if doc is None or doc.status in (WikiStatus.PENDING, WikiStatus.INDEXING):
+        return
+    doc.status = WikiStatus.STALE
+    await session.commit()
 
 
 async def _set_public(
@@ -336,7 +414,7 @@ class WikiOverview:
     state: WikiState
     public: bool
     verdict: IndexableVerdict
-    status: str | None
+    status: WikiStatus
     indexed_version: int | None
     scope: FolderScope | None
 
@@ -352,15 +430,26 @@ async def get_overview(
         raise WikiServiceError(404, "파일을 찾을 수 없습니다.")
 
     doc = await get_document(session, file_id)
+    state = await resolve_wiki_state(session, file_id)
     return WikiOverview(
         file=file,
-        state=await resolve_wiki_state(session, file_id),
+        state=state,
         public=await is_public(session, file_id),
         verdict=indexable(file),
-        status=doc.status if doc else None,
+        status=_status_of(doc, enabled=state.enabled),
         indexed_version=doc.version if doc else None,
         scope=await folder_scope(session, actor, file) if file.is_folder else None,
     )
+
+
+def _status_of(doc: Any | None, *, enabled: bool) -> WikiStatus:
+    """행이 없거나 위키가 꺼져 있으면 OFF. 그 외에는 행의 status 를 그대로 쓴다."""
+    if doc is None or not enabled:
+        return WikiStatus.OFF
+    try:
+        return WikiStatus(doc.status)
+    except ValueError:
+        return WikiStatus.OFF
 
 
 async def get_document(session: AsyncSession, file_id: int) -> Any | None:
@@ -459,7 +548,11 @@ class DocumentItem:
 async def list_documents(
     session: AsyncSession, user: User, page: int, size: int
 ) -> tuple[list[DocumentItem], int]:
-    """이 사용자가 접근할 수 있는, 인덱싱된 문서 목록.
+    """이 사용자가 접근할 수 있는 위키 문서 목록.
+
+    아직 인덱싱되지 않은 항목(pending·indexing)도 포함한다 — 폴더를 켠 뒤 문서가 하나씩
+    올라오는 것을 지켜볼 수 있어야 한다. 검색(wiki_query)은 ready/stale 만 대상으로 삼으므로
+    미완성 트리가 답변에 쓰이지는 않는다.
 
     **권한 필터를 질의 대상 선정 단계에 건다** — 목록을 만든 뒤 거르지 않는다.
 

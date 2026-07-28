@@ -990,7 +990,7 @@ def _wiki_state_response(overview: wiki_service.WikiOverview) -> WikiStateRespon
         public=overview.public,
         indexable=overview.verdict.ok,
         reason=overview.verdict.reason,
-        status=overview.status,
+        status=overview.status.value,
         indexed_version=overview.indexed_version,
         folder_scope=(
             WikiFolderScopeResponse(

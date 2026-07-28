@@ -1053,6 +1053,8 @@ async def _enqueue_wiki_reindex(session: AsyncSession, file: File) -> None:
     try:
         state = await wiki_service.resolve_wiki_state(session, file.id)
         if state.enabled and wiki_service.indexable(file).ok:
+            # 구 트리는 유지한 채 낡았음만 표시한다 — 재인덱싱이 끝날 때까지 그것으로 답한다.
+            await wiki_service.mark_stale(session, file.id)
             await wiki_queue.enqueue(file.id)
     except Exception:  # noqa: BLE001 - 인덱싱 예약 실패가 업로드를 되돌리면 안 된다
         pass

@@ -103,7 +103,9 @@ async def _get_or_create_doc(session: AsyncSession, file_id: int) -> WikiDocumen
         )
     ).scalars().first()
     if doc is None:
-        doc = WikiDocument(file_id=file_id, version=0, status="pending")
+        doc = WikiDocument(
+            file_id=file_id, version=0, status=wiki_service.WikiStatus.PENDING
+        )
         session.add(doc)
         await session.flush()
     return doc
@@ -129,11 +131,14 @@ async def index_file(
         return "skipped"
 
     doc = await _get_or_create_doc(session, file_id)
-    if doc.status == "ready" and doc.version == file.current_version:
+    if (
+        doc.status == wiki_service.WikiStatus.READY
+        and doc.version == file.current_version
+    ):
         return "ready"  # 이미 최신 — 멱등
 
     target_version = file.current_version
-    doc.status = "indexing"
+    doc.status = wiki_service.WikiStatus.INDEXING
     await session.commit()
 
     try:
@@ -144,7 +149,7 @@ async def index_file(
     except Exception as exc:  # noqa: BLE001 - 실패 사유를 남기고 구 트리를 유지한다
         await session.rollback()
         doc = await _get_or_create_doc(session, file_id)
-        doc.status = "failed"
+        doc.status = wiki_service.WikiStatus.FAILED
         doc.error = str(exc)[:500]
         await session.commit()
         log.exception("wiki_index_failed", file_id=file_id, name=file.name)
@@ -154,7 +159,7 @@ async def index_file(
     doc = await _get_or_create_doc(session, file_id)
     doc.tree = tree
     doc.version = target_version
-    doc.status = "ready"
+    doc.status = wiki_service.WikiStatus.READY
     doc.error = None
     doc.indexed_at = datetime.now(UTC)
     await session.commit()
@@ -186,6 +191,38 @@ async def _publish(file: File) -> None:
         log.warning("wiki_event_publish_failed", file_id=file.id)
 
 
+async def requeue_orphans(session: AsyncSession, limit: int = 50) -> int:
+    """큐에서 사라졌지만 아직 처리되지 않은 문서를 다시 넣는다. 반환: 재적재 건수.
+
+    Redis 큐는 flush·재시작으로 사라질 수 있고, 워커가 작업을 집은 뒤 크래시하면 그 항목은
+    큐에도 없고 처리도 안 된 상태가 된다. `pending`/`indexing`/`stale` 로 남아 있는 행이
+    그 흔적이므로 여기서 회수한다 — 이것이 토글 시점에 행을 만들어 두는 두 번째 이유다.
+
+    인덱싱은 멱등이라 이미 큐에 있는 것을 다시 넣어도 안전하다(ZADD 가 점수만 갱신한다).
+    """
+    stuck = (
+        await session.execute(
+            select(WikiDocument.file_id)
+            .join(File, File.id == WikiDocument.file_id)
+            .where(
+                File.is_deleted.is_(False),
+                WikiDocument.status.in_(
+                    (
+                        wiki_service.WikiStatus.PENDING,
+                        wiki_service.WikiStatus.INDEXING,
+                        wiki_service.WikiStatus.STALE,
+                    )
+                ),
+            )
+            .limit(limit)
+        )
+    ).scalars().all()
+    if not stuck:
+        return 0
+    await wiki_queue.enqueue(list(stuck), delay=0)
+    return len(stuck)
+
+
 async def run_once(
     session: AsyncSession, storage: StorageService, limit: int = 5
 ) -> dict[str, int]:
@@ -203,4 +240,4 @@ async def run_once(
     return counts
 
 
-__all__ = ["index_file", "run_once"]
+__all__ = ["index_file", "requeue_orphans", "run_once"]

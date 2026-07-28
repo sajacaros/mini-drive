@@ -198,6 +198,15 @@ async def _index_wiki(*, loop: bool, limit: int) -> int:
         loop=loop,
     )
 
+    # 기동 시 한 번 — 큐가 유실된 채로 남아 있던 작업을 회수한다(Redis flush·크래시 복구).
+    async with SessionFactory() as session:
+        try:
+            recovered = await wiki_indexer.requeue_orphans(session)
+            if recovered:
+                log.info("wiki_orphans_requeued", count=recovered)
+        except Exception:  # noqa: BLE001 - 회수 실패가 기동을 막지 않는다
+            log.exception("wiki_orphan_requeue_failed")
+
     storage = get_storage()
     while True:
         async with SessionFactory() as session:

@@ -49,8 +49,9 @@ class WikiStateResponse(BaseModel):
     # 이 파일을 인덱싱할 수 있는가 + 안 되는 이유. 토글 비활성화와 사유 표기에 쓴다.
     indexable: bool
     reason: str | None = None
-    # 인덱싱 진행 상태 — pending | indexing | ready | failed | stale. 트리가 없으면 null.
-    status: str | None = None
+    # 인덱싱 진행 상태 — off | pending | indexing | ready | stale | failed.
+    # **null 을 쓰지 않는다** — UI 가 분기를 빠뜨리지 않도록 항상 값이 있다.
+    status: str
     indexed_version: int | None = None
     # 폴더일 때만 채운다.
     folder_scope: WikiFolderScopeResponse | None = None

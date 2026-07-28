@@ -39,7 +39,11 @@ class WikiDocument(Base):
     )
     # 트리를 만든 시점의 files.current_version 스냅숏. 이 값이 현재 버전보다 낮으면 stale 이다.
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    # pending | indexing | ready | failed | stale
+    # pending | indexing | ready | stale | failed  (WikiStatus 참조)
+    #
+    # 행은 **토글을 켜는 시점에** pending 으로 만들어진다. 워커가 만들 때까지 기다리지 않는
+    # 이유는 두 가지다 — 상태가 null 인 구간이 없어지고, Redis 큐가 유실돼도(flush·재시작)
+    # 켜져 있는데 인덱싱 안 된 파일을 Postgres 에서 찾아 재적재할 수 있다.
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     # PageIndex md_to_tree 결과. 인덱싱 중에는 직전 트리를 그대로 두고, 완성 후 원자적으로 교체한다.
     tree: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
