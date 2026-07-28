@@ -45,7 +45,7 @@ from app.models import (
     GroupMember,
     User,
 )
-from app.models.enums import GroupPermission
+from app.models.enums import GroupPermission, UserStatus
 from app.services.groups import get_user_group_ids
 
 AccessNeed = Literal["read", "write", "manage"]
@@ -447,6 +447,21 @@ async def get_access_level(
 
 
 async def _active_member_ids(session: AsyncSession, group_id: int) -> list[int]:
+    """그룹의 활성 멤버 id 목록 (권한 캐시 무효화 대상).
+
+    시스템 그룹(`@전사`)은 멤버십을 물질화하지 않으므로 group_members 에 행이 없다
+    (get_user_group_ids 가 UNION 으로 붙인다). 그대로 두면 전사 공개를 켜고 꺼도 아무의
+    캐시도 무효화되지 않아 최대 TTL 동안 반영이 지연된다 — 활성 사용자 전원을 대상으로 삼는다.
+    """
+    group = await session.get(Group, group_id)
+    if group is not None and group.is_system:
+        rows = (
+            await session.execute(
+                select(User.id).where(User.status == UserStatus.ACTIVE)
+            )
+        ).scalars().all()
+        return list(rows)
+
     rows = (
         await session.execute(
             select(GroupMember.user_id).where(

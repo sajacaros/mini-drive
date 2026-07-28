@@ -17,6 +17,7 @@ from app.core.security import hash_password
 from app.models import AppSetting, SignupCode, User
 from app.models.enums import ADMIN_ROLES, UserRole, UserStatus
 from app.models.user import DEFAULT_MAX_STORAGE
+from app.services.groups import ensure_all_users_group
 from app.services.signup_codes import create_signup_code
 from app.services.users import create_root_folder
 
@@ -100,6 +101,9 @@ async def create_admin_account(
     session.add(admin)
     await session.flush()
     await create_root_folder(session, admin)
+    # @전사 시스템 그룹은 소유자(관리자)가 있어야 만들 수 있다. 관리자 생성 경로가 여기 하나뿐이라
+    # 신규 설치·CLI·통합 테스트가 모두 이 훅으로 그룹을 갖게 된다 (spec/wiki-index.md).
+    await ensure_all_users_group(session, admin)
     return admin
 
 

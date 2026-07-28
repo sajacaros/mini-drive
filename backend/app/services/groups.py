@@ -159,15 +159,23 @@ async def require_group_role(
 
 
 async def get_user_group_ids(session: AsyncSession, user_id: int) -> list[int]:
-    """사용자가 활성 멤버인 그룹 id 목록 (파일 권한 판정용)."""
-    rows = (
-        await session.execute(
-            select(GroupMember.group_id).where(
-                GroupMember.user_id == user_id,
-                GroupMember.removed_at.is_(None),
-            )
-        )
-    ).scalars().all()
+    """사용자가 활성 멤버인 그룹 id 목록 (파일 권한 판정용).
+
+    **시스템 그룹(`is_system`)은 멤버십을 물질화하지 않고 여기서 항상 포함시킨다.**
+    `@전사`(위키 전사 공개용)의 멤버는 '전 활성 사용자'인데, 이를 group_members 행으로
+    쌓으면 계정 생성·비활성화마다 동기화가 필요하고 빠뜨리면 조용히 어긋난다. UNION 한 번이
+    같은 결과를 주고 드리프트가 생길 여지가 없다 (spec/wiki-index.md).
+
+    호출자는 인증을 통과한 사용자다(비활성 계정은 로그인 자체가 막힌다). 따라서 여기서
+    사용자 상태를 다시 보지 않는다.
+    """
+    stmt = select(GroupMember.group_id).where(
+        GroupMember.user_id == user_id,
+        GroupMember.removed_at.is_(None),
+    ).union(
+        select(Group.id).where(Group.is_system.is_(True), Group.is_active.is_(True))
+    )
+    rows = (await session.execute(stmt)).scalars().all()
     return list(rows)
 
 
@@ -182,6 +190,54 @@ async def _get_active_group(session: AsyncSession, group_id: int) -> Group:
     group = await session.get(Group, group_id)
     if group is None or not group.is_active:
         raise GroupServiceError(404, "그룹을 찾을 수 없습니다.")
+    return group
+
+
+ALL_USERS_GROUP_NAME = "@전사"
+ALL_USERS_GROUP_DESCRIPTION = (
+    "전 구성원. 위키 전사 공개에 쓰는 시스템 그룹으로, 멤버십은 자동입니다."
+)
+
+
+async def ensure_all_users_group(session: AsyncSession, owner: User) -> Group:
+    """`@전사` 시스템 그룹을 보장한다 (없으면 생성). flush 만 하고 커밋은 호출자 책임.
+
+    owner_user_id 가 NOT NULL 이라 소유자가 필요하다 — 관리자 생성 경로
+    (`setup.create_admin_account`)에서 첫 관리자를 소유자로 만든다. 이미 관리자가 있는 기존
+    배포는 마이그레이션 0015 가 같은 행을 넣으므로, 여기서는 존재 확인이 먼저다.
+
+    멤버십은 만들지 않는다 — `get_user_group_ids` 가 UNION 으로 전 활성 사용자에게 붙인다
+    (spec/wiki-index.md).
+    """
+    existing = (
+        await session.execute(select(Group).where(Group.is_system.is_(True)))
+    ).scalars().first()
+    if existing is not None:
+        return existing
+
+    group = Group(
+        name=ALL_USERS_GROUP_NAME,
+        description=ALL_USERS_GROUP_DESCRIPTION,
+        owner_user_id=owner.id,
+        is_active=True,
+        is_system=True,
+    )
+    session.add(group)
+    await session.flush()
+    return group
+
+
+async def _get_editable_group(session: AsyncSession, group_id: int) -> Group:
+    """수정 가능한 활성 그룹. 시스템 그룹(`@전사`)은 막는다.
+
+    시스템 그룹은 **조회·권한 부여 대상으로는 정식 시민**이다 — md/html 이 아닌 파일을 전사
+    공개하는 유일한 경로가 권한 관리 화면이라 목록에 보여야 한다(spec/wiki-index.md). 다만
+    이름·설명·소유권·멤버십은 시스템이 관리하므로 사용자 편집을 차단한다. 멤버십은 애초에
+    물질화돼 있지 않아(get_user_group_ids 가 UNION) 멤버 조작은 효과도 없다.
+    """
+    group = await _get_active_group(session, group_id)
+    if group.is_system:
+        raise GroupServiceError(400, "시스템 그룹은 수정할 수 없습니다.")
     return group
 
 
@@ -331,7 +387,7 @@ async def update_group(
 
     description_set 은 description 필드가 요청 본문에 포함됐는지 여부(None 으로의 명시적 갱신 구분).
     """
-    group = await _get_active_group(session, group_id)
+    group = await _get_editable_group(session, group_id)
     await require_group_role(session, group_id, actor.id, _MEMBER_MANAGERS)
 
     changes: dict[str, Any] = {}
@@ -361,7 +417,7 @@ async def delete_group(session: AsyncSession, actor: User, group_id: int) -> Non
     그룹 소유 파일(files.group_id)은 group_id=NULL 로 되돌려 개인 소유로 전환한다
     (files.user_id 생성자가 개인 소유자, PRD 5.8). file_group_permissions 는 삭제한다(PRD 3.1.1).
     """
-    group = await _get_active_group(session, group_id)
+    group = await _get_editable_group(session, group_id)
     await require_group_role(session, group_id, actor.id, {GroupRole.OWNER})
 
     # 삭제로 모든 파일 권한이 사라지므로 활성 멤버 전원의 권한 캐시를 무효화한다 (PRD 1.4).
@@ -423,7 +479,7 @@ async def add_member(
 
     owner 직접 부여 금지. 대상 사용자 status='active' 확인 (PRD 6.4).
     """
-    await _get_active_group(session, group_id)
+    await _get_editable_group(session, group_id)
     await require_group_role(session, group_id, actor.id, _MEMBER_MANAGERS)
     check_assignable_role(role)
 
@@ -481,7 +537,7 @@ async def remove_member(
 
     admin 은 admin/owner 제거 불가, owner 는 자신 제거 불가 (소유권 이전 먼저).
     """
-    await _get_active_group(session, group_id)
+    await _get_editable_group(session, group_id)
     actor_role = await get_member_role(session, group_id, actor.id)
     target_role = await get_member_role(session, group_id, user_id)
     if target_role is None:
@@ -521,7 +577,7 @@ async def change_member_role(
     new_role: GroupRole,
 ) -> tuple[GroupMember, str, str]:
     """그룹원 역할 변경 (owner 만, admin|member). 소유자 역할은 변경 불가."""
-    await _get_active_group(session, group_id)
+    await _get_editable_group(session, group_id)
     actor_role = await get_member_role(session, group_id, actor.id)
     target_role = await get_member_role(session, group_id, user_id)
     if target_role is None:
@@ -568,7 +624,7 @@ async def transfer_ownership(
 
     대상은 활성 멤버여야 한다 (PRD 3.1.1 그룹 관리자 위임).
     """
-    group = await _get_active_group(session, group_id)
+    group = await _get_editable_group(session, group_id)
     actor_role = await get_member_role(session, group_id, actor.id)
     check_can_transfer_ownership(actor_role)
 
