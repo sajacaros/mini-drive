@@ -88,7 +88,8 @@ class Settings(BaseSettings):
     # --- 위키 인덱싱 (spec/wiki-index.md) ---
     wiki_enabled: bool = True
     # 사내 vLLM. LiteLLM 경유이므로 hosted_vllm/ 프리픽스 + base_url 조합으로 붙는다.
-    wiki_llm_base_url: str = "http://<vllm-host>:<port>/v1"
+    # 기본값을 비워 둔다 — 사내 주소를 리포에 박지 않기 위해서다. WIKI_LLM_BASE_URL 로 주입한다.
+    wiki_llm_base_url: str = ""
     wiki_llm_api_key: str = ""
     wiki_llm_model: str = "hosted_vllm/solar-open2-250b"
     # 생성 계열 호출의 추론 예산. Solar-Open2 는 reasoning 모델이라 기본값이면 호출당 수천

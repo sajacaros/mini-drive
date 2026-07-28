@@ -252,7 +252,7 @@ v1 은 md 경로만 쓰므로 판정 계열 호출이 없다. **생성용 `low` 
 ```python
 # 위키 인덱싱. 사내 vLLM 은 사내망 직결이라 별도 프록시가 없다.
 wiki_enabled: bool = True
-wiki_llm_base_url: str = "http://<vllm-host>:<port>/v1"
+wiki_llm_base_url: str = ""  # 사내 주소는 리포에 두지 않는다 — WIKI_LLM_BASE_URL 로 주입
 wiki_llm_model: str = "hosted_vllm/solar-open2-250b"
 # 생성 계열 호출의 추론 예산. medium 이상은 호출당 28초 이상이라 인덱싱에 못 쓴다.
 wiki_llm_reasoning_effort: str = "low"
