@@ -267,7 +267,34 @@ async def set_wiki(
         await _set_public(session, actor, file, public)
 
     await session.commit()
+
+    if enabled_set:
+        await _sync_queue(session, actor, file, enabled)
+
     return await resolve_wiki_state(session, file_id)
+
+
+async def _sync_queue(
+    session: AsyncSession, actor: User, file: File, enabled: bool | None
+) -> None:
+    """토글 결과를 인덱싱 큐에 반영한다.
+
+    켜면 대상을 넣고, 끄면 대기 중인 작업을 뺀다 — 끈 파일이 잠시 뒤 인덱싱되는 일을 막는다.
+    상속으로 되돌린 경우(None)는 조상 판정을 다시 해서 결정한다.
+    """
+    from app.services import wiki_queue
+
+    if file.is_folder:
+        scope = await folder_scope(session, actor, file)
+        targets = scope.target_ids
+    else:
+        targets = [file.id]
+
+    effective = await resolve_wiki_state(session, file.id)
+    if effective.enabled:
+        await wiki_queue.enqueue(targets)
+    else:
+        await wiki_queue.drop(targets)
 
 
 async def _set_public(

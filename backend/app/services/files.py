@@ -1036,7 +1036,26 @@ async def _commit_new_version(
         actor_id=uploaded_by,
         name=file.name,
     )
+    await _enqueue_wiki_reindex(session, file)
     return file
+
+
+async def _enqueue_wiki_reindex(session: AsyncSession, file: File) -> None:
+    """위키가 켜진 파일이면 새 버전으로 재인덱싱을 예약한다 (spec/wiki-index.md).
+
+    버전업 경로가 여기 하나로 모이므로(재업로드·버전 복구·재개 업로드) 훅도 한 군데면 된다.
+    큐는 합치기라 짧은 간격의 연속 버전업이 인덱싱 한 번으로 접힌다. 지연 임포트는 순환을
+    피하기 위한 것이다(wiki 서비스가 permissions → groups 를 타고 files 를 참조한다).
+    """
+    from app.services import wiki as wiki_service
+    from app.services import wiki_queue
+
+    try:
+        state = await wiki_service.resolve_wiki_state(session, file.id)
+        if state.enabled and wiki_service.indexable(file).ok:
+            await wiki_queue.enqueue(file.id)
+    except Exception:  # noqa: BLE001 - 인덱싱 예약 실패가 업로드를 되돌리면 안 된다
+        pass
 
 
 async def _safe_restore_object(

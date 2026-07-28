@@ -2,8 +2,8 @@
 # 기동:  docker compose up -d --build
 # 환경변수는 .env 파일에서 읽는다 (.env.example 참조). 미설정 시 아래 기본값 사용.
 
-# backend 와 purger(휴지통 자동 정리 사이드카)가 같은 환경을 공유한다 — 환경변수를 한 곳에서만
-# 관리하기 위한 앵커다. 새 변수를 추가할 때 두 서비스에 각각 적지 않는다.
+# backend 와 사이드카들(purger·wiki-indexer)이 같은 환경을 공유한다 — 환경변수를 한 곳에서만
+# 관리하기 위한 앵커다. 새 변수를 추가할 때 각 서비스에 따로 적지 않는다.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
   MINIO_ENDPOINT: minio:9000
@@ -24,6 +24,14 @@ x-backend-env: &backend-env
   #   docker compose exec backend python -m app.cli purge-trash --dry-run
   TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-7}
   TRASH_PURGE_HOUR: ${TRASH_PURGE_HOUR:-4}
+  # 위키 인덱싱 (spec/wiki-index.md). 사내 vLLM 에 붙는다 — 문서 본문이 외부로 나가지 않는다.
+  # 끄려면 WIKI_ENABLED=false (사이드카는 유휴 대기한다).
+  WIKI_ENABLED: ${WIKI_ENABLED:-true}
+  WIKI_LLM_BASE_URL: ${WIKI_LLM_BASE_URL:-http://<vllm-host>:<port>/v1}
+  WIKI_LLM_API_KEY: ${WIKI_LLM_API_KEY:-}
+  WIKI_LLM_MODEL: ${WIKI_LLM_MODEL:-hosted_vllm/solar-open2-250b}
+  # 생성 계열은 low 로 충분하다 — Solar 는 medium 이상에서 "ping" 한 마디에도 2600토큰/28초다.
+  WIKI_LLM_REASONING_EFFORT: ${WIKI_LLM_REASONING_EFFORT:-low}
   # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
   # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
 
@@ -78,6 +86,23 @@ services:
     depends_on:
       # 마이그레이션 선행 보장은 backend 기동 순서에 맡긴다(정리는 첫 실행 시각까지 자므로
       # 기동 직후 DB 를 건드리지 않는다).
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - minidrive
+
+  # ── 위키 인덱싱 워커 (큐 구동) ────────────────────────
+  # spec/wiki-index.md. purger 와 달리 스케줄이 아니라 Redis 큐를 본다 — 업로드·토글 직후
+  # 반응이 있어야 하기 때문이다. backend 와 같은 이미지라 빌드 비용이 없다.
+  wiki-indexer:
+    image: flex-drive-backend:latest
+    # 기본 entrypoint 는 alembic upgrade head 를 선행 실행하므로 덮어쓴다 — 스키마는 backend 가
+    # 책임진다(purger 와 같은 이유).
+    entrypoint: ["python", "-m", "app.cli", "index-wiki", "--loop"]
+    environment: *backend-env
+    depends_on:
       backend:
         condition: service_started
       redis:

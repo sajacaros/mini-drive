@@ -4,6 +4,8 @@
   승격/비상 복구용 admin 생성 경로. 첫 부팅의 정상 경로는 셋업 위저드(POST /api/setup)다.
 - `python -m app.cli purge-trash [--once|--loop|--dry-run]` — 보존 기간을 넘긴 휴지통 항목을
   영구 삭제한다. `--loop` 은 `purger` 사이드카가 쓰는 모드다.
+- `python -m app.cli index-wiki [--once|--loop]` — 위키 인덱싱 큐를 처리한다.
+  `--loop` 은 `wiki-indexer` 사이드카가 쓰는 모드다 (spec/wiki-index.md).
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from app.core.database import SessionFactory
 from app.core.logging import configure_logging, get_logger
 from app.core.security import PasswordPolicyError, validate_password_policy
 from app.services import trash as trash_service
+from app.services import wiki_indexer, wiki_llm
 from app.services.setup import admin_exists, create_admin_account
 from app.services.storage import get_storage
 from app.services.users import get_user_by_email
@@ -86,6 +89,9 @@ async def _purge_once(*, dry_run: bool) -> trash_service.PurgeResult:
 # 충돌하지 않는다 (스크레이프 대상은 `purger:8000`).
 _METRICS_PORT = 8000
 
+# 인덱싱 큐가 비었을 때 다시 볼 때까지의 대기. 업로드 직후 반응이 있어야 하므로 짧게 둔다.
+_IDLE_SLEEP_SECONDS = 5
+
 
 def _serve_metrics(log) -> None:  # noqa: ANN001 - structlog BoundLogger
     """`--loop` 전용 Prometheus 노출.
@@ -147,6 +153,46 @@ async def _purge_trash(*, dry_run: bool, loop: bool) -> int:
         )
 
 
+async def _index_wiki(*, loop: bool, limit: int) -> int:
+    """위키 인덱싱 워커 (spec/wiki-index.md).
+
+    `purge-trash --loop` 과 달리 **스케줄이 아니라 큐 구동**이다. 큐가 비면 짧게 자고 다시
+    본다 — 업로드 직후 반응이 있어야 하므로 긴 주기로 자면 안 된다.
+    """
+    configure_logging()
+    log = get_logger("app.wiki.indexer")
+
+    if not settings.wiki_enabled:
+        # 종료하면 restart 정책이 재시작을 반복하므로 유휴 대기한다(purger 와 같은 처리).
+        log.info("wiki_indexer_disabled_idling")
+        while True:
+            await asyncio.sleep(3600)
+
+    reachable = await wiki_llm.health()
+    log.info(
+        "wiki_indexer_started",
+        model=settings.wiki_llm_model,
+        base_url=settings.wiki_llm_base_url,
+        llm_reachable=reachable,
+        loop=loop,
+    )
+
+    storage = get_storage()
+    while True:
+        async with SessionFactory() as session:
+            try:
+                counts = await wiki_indexer.run_once(session, storage, limit=limit)
+            except Exception:  # noqa: BLE001 - 한 회차의 실패로 루프를 죽이지 않는다
+                log.exception("wiki_index_cycle_failed")
+                counts = {}
+        if counts:
+            log.info("wiki_index_cycle", **counts)
+        if not loop:
+            return 0
+        if not counts:
+            await asyncio.sleep(_IDLE_SLEEP_SECONDS)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -177,6 +223,19 @@ def main(argv: list[str] | None = None) -> int:
         help="매일 TRASH_PURGE_HOUR(KST)에 반복 실행 (purger 사이드카 모드)",
     )
 
+    p_wiki = sub.add_parser(
+        "index-wiki", help="위키 인덱싱 큐 처리 (기본: 1회 실행)"
+    )
+    p_wiki.add_argument(
+        "--once", action="store_true", help="큐를 한 번만 비우고 종료 (기본 동작, 명시용)"
+    )
+    p_wiki.add_argument(
+        "--loop", action="store_true", help="계속 대기하며 처리 (wiki-indexer 사이드카 모드)"
+    )
+    p_wiki.add_argument(
+        "--limit", type=int, default=5, help="한 회차에 처리할 최대 문서 수"
+    )
+
     args = parser.parse_args(argv)
     if args.command == "create-admin":
         password = args.password or getpass.getpass("admin 비밀번호: ")
@@ -186,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             print("[purge-trash] --loop 과 --dry-run 은 함께 쓸 수 없습니다.", file=sys.stderr)
             return 2
         return asyncio.run(_purge_trash(dry_run=args.dry_run, loop=args.loop))
+    if args.command == "index-wiki":
+        return asyncio.run(_index_wiki(loop=args.loop, limit=args.limit))
     return 1
 
 
