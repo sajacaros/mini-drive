@@ -176,6 +176,28 @@ async def annotate_owner_names(
         f.owner_name = name_by_id.get(f.user_id, "")  # type: ignore[attr-defined]
 
 
+async def _annotate_wiki_status(
+    session: AsyncSession, files: Sequence[File]
+) -> None:
+    """목록 배지용 위키 상태를 배치로 부착한다 (spec/wiki-index.md).
+
+    행이 없으면 "off" 다 — 백엔드가 null 을 주지 않으므로 프런트가 분기를 빠뜨리지 않는다.
+    LEFT JOIN 하나면 되므로 항목당 조회(N+1)를 만들지 않는다.
+    """
+    from app.models import WikiDocument
+
+    rows = (
+        await session.execute(
+            select(WikiDocument.file_id, WikiDocument.status).where(
+                WikiDocument.file_id.in_([f.id for f in files])
+            )
+        )
+    ).all()
+    by_file = dict(rows)
+    for f in files:
+        f.wiki_status = by_file.get(f.id, "off")  # type: ignore[attr-defined]
+
+
 async def annotate_listing_meta(
     session: AsyncSession, user: User, files: Sequence[File]
 ) -> None:
@@ -194,6 +216,7 @@ async def annotate_listing_meta(
         return
 
     await annotate_owner_names(session, files)
+    await _annotate_wiki_status(session, files)
 
     # 파일들의 직접 부여(미만료)를 그룹명과 함께 한 번에 모은다 — 소유자의 "공유 대상" 표기와
     # 공유받은 항목의 직접 부여 매칭에 공용으로 쓴다. 그룹명순으로 안정 정렬.

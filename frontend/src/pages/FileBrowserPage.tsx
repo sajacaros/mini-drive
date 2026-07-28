@@ -23,6 +23,8 @@ import { Modal } from "@/components/Modal";
 import { MoveModal } from "@/components/MoveModal";
 import { PageHeader } from "@/components/PageHeader";
 import { PermissionModal } from "@/components/PermissionModal";
+import { WikiModal } from "@/components/WikiModal";
+import { WikiStatusBadge } from "@/components/WikiStatusBadge";
 import { PreviewModal } from "@/components/PreviewModal";
 import { ShareModal } from "@/components/ShareModal";
 import { Thumbnail } from "@/components/Thumbnail";
@@ -46,6 +48,7 @@ import {
   RenameIcon,
   ShareIcon,
   ShieldIcon,
+  BookIcon,
   TrashIcon,
   UploadIcon,
   XIcon,
@@ -222,6 +225,7 @@ export function FileBrowserPage({
     null,
   );
   const [shareTarget, setShareTarget] = useState<FileNode | null>(null);
+  const [wikiTarget, setWikiTarget] = useState<FileNode | null>(null);
   const [permTarget, setPermTarget] = useState<FileNode | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileNode | null>(null);
   const [versionsTarget, setVersionsTarget] = useState<FileNode | null>(null);
@@ -334,6 +338,8 @@ export function FileBrowserPage({
         // 조건이라) 살아 있는 폴더이므로, 걸러내지 않으면 그 폴더를 보고 있는 사용자에게
         // 무의미한 재조회를 일으킨다 — 영구 삭제된 항목은 어차피 이 목록에 없다.
         if (e.type === "purge") return;
+        // 위키 인덱싱 완료 — 배지가 pending/indexing 에서 ready 로 바뀌어야 한다.
+        // 발행 이벤트에 parent_folder_id 가 실려 있어 아래 폴더 일치 조건을 그대로 탄다.
         // 현재 보고 있는 폴더의 변경만 반영(다른 폴더 이벤트는 무시). 내 액션 에코도 함께
         // 재조회한다(설계상 v1 단순화 허용).
         if (e.parent_folder_id === parentIdRef.current) scheduleReload();
@@ -1264,6 +1270,7 @@ export function FileBrowserPage({
               },
               onShare: (f: FileNode) => setShareTarget(f),
               onPermissions: (f: FileNode) => setPermTarget(f),
+              onWiki: (f: FileNode) => setWikiTarget(f),
               onDelete: (f: FileNode) => setDeleteTarget(f),
               onVersions: (f: FileNode) => setVersionsTarget(f),
               onNewVersion: startVersionUpload,
@@ -1546,6 +1553,14 @@ export function FileBrowserPage({
         onClose={() => setPermTarget(null)}
       />
 
+      <WikiModal
+        file={wikiTarget}
+        open={wikiTarget !== null}
+        onClose={() => setWikiTarget(null)}
+        // 토글 결과(배지·권한)를 목록에 반영한다. 전사 공개는 권한 변경이라 그룹 컬럼도 바뀐다.
+        onChanged={() => void reload()}
+      />
+
       <VersionHistoryModal
         file={versionsTarget}
         open={versionsTarget !== null}
@@ -1639,6 +1654,7 @@ interface FileRowProps {
   onRename: (f: FileNode) => void;
   onShare: (f: FileNode) => void;
   onPermissions: (f: FileNode) => void;
+  onWiki: (f: FileNode) => void;
   onDelete: (f: FileNode) => void;
   onVersions: (f: FileNode) => void;
   onNewVersion: (f: FileNode) => void;
@@ -1771,9 +1787,16 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
         </>
       )}
       {canManage && (
-        <IconAction title="권한 관리" onClick={() => p.onPermissions(f)}>
-          <ShieldIcon width={16} height={16} />
-        </IconAction>
+        <>
+          <IconAction title="권한 관리" onClick={() => p.onPermissions(f)}>
+            <ShieldIcon width={16} height={16} />
+          </IconAction>
+          {/* 발행은 소유자·manage 만 — 백엔드 _can_publish 와 같은 기준으로 게이팅한다.
+              폴더와 md/html 이 아닌 파일에서도 연다(전사 공개는 모든 형식에 가능하므로). */}
+          <IconAction title="위키 설정" onClick={() => p.onWiki(f)}>
+            <BookIcon width={16} height={16} />
+          </IconAction>
+        </>
       )}
       {canWrite && (
         <>
@@ -1948,6 +1971,11 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                     <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
                     {!f.is_folder && f.current_version >= 2 && (
                       <Badge tone="neutral">v{f.current_version}</Badge>
+                    )}
+                    {/* 위키 배지는 off 가 아닐 때만 — 대부분의 항목에는 붙지 않으므로 별도
+                        컬럼을 만들지 않고 이름 옆에 둔다. */}
+                    {f.wiki_status && f.wiki_status !== "off" && (
+                      <WikiStatusBadge status={f.wiki_status} />
                     )}
                   </ItemName>
                   <span {...ROW_ACTION_PROPS}>

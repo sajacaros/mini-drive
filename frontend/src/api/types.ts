@@ -66,6 +66,11 @@ export interface FileNode {
   owner_name?: string;
   /** 공유 그룹명 목록. 소유자 시점: 이 항목이 공유된 그룹들, 수신자 시점: 접근을 부여한 그룹. */
   group_names?: string[];
+  /**
+   * 위키 인덱싱 상태 (목록 배지용 파생 필드). 서버가 항상 값을 준다 — null 이 없어
+   * UI 분기가 새지 않는다. spec/wiki-index.md
+   */
+  wiki_status?: WikiStatus;
   /** 요청 사용자의 유효 권한. owner=소유자, 그 외 그룹 권한 수준. */
   permission?: "owner" | "read" | "write" | "manage";
 }
