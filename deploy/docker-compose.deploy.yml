@@ -19,7 +19,7 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "5"
 
-# backend 와 purger(휴지통 자동 정리 사이드카)가 공유하는 환경. 새 변수는 여기 한 곳에만.
+# backend 와 사이드카들(purger·wiki-indexer)이 공유하는 환경. 새 변수는 여기 한 곳에만.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-minidrive}
   MINIO_ENDPOINT: minio:9000
@@ -41,6 +41,15 @@ x-backend-env: &backend-env
   #     python -m app.cli purge-trash --dry-run
   TRASH_RETENTION_DAYS: ${TRASH_RETENTION_DAYS:-7}
   TRASH_PURGE_HOUR: ${TRASH_PURGE_HOUR:-4}
+  # 위키 인덱싱 (spec/wiki-index.md). 사내 vLLM 에 붙는다 — 문서 본문이 외부로 나가지 않는다.
+  # 접속 정보에 기본값을 두지 않는다: 사내 주소를 리포에 박지 않기 위해서다. 값은 이 디렉터리의
+  # .env 에만 둔다(.env.deploy.example 참고). 끄려면 WIKI_ENABLED=false — 사이드카는 유휴 대기한다.
+  WIKI_ENABLED: ${WIKI_ENABLED:-true}
+  WIKI_LLM_BASE_URL: ${WIKI_LLM_BASE_URL}
+  WIKI_LLM_API_KEY: ${WIKI_LLM_API_KEY:-}
+  WIKI_LLM_MODEL: ${WIKI_LLM_MODEL}
+  # 생성 계열은 low 로 충분하다 — medium 이상에서는 한 마디 응답에도 추론 토큰이 폭증한다.
+  WIKI_LLM_REASONING_EFFORT: ${WIKI_LLM_REASONING_EFFORT:-low}
 
 services:
   # ── 게이트웨이 (기존 host nginx 가 여기로 프록시) ─────
@@ -107,6 +116,32 @@ services:
         limits:
           cpus: "0.5"
           memory: 256M
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - minidrive
+
+  # ── 위키 인덱싱 워커 (큐 구동) ────────────────────────
+  # spec/wiki-index.md. purger 와 달리 스케줄이 아니라 Redis 큐를 본다 — 업로드·토글 직후
+  # 반응이 있어야 하기 때문이다. backend 와 같은 이미지라 별도 빌드가 없다.
+  wiki-indexer:
+    image: flex-drive-backend:latest
+    restart: unless-stopped
+    logging: *default-logging
+    # 기본 entrypoint 의 alembic upgrade head 를 덮어쓴다 — 스키마는 backend 가 책임진다
+    # (purger 와 같은 이유).
+    entrypoint: ["python", "-m", "app.cli", "index-wiki", "--loop"]
+    environment: *backend-env
+    expose:
+      - "8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
     depends_on:
       backend:
         condition: service_started
