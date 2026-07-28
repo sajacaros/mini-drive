@@ -58,6 +58,11 @@ from app.schemas.uploads import (
     ResumableReuploadInitRequest,
     ResumableSessionResponse,
 )
+from app.schemas.wiki import (
+    WikiFolderScopeResponse,
+    WikiSetRequest,
+    WikiStateResponse,
+)
 from app.services import archives as archives_service
 from app.services import favorites as favorites_service
 from app.services import file_events as file_events_service
@@ -66,10 +71,12 @@ from app.services import permissions as permissions_service
 from app.services import recents as recents_service
 from app.services import tickets as tickets_service
 from app.services import uploads as uploads_service
+from app.services import wiki as wiki_service
 from app.services.files import FileServiceError
 from app.services.permissions import PermissionServiceError
 from app.services.storage import get_storage
 from app.services.users import get_user_by_id
+from app.services.wiki import WikiServiceError
 
 # _content_disposition 은 app.api.download.content_disposition 로 승격되어 공유 라우트와
 # 공용으로 쓰인다. 기존 임포트 경로 호환을 위해 이 모듈에서도 별칭으로 노출한다.
@@ -960,6 +967,79 @@ async def revoke_permission(
     except PermissionServiceError as exc:
         raise _perm_http_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- 위키 (spec/wiki-index.md) ------------------------------------------------
+#
+# 경로가 /api/files/* 이므로 권한 부여와 같은 이유로 이 라우터에 둔다. 위키 문서 목록·질의는
+# /api/wiki/* 라 routes/wiki.py 가 담당한다.
+
+
+def _wiki_http_error(exc: WikiServiceError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+def _wiki_state_response(overview: wiki_service.WikiOverview) -> WikiStateResponse:
+    scope = overview.scope
+    return WikiStateResponse(
+        file_id=overview.file.id,
+        is_folder=overview.file.is_folder,
+        enabled=overview.state.enabled,
+        explicit=overview.state.explicit,
+        source_file_id=overview.state.source_file_id,
+        public=overview.public,
+        indexable=overview.verdict.ok,
+        reason=overview.verdict.reason,
+        status=overview.status,
+        indexed_version=overview.indexed_version,
+        folder_scope=(
+            WikiFolderScopeResponse(
+                target_count=scope.target_count,
+                skipped_by_format=scope.skipped_by_format,
+                skipped_by_size=scope.skipped_by_size,
+                skipped_by_permission=scope.skipped_by_permission,
+            )
+            if scope is not None
+            else None
+        ),
+    )
+
+
+@router.get("/{file_id}/wiki", response_model=WikiStateResponse)
+async def get_wiki(
+    file_id: int, user: CurrentUser, session: DbSession
+) -> WikiStateResponse:
+    """위키 토글 상태 — 인덱싱 여부/상속 출처/전사 공개/대상 판정. 소유자·manage 만."""
+    try:
+        overview = await wiki_service.get_overview(session, user, file_id)
+    except WikiServiceError as exc:
+        raise _wiki_http_error(exc) from exc
+    return _wiki_state_response(overview)
+
+
+@router.put("/{file_id}/wiki", response_model=WikiStateResponse)
+async def set_wiki(
+    file_id: int, payload: WikiSetRequest, user: CurrentUser, session: DbSession
+) -> WikiStateResponse:
+    """위키 인덱싱 on/off + 전사 공개 (spec/wiki-index.md). 소유자·manage 만.
+
+    `enabled` 는 null 이 '상속으로 되돌리기'라는 뜻이라 '생략'과 구분해야 한다 —
+    본문에 없으면 인덱싱 설정을 건드리지 않는다.
+    """
+    sent = payload.model_fields_set
+    try:
+        await wiki_service.set_wiki(
+            session,
+            user,
+            file_id,
+            enabled=payload.enabled,
+            enabled_set="enabled" in sent,
+            public=payload.public if "public" in sent else None,
+        )
+        overview = await wiki_service.get_overview(session, user, file_id)
+    except WikiServiceError as exc:
+        raise _wiki_http_error(exc) from exc
+    return _wiki_state_response(overview)
 
 
 async def _direct_permission_response(

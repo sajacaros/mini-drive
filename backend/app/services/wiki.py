@@ -218,16 +218,19 @@ async def set_wiki(
     actor: User,
     file_id: int,
     *,
-    enabled: bool | None,
-    public: bool | None,
+    enabled: bool | None = None,
+    enabled_set: bool = False,
+    public: bool | None = None,
 ) -> WikiState:
     """위키 인덱싱 on/off + 전사 공개 여부.
 
     두 축은 **독립**이다. (끔, 공개) 조합은 "전사 공유하되 질의 대상은 아님"으로 정상이며,
     규정상 LLM 전송이 금지된 자료나 인덱싱 실익이 없는 파일(이미지·영상)에 쓴다.
 
-    enabled : files.wiki_enabled 명시값. None 을 주면 명시값을 지워 상속으로 되돌린다.
-    public  : @전사 그룹의 read 부여/회수. None 이면 건드리지 않는다.
+    enabled_set : 인덱싱 설정을 건드리는가. `enabled=None`(상속으로 되돌리기)과 '생략'을
+                  구분해야 해서 별도 플래그를 둔다 — update_permission 의 expires_at_set 과 같은 결.
+    enabled     : files.wiki_enabled 명시값. None 이면 명시값을 지워 상속으로 되돌린다.
+    public      : @전사 그룹의 read 부여/회수. None 이면 건드리지 않는다.
     """
     settings = get_settings()
     if not settings.wiki_enabled:
@@ -239,19 +242,19 @@ async def set_wiki(
     if not await _can_publish(session, actor, file.id, file.user_id):
         raise WikiServiceError(404, "파일을 찾을 수 없습니다.")
 
-    if enabled is True and not file.is_folder:
-        verdict = indexable(file)
-        if not verdict.ok:
-            raise WikiServiceError(400, verdict.reason or "인덱싱할 수 없는 파일입니다.")
+    if enabled_set:
+        if enabled is True and not file.is_folder:
+            verdict = indexable(file)
+            if not verdict.ok:
+                raise WikiServiceError(
+                    400, verdict.reason or "인덱싱할 수 없는 파일입니다."
+                )
 
-    if enabled is not None or file.wiki_enabled is not None:
         before = file.wiki_enabled
-        file.wiki_enabled = enabled
         if before != enabled:
+            file.wiki_enabled = enabled
             # 끈 시각을 남겨야 purger 가 유예 후 트리를 지운다. 다시 켜면 지운다.
-            file.wiki_disabled_at = (
-                datetime.now(UTC) if enabled is not True else None
-            )
+            file.wiki_disabled_at = datetime.now(UTC) if enabled is not True else None
             _record_audit(
                 session,
                 actor.id,
@@ -296,6 +299,131 @@ async def _set_public(
             # 이미 공개가 아니면 회수할 것이 없다 — 토글을 끄는 요청에서는 성공으로 본다.
             if exc.status_code != 404:
                 raise
+
+
+@dataclass(frozen=True)
+class WikiOverview:
+    """파일 하나의 위키 화면 상태 — 토글 UI 가 필요한 값을 한 번에 담는다."""
+
+    file: File
+    state: WikiState
+    public: bool
+    verdict: IndexableVerdict
+    status: str | None
+    indexed_version: int | None
+    scope: FolderScope | None
+
+
+async def get_overview(
+    session: AsyncSession, actor: User, file_id: int
+) -> WikiOverview:
+    """토글 UI 용 상태 조회. 발행 권한이 없으면 존재를 숨겨 404 로 통일한다."""
+    file = await session.get(File, file_id)
+    if file is None or file.is_deleted:
+        raise WikiServiceError(404, "파일을 찾을 수 없습니다.")
+    if not await _can_publish(session, actor, file.id, file.user_id):
+        raise WikiServiceError(404, "파일을 찾을 수 없습니다.")
+
+    doc = await get_document(session, file_id)
+    return WikiOverview(
+        file=file,
+        state=await resolve_wiki_state(session, file_id),
+        public=await is_public(session, file_id),
+        verdict=indexable(file),
+        status=doc.status if doc else None,
+        indexed_version=doc.version if doc else None,
+        scope=await folder_scope(session, actor, file) if file.is_folder else None,
+    )
+
+
+async def get_document(session: AsyncSession, file_id: int) -> Any | None:
+    """파일의 인덱싱 레코드(wiki_documents). 없으면 None."""
+    from app.models import WikiDocument
+
+    return (
+        await session.execute(
+            select(WikiDocument).where(WikiDocument.file_id == file_id)
+        )
+    ).scalars().first()
+
+
+@dataclass(frozen=True)
+class DocumentItem:
+    file_id: int
+    name: str
+    owner_display_name: str
+    status: str
+    version: int
+    indexed_at: datetime | None
+    node_count: int | None
+
+
+async def list_documents(
+    session: AsyncSession, user: User, page: int, size: int
+) -> tuple[list[DocumentItem], int]:
+    """이 사용자가 접근할 수 있는, 인덱싱된 문서 목록.
+
+    **권한 필터를 질의 대상 선정 단계에 건다** — 목록을 만든 뒤 거르지 않는다.
+
+    후보를 모두 가져와 `get_access_level`(Redis 캐시)로 거르고 메모리에서 페이지를 자른다.
+    판정이 조상 경로를 타는 재귀 CTE 라 SQL 한 방으로 접근 가능 집합을 만들려면 판정 로직을
+    두 벌 유지하게 되고, 그 순간 목록과 실제 접근이 어긋날 수 있다. 문서 수가 커지면 SQL 쪽
+    필터로 옮겨야 하는 지점이며, 그때도 판정은 한 곳에서만 하도록 옮겨야 한다.
+    """
+    from app.models import WikiDocument
+
+    rows = (
+        await session.execute(
+            select(WikiDocument, File, User.display_name)
+            .join(File, File.id == WikiDocument.file_id)
+            .join(User, User.id == File.user_id)
+            .where(File.is_deleted.is_(False))
+            .order_by(File.name.asc(), File.id.asc())
+        )
+    ).all()
+
+    visible: list[DocumentItem] = []
+    for doc, file, owner_name in rows:
+        if file.user_id != user.id:
+            level = await permissions_service.get_access_level(session, user, file)
+            if level is None:
+                continue
+        visible.append(
+            DocumentItem(
+                file_id=file.id,
+                name=file.name,
+                owner_display_name=owner_name,
+                status=doc.status,
+                version=doc.version,
+                indexed_at=doc.indexed_at,
+                node_count=_count_nodes(doc.tree),
+            )
+        )
+
+    offset = (page - 1) * size
+    return visible[offset : offset + size], len(visible)
+
+
+def _count_nodes(tree: dict[str, Any] | None) -> int | None:
+    """트리의 노드 수 (목록 표시용). 구조가 예상과 다르면 세지 않는다."""
+    if not tree:
+        return None
+    structure = tree.get("structure")
+    if not isinstance(structure, list):
+        return None
+
+    def walk(nodes: list[Any]) -> int:
+        total = 0
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            total += 1
+            children = n.get("nodes")
+            if isinstance(children, list):
+                total += walk(children)
+        return total
+
+    return walk(structure)
 
 
 async def get_all_users_group_id(session: AsyncSession) -> int | None:
