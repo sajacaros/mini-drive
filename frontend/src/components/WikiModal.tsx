@@ -178,6 +178,8 @@ export function WikiModal({
                 {scope.skipped_by_size > 0 && `크기 초과 ${scope.skipped_by_size}개 제외. `}
                 {scope.skipped_by_permission > 0 &&
                   `권한 부족 ${scope.skipped_by_permission}개 제외. `}
+                {scope.skipped_by_optout > 0 &&
+                  `소유자가 직접 끈 ${scope.skipped_by_optout}개 제외. `}
                 앞으로 이 폴더에 올라오는 md·html 도 자동 포함됩니다.
               </p>
             </div>

@@ -21,6 +21,7 @@ import httpx
 from app.core.database import Base, SessionFactory, engine
 from app.core.redis import redis_client
 from app.main import app
+from app.services import wiki as wiki_service
 from app.services import wiki_indexer, wiki_queue
 from app.services.storage import get_storage, storage_service
 from tests._bootstrap import register_active, setup_admin
@@ -136,8 +137,6 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         _ok(f"html 트리 — 노드 {docs['ops.html']['node_count']}개")
 
         async with SessionFactory() as session:
-            from app.services import wiki as wiki_service
-
             doc = await wiki_service.get_document(session, md_id)
             titles = [n["title"] for n in doc.tree["structure"][0]["nodes"]]
             assert titles == ["사전 준비", "롤백"], titles
@@ -179,6 +178,56 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert await wiki_queue.pending_count() == 0, "끄면 대기 작업이 취소돼야 한다"
         _ok("토글 OFF → 대기 작업 취소")
 
+        # 7. 위키가 켜진 폴더에 **신규 업로드** → 자동 색인 (폴더 토글 UI 의 약속)
+        r = await c.put(
+            f"/api/files/{folder}/wiki", headers=alice_h, json={"enabled": True}
+        )
+        assert r.status_code == 200, r.text
+        neo = await _upload(c, alice_h, "신규.md", folder, MD_V1.encode())
+        r = await c.get(f"/api/files/{neo}/wiki", headers=alice_h)
+        body = r.json()
+        assert body["enabled"] is True and body["explicit"] is False, body
+        assert body["status"] == "pending", body
+        counts = await _drain()
+        r = await c.get(f"/api/files/{neo}/wiki", headers=alice_h)
+        assert r.json()["status"] == "ready", r.text
+        _ok("위키 폴더에 신규 업로드 → 상속 + 자동 색인")
+
+        # 폴더를 켜도 **명시적으로 끈 파일은 되살아나지 않는다** — 소유자 탈출구의 의미.
+        r = await c.get(f"/api/files/{html_id}/wiki", headers=alice_h)
+        # API 는 사용자 관점의 "off" 를 준다. DB 행은 disabled 로 남아 트리를 보관하되
+        # 질의 대상에서는 빠진다 — 이 분리를 아래에서 각각 확인한다.
+        assert r.json()["enabled"] is False, r.text
+        assert r.json()["status"] == "off", r.text
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, html_id)
+            assert doc.status == "disabled" and doc.tree is not None, doc.status
+        r = await c.get(f"/api/files/{folder}/wiki", headers=alice_h)
+        scope = r.json()["folder_scope"]
+        assert scope["skipped_by_optout"] == 1, scope
+        _ok("폴더 켜기가 명시 OFF 파일을 되살리지 않는다 (scope 에서도 제외)")
+
+        # 8. 끄면 **질의 대상에서 즉시** 빠진다 (차단은 즉시, 삭제는 유예)
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, neo)
+            assert doc.status == "ready", doc.status
+        r = await c.put(f"/api/files/{neo}/wiki", headers=alice_h, json={"enabled": False})
+        assert r.status_code == 200, r.text
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, neo)
+            # 트리는 유예 동안 남기되(재켜기 비용 0), 상태는 즉시 내려 검색에서 뺀다.
+            assert doc.status == "disabled", doc.status
+            assert doc.tree is not None, "트리는 유예 동안 보관한다"
+        _ok("끄기 → status=disabled (트리는 보관, 질의 대상에서 즉시 제외)")
+
+        # 다시 켜면 재색인 없이 ready 로 복구된다 — 큐를 돌리지 않고 확인한다.
+        r = await c.put(f"/api/files/{neo}/wiki", headers=alice_h, json={"enabled": True})
+        assert r.status_code == 200, r.text
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, neo)
+            assert doc.status == "ready", doc.status
+        _ok("다시 켜기 → 재색인 없이 ready 복구 (비용 0)")
+
         # 6. 문서 목록 권한 — bob 은 접근 권한이 없어 아무것도 못 본다
         r = await c.get("/api/wiki/documents", headers=bob_h)
         assert r.status_code == 200 and r.json()["total"] == 0, r.text
@@ -187,8 +236,9 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         )
         assert r.status_code == 200, r.text
         r = await c.get("/api/wiki/documents", headers=bob_h)
-        assert r.json()["total"] == 2, r.text
-        _ok("문서 목록 권한 — 전사 공개 전 0건 → 공개 후 2건")
+        # deploy.md + 신규.md (ops.html 은 명시 OFF 라 disabled — 목록에는 남지만 질의 대상은 아니다)
+        assert r.json()["total"] == 3, r.text
+        _ok("문서 목록 권한 — 전사 공개 전 0건 → 공개 후 3건")
 
     await engine.dispose()
     print("\n위키 인덱싱 파이프라인 통합 시나리오 전체 통과.")

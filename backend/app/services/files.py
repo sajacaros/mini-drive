@@ -517,6 +517,9 @@ async def move_file(
             actor_id=user.id,
             name=file.name,
         )
+    # 위키가 켜진 폴더로 옮겨 오면 색인 대상이 되고, 꺼진 폴더로 나가면 질의에서 빠진다 —
+    # 상속 판정 결과가 곧 정책이다.
+    await sync_wiki(session, file)
     return file
 
 
@@ -620,6 +623,7 @@ async def upload_file(
     # MissingGreenlet 을 던져 "업로드는 성공 상태 유지"라는 약속이 깨지고 500 이 된다.
     await revive(session, user)
     await revive(session, file)
+    await sync_wiki(session, file)
     await file_events_service.publish_file_event(
         type="upload",
         file_id=file.id,
@@ -1064,23 +1068,38 @@ async def _commit_new_version(
 
 
 async def _enqueue_wiki_reindex(session: AsyncSession, file: File) -> None:
-    """위키가 켜진 파일이면 새 버전으로 재인덱싱을 예약한다 (spec/wiki-index.md).
+    """새 버전이 올라왔음을 위키에 알린다 (spec/wiki-index.md).
 
     버전업 경로가 여기 하나로 모이므로(재업로드·버전 복구·재개 업로드) 훅도 한 군데면 된다.
-    큐는 합치기라 짧은 간격의 연속 버전업이 인덱싱 한 번으로 접힌다. 지연 임포트는 순환을
-    피하기 위한 것이다(wiki 서비스가 permissions → groups 를 타고 files 를 참조한다).
+    구 트리는 유지한 채 낡았음만 표시한다 — 재인덱싱이 끝날 때까지 그것으로 답한다.
     """
     from app.services import wiki as wiki_service
-    from app.services import wiki_queue
 
     try:
         state = await wiki_service.resolve_wiki_state(session, file.id)
         if state.enabled and wiki_service.indexable(file).ok:
-            # 구 트리는 유지한 채 낡았음만 표시한다 — 재인덱싱이 끝날 때까지 그것으로 답한다.
             await wiki_service.mark_stale(session, file.id)
-            await wiki_queue.enqueue(file.id)
+        await sync_wiki(session, file)
     except Exception:  # noqa: BLE001 - 인덱싱 예약 실패가 업로드를 되돌리면 안 된다
         pass
+
+
+async def sync_wiki(session: AsyncSession, file: File) -> None:
+    """파일의 위치가 정해지거나 바뀐 뒤 위키 상태를 맞춘다 (spec/wiki-index.md).
+
+    업로드·이동에서 호출한다. 폴더 토글은 **그 시점의** 하위 파일만 큐에 넣으므로, 이후에
+    들어오거나 옮겨 오는 파일은 여기서 잡아야 한다 — 폴더 토글 UI 가 "앞으로 이 폴더에
+    올라오는 md·html 도 자동 포함됩니다"라고 약속하기 때문이다.
+
+    지연 임포트는 순환을 피하기 위한 것이다(wiki 가 permissions → groups 를 타고 files 를 본다).
+    실패해도 업로드/이동을 되돌리지 않는다 — 놓친 항목은 다음 토글·버전업에서 다시 들어온다.
+    """
+    from app.services import wiki as wiki_service
+
+    try:
+        await wiki_service.sync_file(session, file)
+    except Exception:  # noqa: BLE001 - 색인 예약 실패가 파일 조작을 되돌리면 안 된다
+        _log.warning("wiki_sync_failed", file_id=file.id)
 
 
 async def _safe_restore_object(

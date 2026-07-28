@@ -635,6 +635,8 @@ export interface WikiFolderScope {
   skipped_by_format: number;
   skipped_by_size: number;
   skipped_by_permission: number;
+  /** 소유자가 직접 끈 파일 — 폴더를 켜도 되살아나지 않는다. */
+  skipped_by_optout: number;
 }
 
 export interface WikiState {

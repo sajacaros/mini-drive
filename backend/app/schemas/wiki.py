@@ -31,6 +31,8 @@ class WikiFolderScopeResponse(BaseModel):
     skipped_by_format: int
     skipped_by_size: int
     skipped_by_permission: int
+    # 소유자가 직접 끈 파일 — 폴더를 켜도 되살아나지 않는다.
+    skipped_by_optout: int = 0
 
 
 class WikiStateResponse(BaseModel):

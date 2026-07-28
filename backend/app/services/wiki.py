@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -41,12 +41,20 @@ class WikiStatus(StrEnum):
     OFF 만 `wiki_documents` 행 없이 파생되는 값이고, 나머지는 행의 status 그대로다.
     """
 
-    OFF = "off"  # 인덱싱 대상이 아니거나 꺼져 있음 (트리 없음)
+    OFF = "off"  # 인덱싱 대상이 아니거나 꺼져 있음 (파생 값 — 행이 없을 때)
     PENDING = "pending"  # 켜짐, 큐 대기
     INDEXING = "indexing"  # 워커 처리 중
     READY = "ready"  # 최신 트리
     STALE = "stale"  # 트리는 있으나 현재 버전보다 낡음
     FAILED = "failed"  # 실패 (직전 트리가 있으면 그대로 유지된다)
+    # 껐지만 트리는 유예 기간 동안 보관 중. **질의 대상에서 즉시 빠진다** —
+    # 검색은 ready/stale 만 보므로, 끄는 즉시 그 문서로는 답하지 않는다.
+    # 다시 켜면 버전이 그대로인 한 재색인 없이 ready 로 복구된다(비용 0).
+    DISABLED = "disabled"
+
+
+# 질의·검색이 대상으로 삼는 상태. 여기 없는 상태는 트리가 있어도 답변에 쓰이지 않는다.
+QUERYABLE_STATUSES = (WikiStatus.READY, WikiStatus.STALE)
 
 
 class WikiServiceError(Exception):
@@ -137,7 +145,7 @@ _DESCENDANT_FILES_SQL = text(
         UNION ALL
         SELECT f.id FROM files f JOIN tree t ON f.parent_folder_id = t.id
     )
-    SELECT f.id, f.name, f.size, f.user_id, f.is_folder, f.is_deleted
+    SELECT f.id, f.name, f.size, f.user_id, f.wiki_enabled, f.is_folder, f.is_deleted
     FROM files f JOIN tree t ON f.id = t.id
     WHERE f.id <> :folder_id AND f.is_folder = FALSE AND f.is_deleted = FALSE
     """
@@ -153,6 +161,8 @@ class FolderScope:
     skipped_by_format: int
     skipped_by_size: int
     skipped_by_permission: int
+    # 소유자가 명시적으로 끈 파일. 폴더를 켜도 되살아나면 안 되는 항목이다.
+    skipped_by_optout: int = 0
 
 
 async def folder_scope(
@@ -170,8 +180,13 @@ async def folder_scope(
 
     settings = get_settings()
     targets: list[int] = []
-    by_format = by_size = by_perm = 0
+    by_format = by_size = by_perm = by_optout = 0
     for r in rows:
+        # 명시적으로 끈 파일(wiki_enabled=FALSE)은 폴더를 켜도 되살리지 않는다 —
+        # 그게 소유자 탈출구의 의미다. 상속 중(NULL)인 파일만 폴더 설정을 따른다.
+        if r.wiki_enabled is False:
+            by_optout += 1
+            continue
         ext = posixpath.splitext(r.name.lower())[1]
         if ext not in INDEXABLE_EXTENSIONS:
             by_format += 1
@@ -190,6 +205,7 @@ async def folder_scope(
         skipped_by_format=by_format,
         skipped_by_size=by_size,
         skipped_by_permission=by_perm,
+        skipped_by_optout=by_optout,
     )
 
 
@@ -310,6 +326,9 @@ async def _sync_queue(
         await mark_pending(session, targets)
         await wiki_queue.enqueue(targets)
     else:
+        # 큐만 비우면 이미 색인된 트리가 질의에 계속 잡힌다 — 상태도 함께 내려야
+        # "차단은 즉시"가 성립한다.
+        await mark_disabled(session, targets)
         await wiki_queue.drop(targets)
 
 
@@ -350,10 +369,60 @@ async def mark_pending(session: AsyncSession, file_ids: list[int]) -> None:
             )
             continue
         doc, file = entry
-        if doc.status == WikiStatus.READY and doc.version == file.current_version:
-            continue
+        if doc.version == file.current_version and doc.tree is not None:
+            # 껐다 켠 경우 — 트리가 그대로라 재색인이 필요 없다. 비용 0 으로 복구한다.
+            if doc.status in (WikiStatus.READY, WikiStatus.DISABLED):
+                doc.status = WikiStatus.READY
+                continue
         doc.status = WikiStatus.PENDING
     await session.commit()
+
+
+async def mark_disabled(session: AsyncSession, file_ids: list[int]) -> None:
+    """위키가 꺼진 문서를 질의 대상에서 **즉시** 뺀다. 트리는 그대로 둔다.
+
+    끄기의 계약은 "차단은 즉시, 삭제는 유예"다(spec/wiki-index.md). 트리를 유예 동안 보관하는
+    것은 재켜기 비용 때문인데, 그 사이에도 검색된다면 끈 의미가 없다 — 소유자는 껐다고
+    생각하는데 그 문서로 계속 답이 나간다.
+
+    상태만 바꾸므로 다시 켤 때 재색인이 필요 없다(mark_pending 이 ready 로 되돌린다).
+    """
+    from app.models import WikiDocument
+
+    if not file_ids:
+        return
+    await session.execute(
+        update(WikiDocument)
+        .where(
+            WikiDocument.file_id.in_(file_ids),
+            WikiDocument.status != WikiStatus.DISABLED,
+        )
+        .values(status=WikiStatus.DISABLED)
+    )
+    await session.commit()
+
+
+async def sync_file(session: AsyncSession, file: File) -> None:
+    """파일 하나의 위키 상태를 현재 상속 판정에 맞춘다.
+
+    업로드·이동처럼 **파일의 위치가 정해지거나 바뀌는 시점**에 호출한다. 폴더 토글은 그 시점의
+    하위 파일만 큐에 넣으므로, 이후에 들어오는 파일은 여기서 잡아야 한다 — 폴더 토글 UI 가
+    "앞으로 이 폴더에 올라오는 md·html 도 자동 포함됩니다"라고 약속하기 때문이다.
+
+    반대 방향도 함께 처리한다. 위키가 꺼진 폴더로 옮겨지면 상속 결과가 꺼짐이 되므로 질의
+    대상에서 빠져야 한다 — 상속 판정 결과가 곧 정책이다.
+    """
+    from app.services import wiki_queue
+
+    if file.is_folder or file.is_deleted:
+        return
+    state = await resolve_wiki_state(session, file.id)
+    if state.enabled and indexable(file).ok:
+        await mark_pending(session, [file.id])
+        await wiki_queue.enqueue(file.id)
+    else:
+        await mark_disabled(session, [file.id])
+        await wiki_queue.drop(file.id)
 
 
 async def mark_stale(session: AsyncSession, file_id: int) -> None:

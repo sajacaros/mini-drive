@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.models import File, User, WikiDocument
 from app.services import permissions as permissions_service
+from app.services import wiki as wiki_service
 from app.services import wiki_llm
 from app.services.storage import StorageService
 from app.services.wiki_convert import html_to_markdown
@@ -106,7 +107,7 @@ async def _accessible_documents(
             .join(File, File.id == WikiDocument.file_id)
             .where(
                 File.is_deleted.is_(False),
-                WikiDocument.status.in_(("ready", "stale")),
+                WikiDocument.status.in_(wiki_service.QUERYABLE_STATUSES),
                 WikiDocument.tree.is_not(None),
             )
             .order_by(File.name.asc())

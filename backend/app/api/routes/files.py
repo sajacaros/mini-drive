@@ -1011,6 +1011,7 @@ def _wiki_state_response(overview: wiki_service.WikiOverview) -> WikiStateRespon
                 skipped_by_format=scope.skipped_by_format,
                 skipped_by_size=scope.skipped_by_size,
                 skipped_by_permission=scope.skipped_by_permission,
+                skipped_by_optout=scope.skipped_by_optout,
             )
             if scope is not None
             else None
