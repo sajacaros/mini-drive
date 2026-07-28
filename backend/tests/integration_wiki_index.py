@@ -262,6 +262,37 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
             assert (await wiki_service.get_document(session, neo)).status == "disabled"
         _ok("이름 변경(.md → .txt) → 색인 대상 밖이 되어 제외")
 
+        # 10. 휴지통 ↔ 복구 — 복구는 **그 시점의** 위키 여부를 따라야 한다.
+        #     휴지통 중 제외는 질의의 is_deleted 필터가 처리하지만, 그 사이 설정이 바뀌었으면
+        #     복구 시점에 다시 판정하지 않는 한 꺼진 문서가 되살아난다.
+        trash_doc = await _upload(c, alice_h, "휴지통대상.md", folder, MD_V1.encode())
+        await _drain()
+        async with SessionFactory() as session:
+            assert (await wiki_service.get_document(session, trash_doc)).status == "ready"
+
+        r = await c.post(f"/api/files/{trash_doc}/delete", headers=alice_h)
+        assert r.status_code in (200, 204), r.text
+        r = await c.put(
+            f"/api/files/{folder}/wiki", headers=alice_h, json={"enabled": False}
+        )
+        assert r.status_code == 200, r.text
+        r = await c.post(f"/api/files/{trash_doc}/restore-trash", headers=alice_h)
+        assert r.status_code == 200, r.text
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, trash_doc)
+            assert doc.status == "disabled", doc.status
+        _ok("휴지통 중 위키 OFF → 복구해도 질의 대상으로 돌아오지 않는다")
+
+        r = await c.put(
+            f"/api/files/{folder}/wiki", headers=alice_h, json={"enabled": True}
+        )
+        assert r.status_code == 200, r.text
+        await _drain()
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, trash_doc)
+            assert doc.status == "ready", doc.status
+        _ok("다시 켜면 복구된 문서도 질의 대상으로 돌아온다")
+
         # 6. 문서 목록 권한 — bob 은 접근 권한이 없어 아무것도 못 본다
         r = await c.get("/api/wiki/documents", headers=bob_h)
         assert r.status_code == 200 and r.json()["total"] == 0, r.text
@@ -270,9 +301,13 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         )
         assert r.status_code == 200, r.text
         r = await c.get("/api/wiki/documents", headers=bob_h)
-        # deploy.md + 신규.md (ops.html 은 명시 OFF 라 disabled — 목록에는 남지만 질의 대상은 아니다)
-        assert r.json()["total"] == 3, r.text
-        _ok("문서 목록 권한 — 전사 공개 전 0건 → 공개 후 3건")
+        # 목록은 상태와 무관하게 **접근 가능한 위키 문서 전부**를 보여준다 — 사용자가 무엇이
+        # 왜 빠졌는지(disabled) 알 수 있어야 하기 때문이다. 질의 대상은 ready/stale 뿐이다.
+        items = {d["name"]: d["status"] for d in r.json()["items"]}
+        assert r.json()["total"] == 4, r.text
+        assert items["deploy.md"] == "ready" and items["휴지통대상.md"] == "ready", items
+        assert items["ops.html"] == "disabled" and items["신규.txt"] == "disabled", items
+        _ok(f"문서 목록 권한 — 전사 공개 전 0건 → 공개 후 4건 {items}")
 
     await engine.dispose()
     print("\n위키 인덱싱 파이프라인 통합 시나리오 전체 통과.")

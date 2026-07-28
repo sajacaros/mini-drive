@@ -1399,6 +1399,10 @@ async def restore_trash(session: AsyncSession, user: User, file_id: int) -> File
         actor_id=user.id,
         name=file.name,
     )
+    # 휴지통에 있는 동안 위키 설정이 바뀌었을 수 있고, 부모가 사라져 루트로 재부착되면 상속
+    # 경로 자체가 달라진다. 복구 시점의 판정을 다시 적용한다 — 그러지 않으면 꺼진 문서가
+    # 복구와 함께 되살아나 검색된다.
+    await sync_wiki(session, file)
     return file
 
 
