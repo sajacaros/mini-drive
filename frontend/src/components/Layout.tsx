@@ -30,6 +30,7 @@ import {
   DriveIcon,
   FolderIcon,
   HistoryIcon,
+  BookIcon,
   LinkIcon,
   LockIcon,
   MenuIcon,
@@ -194,6 +195,7 @@ export function Layout() {
             <NavItem to="/groups" icon={<UsersIcon />} label="그룹" collapsed={collapsed} />
             <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" collapsed={collapsed} />
             <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" collapsed={collapsed} />
+            <NavItem to="/wiki" icon={<BookIcon />} label="위키" collapsed={collapsed} />
           </NavSection>
 
           <NavSection
