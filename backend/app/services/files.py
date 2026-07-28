@@ -439,6 +439,9 @@ async def rename_file(
         actor_id=user.id,
         name=file.name,
     )
+    # 확장자가 바뀌면 색인 대상 여부가 뒤집힌다 — .md → .txt 면 질의에서 빠져야 하고
+    # 반대면 들어와야 한다.
+    await sync_wiki(session, file)
     return file
 
 
@@ -1087,9 +1090,11 @@ async def _enqueue_wiki_reindex(session: AsyncSession, file: File) -> None:
 async def sync_wiki(session: AsyncSession, file: File) -> None:
     """파일의 위치가 정해지거나 바뀐 뒤 위키 상태를 맞춘다 (spec/wiki-index.md).
 
-    업로드·이동에서 호출한다. 폴더 토글은 **그 시점의** 하위 파일만 큐에 넣으므로, 이후에
-    들어오거나 옮겨 오는 파일은 여기서 잡아야 한다 — 폴더 토글 UI 가 "앞으로 이 폴더에
-    올라오는 md·html 도 자동 포함됩니다"라고 약속하기 때문이다.
+    업로드·이동·이름 변경에서 호출한다. 유효 상태를 바꾸는 축이 셋이다 — 위치(상속 경로),
+    이름(확장자가 색인 대상인지), 토글 자체. 폴더 토글은 **그 시점의** 하위 파일만 큐에 넣으므로
+    이후에 들어오거나 옮겨 오는 파일은 여기서 잡아야 한다.
+
+    폴더를 넘기면 하위 전체를 훑는다 — 폴더를 옮기면 그 아래 모든 문서의 상속이 한꺼번에 바뀐다.
 
     지연 임포트는 순환을 피하기 위한 것이다(wiki 가 permissions → groups 를 타고 files 를 본다).
     실패해도 업로드/이동을 되돌리지 않는다 — 놓친 항목은 다음 토글·버전업에서 다시 들어온다.

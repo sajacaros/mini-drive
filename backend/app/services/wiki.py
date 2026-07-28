@@ -403,26 +403,47 @@ async def mark_disabled(session: AsyncSession, file_ids: list[int]) -> None:
 
 
 async def sync_file(session: AsyncSession, file: File) -> None:
-    """파일 하나의 위키 상태를 현재 상속 판정에 맞춘다.
+    """파일/폴더의 위키 상태를 현재 상속 판정에 맞춘다.
 
-    업로드·이동처럼 **파일의 위치가 정해지거나 바뀌는 시점**에 호출한다. 폴더 토글은 그 시점의
-    하위 파일만 큐에 넣으므로, 이후에 들어오는 파일은 여기서 잡아야 한다 — 폴더 토글 UI 가
-    "앞으로 이 폴더에 올라오는 md·html 도 자동 포함됩니다"라고 약속하기 때문이다.
+    업로드·이동·이름 변경처럼 **유효 상태가 바뀔 수 있는 시점**에 호출한다. 바뀌는 축이 셋이다 —
+    위치(상속 경로), 이름(확장자가 색인 대상인지), 그리고 토글 자체.
 
-    반대 방향도 함께 처리한다. 위키가 꺼진 폴더로 옮겨지면 상속 결과가 꺼짐이 되므로 질의
-    대상에서 빠져야 한다 — 상속 판정 결과가 곧 정책이다.
+    양방향을 모두 처리한다. 켜진 폴더로 들어오면 색인 대상이 되고(폴더 토글 UI 가 "앞으로
+    올라오는 md·html 도 자동 포함"을 약속한다), 꺼진 폴더로 나가거나 확장자가 대상 밖이 되면
+    질의에서 빠져야 한다 — 상속 판정 결과가 곧 정책이다.
+
+    **폴더면 하위 전체를 훑는다.** 폴더를 옮기면 그 아래 모든 문서의 상속 경로가 한꺼번에
+    바뀌는데, 자기 자신만 보면 하위가 낡은 상태로 남아 꺼진 폴더의 문서가 계속 검색된다.
     """
     from app.services import wiki_queue
 
-    if file.is_folder or file.is_deleted:
+    if file.is_deleted:
         return
-    state = await resolve_wiki_state(session, file.id)
-    if state.enabled and indexable(file).ok:
-        await mark_pending(session, [file.id])
-        await wiki_queue.enqueue(file.id)
+
+    if file.is_folder:
+        rows = (
+            await session.execute(_DESCENDANT_FILES_SQL, {"folder_id": file.id})
+        ).all()
+        stubs = [await session.get(File, r.id) for r in rows]
+        targets = [f for f in stubs if f is not None]
     else:
-        await mark_disabled(session, [file.id])
-        await wiki_queue.drop(file.id)
+        targets = [file]
+
+    enable: list[int] = []
+    disable: list[int] = []
+    for target in targets:
+        state = await resolve_wiki_state(session, target.id)
+        if state.enabled and indexable(target).ok:
+            enable.append(target.id)
+        else:
+            disable.append(target.id)
+
+    if enable:
+        await mark_pending(session, enable)
+        await wiki_queue.enqueue(enable)
+    if disable:
+        await mark_disabled(session, disable)
+        await wiki_queue.drop(disable)
 
 
 async def mark_stale(session: AsyncSession, file_id: int) -> None:

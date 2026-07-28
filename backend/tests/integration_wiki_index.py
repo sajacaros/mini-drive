@@ -228,6 +228,40 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
             assert doc.status == "ready", doc.status
         _ok("다시 켜기 → 재색인 없이 ready 복구 (비용 0)")
 
+        # 9. 유효 상태를 바꾸는 나머지 경로 — 위치(이동)와 이름(확장자)
+        #    판정만 맞고 wiki_documents 가 따라가지 않으면 꺼진 문서가 계속 검색된다.
+        off_folder = (
+            await c.post("/api/files", headers=alice_h, json={"name": "위키없는폴더"})
+        ).json()["id"]
+        sub = (
+            await c.post(
+                "/api/files", headers=alice_h,
+                json={"name": "하위", "parent_id": folder},
+            )
+        ).json()["id"]
+        moved = await _upload(c, alice_h, "이동대상.md", sub, MD_V1.encode())
+        await _drain()
+        async with SessionFactory() as session:
+            assert (await wiki_service.get_document(session, moved)).status == "ready"
+
+        r = await c.post(
+            f"/api/files/{sub}/move", headers=alice_h, json={"parent_id": off_folder}
+        )
+        assert r.status_code == 200, r.text
+        async with SessionFactory() as session:
+            # 폴더를 옮기면 하위 전체의 상속이 한꺼번에 바뀐다 — 자기 자신만 보면 하위가
+            # 낡은 상태로 남아 꺼진 폴더의 문서가 계속 검색된다.
+            assert (await wiki_service.get_document(session, moved)).status == "disabled"
+        _ok("폴더 이동(ON→OFF) → 하위 문서까지 질의 대상에서 제외")
+
+        r = await c.put(
+            f"/api/files/{neo}", headers=alice_h, json={"name": "신규.txt"}
+        )
+        assert r.status_code == 200, r.text
+        async with SessionFactory() as session:
+            assert (await wiki_service.get_document(session, neo)).status == "disabled"
+        _ok("이름 변경(.md → .txt) → 색인 대상 밖이 되어 제외")
+
         # 6. 문서 목록 권한 — bob 은 접근 권한이 없어 아무것도 못 본다
         r = await c.get("/api/wiki/documents", headers=bob_h)
         assert r.status_code == 200 and r.json()["total"] == 0, r.text
