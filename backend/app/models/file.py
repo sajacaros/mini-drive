@@ -78,6 +78,19 @@ class File(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # 위키 인덱싱 여부 (spec/wiki-index.md). 3상태다 —
+    #   NULL  = 상속 (조상 폴더의 명시값을 따른다)
+    #   TRUE  = 명시 ON
+    #   FALSE = 명시 OFF
+    # 명시값이 상속을 이긴다. manage 권한자가 폴더를 발행할 때 소유자가 자기 파일만 빼는
+    # 탈출구가 FALSE 다. 이 컬럼은 "인덱싱하는가"만 뜻하고, 누가 질의할 수 있는지는
+    # 그 파일의 기존 권한이 결정한다(전사 공개는 @전사 그룹의 read 부여).
+    wiki_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # 위키를 끈 시각. purger 가 wiki_purge_grace_days 경과 후 트리를 실제로 지운다.
+    wiki_disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     owner: Mapped[User] = relationship(
         "User", back_populates="files", foreign_keys=[user_id]
     )

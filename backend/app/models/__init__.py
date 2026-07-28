@@ -25,6 +25,7 @@ from app.models.signup_code import SignupCode
 from app.models.todo import Routine, TodoItem
 from app.models.upload_session import UploadSession
 from app.models.user import User
+from app.models.wiki import WikiDocument
 
 __all__ = [
     "Base",
@@ -44,6 +45,7 @@ __all__ = [
     "AppSetting",
     "Routine",
     "TodoItem",
+    "WikiDocument",
     # 열거형
     "UserRole",
     "UserStatus",
