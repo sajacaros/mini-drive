@@ -1,8 +1,19 @@
-"""위키 인덱싱 토글 서비스 (spec/wiki-index.md).
+"""위키 토글 서비스 (spec/wiki-index.md).
 
-이 모듈이 다루는 것은 **인덱싱 여부** 하나다. 누가 질의할 수 있는지는 그 파일의 기존 권한이
-결정하고, 전사 공개는 `@전사` 그룹에 read 를 주는 것이라 permissions 서비스가 그대로 처리한다.
-위키가 권한 체계를 새로 만들지 않는다는 게 설계의 뼈대다.
+**축은 하나다.** 위키를 켜면 인덱싱과 `@전사 read`(전사 공개)가 함께 걸리고, 끄면 함께 풀린다.
+2026-07-30 개정 전에는 인덱싱과 공개가 독립 스위치였는데, 실제 데이터에서 인덱싱된 467건 중
+공개된 것이 2건이었다 — 사람들은 인덱싱만 켰고, 그러면 남이 질의해도 아무것도 못 찾는다.
+켰는데 동작하지 않는 상태가 가장 나쁘므로 축을 합쳤다(spec 「왜 스위치가 하나인가」).
+
+그래도 위키가 권한 체계를 새로 만들지는 않는다 — 공개는 permissions 서비스의 부여/회수이고,
+`ensure_file_access` 단일 관문을 그대로 탄다.
+
+여기서 나오는 불변식이 카탈로그·질의의 전제다.
+
+    인덱싱 켜짐 ⟺ 그 파일에 `@전사 read` 직접 부여
+
+이게 성립하는 동안 카탈로그·질의는 문서별 권한 판정을 하지 않는다(항상 통과하므로).
+지키는 곳이 둘이다 — 이 모듈의 토글, 그리고 권한 회수 훅(`disable_for_public_revoke`).
 
 `files.wiki_enabled` 는 3상태다 — NULL(상속) / TRUE(명시 ON) / FALSE(명시 OFF).
 판정은 **가장 가까운 명시값이 이긴다**. 권한 판정이 누적(union)인 것과 방향이 반대인데,
@@ -251,17 +262,12 @@ async def set_wiki(
     *,
     enabled: bool | None = None,
     enabled_set: bool = False,
-    public: bool | None = None,
 ) -> WikiState:
-    """위키 인덱싱 on/off + 전사 공개 여부.
+    """위키 on/off. 켜면 인덱싱 + 전사 공개가 **함께** 걸린다.
 
-    두 축은 **독립**이다. (끔, 공개) 조합은 "전사 공유하되 질의 대상은 아님"으로 정상이며,
-    규정상 LLM 전송이 금지된 자료나 인덱싱 실익이 없는 파일(이미지·영상)에 쓴다.
-
-    enabled_set : 인덱싱 설정을 건드리는가. `enabled=None`(상속으로 되돌리기)과 '생략'을
-                  구분해야 해서 별도 플래그를 둔다 — update_permission 의 expires_at_set 과 같은 결.
+    enabled_set : 설정을 건드리는가. `enabled=None`(상속으로 되돌리기)과 '생략'을 구분해야 해서
+                  별도 플래그를 둔다 — update_permission 의 expires_at_set 과 같은 결.
     enabled     : files.wiki_enabled 명시값. None 이면 명시값을 지워 상속으로 되돌린다.
-    public      : @전사 그룹의 read 부여/회수. None 이면 건드리지 않는다.
     """
     settings = get_settings()
     if not settings.wiki_enabled:
@@ -294,42 +300,49 @@ async def set_wiki(
                 {"from": before, "to": enabled, "is_folder": file.is_folder},
             )
 
-    if public is not None:
-        await _set_public(session, actor, file, public)
-
     await session.commit()
 
     if enabled_set:
-        await _sync_queue(session, actor, file, enabled)
+        await _apply_toggle(session, actor, file)
 
     return await resolve_wiki_state(session, file_id)
 
 
-async def _sync_queue(
-    session: AsyncSession, actor: User, file: File, enabled: bool | None
-) -> None:
-    """토글 결과를 인덱싱 큐에 반영한다.
+async def _apply_toggle(session: AsyncSession, actor: User, file: File) -> None:
+    """토글 결과를 인덱싱 큐와 전사 공개에 함께 반영한다.
 
-    켜면 대상을 넣고, 끄면 대기 중인 작업을 뺀다 — 끈 파일이 잠시 뒤 인덱싱되는 일을 막는다.
-    상속으로 되돌린 경우(None)는 조상 판정을 다시 해서 결정한다.
+    **대상마다 상속을 다시 판정한다.** 폴더를 끌 때 하위에 명시 ON 인 파일이 있으면 그 파일은
+    켜진 채로 남아야 하고(명시값이 상속을 이긴다), 폴더를 켤 때 명시 OFF 인 파일은 되살아나지
+    않아야 한다(소유자 탈출구). 토글한 항목의 판정 하나로 전체를 몰아치면 그 둘이 깨진다.
+
+    대상 집합은 `folder_scope` 가 고른다 — 인덱싱 대상 형식·크기이고 **발행 권한이 있는** 파일만.
+    공개도 그 집합에만 건다(폴더에 상속 부여하지 않는 이유는 모듈 docstring 참조).
     """
     from app.services import wiki_queue
 
     if file.is_folder:
-        scope = await folder_scope(session, actor, file)
-        targets = scope.target_ids
+        targets = (await folder_scope(session, actor, file)).target_ids
     else:
         targets = [file.id]
+    if not targets:
+        return
 
-    effective = await resolve_wiki_state(session, file.id)
-    if effective.enabled:
-        await mark_pending(session, targets)
-        await wiki_queue.enqueue(targets)
-    else:
+    enable: list[int] = []
+    disable: list[int] = []
+    for target_id in targets:
+        state = await resolve_wiki_state(session, target_id)
+        (enable if state.enabled else disable).append(target_id)
+
+    if enable:
+        await mark_pending(session, enable)
+        await wiki_queue.enqueue(enable)
+        await _set_public(session, actor, enable, public=True)
+    if disable:
         # 큐만 비우면 이미 색인된 트리가 질의에 계속 잡힌다 — 상태도 함께 내려야
         # "차단은 즉시"가 성립한다.
-        await mark_disabled(session, targets)
-        await wiki_queue.drop(targets)
+        await mark_disabled(session, disable)
+        await wiki_queue.drop(disable)
+        await _set_public(session, actor, disable, public=False)
 
 
 async def mark_pending(session: AsyncSession, file_ids: list[int]) -> None:
@@ -438,12 +451,22 @@ async def sync_file(session: AsyncSession, file: File) -> None:
         else:
             disable.append(target.id)
 
+    # 공개도 함께 따라가야 한다 — 켜진 폴더에 올라온 문서가 인덱싱만 되고 공개되지 않으면
+    # 카탈로그에는 뜨는데 남이 열지 못한다. 축을 합친 뒤로는 그 상태가 곧 불변식 위반이다.
+    # granted_by 는 항목 소유자로 남긴다. 상속이 원인이라 행위자가 따로 없고, 소유자는 자기
+    # 파일을 발행할 수 있는 사람이라 사후에 감사 로그를 읽을 때 가장 자연스러운 주체다.
+    actor = await session.get(User, file.user_id)
+
     if enable:
         await mark_pending(session, enable)
         await wiki_queue.enqueue(enable)
+        if actor is not None:
+            await _set_public(session, actor, enable, public=True)
     if disable:
         await mark_disabled(session, disable)
         await wiki_queue.drop(disable)
+        if actor is not None:
+            await _set_public(session, actor, disable, public=False)
 
 
 async def mark_stale(session: AsyncSession, file_id: int) -> None:
@@ -466,43 +489,92 @@ async def mark_stale(session: AsyncSession, file_id: int) -> None:
 
 
 async def _set_public(
-    session: AsyncSession, actor: User, file: File, public: bool
+    session: AsyncSession, actor: User, file_ids: list[int], *, public: bool
 ) -> None:
     """전사 공개 = `@전사` 그룹의 read 부여/회수. 권한 서비스를 그대로 호출한다.
 
-    위키가 권한을 직접 조작하지 않는다 — 감사 로그·캐시 무효화·SSE 발행이 전부 권한
-    서비스에 이미 붙어 있고, 여기서 우회하면 그 셋이 조용히 빠진다.
+    위키가 권한을 직접 조작하지 않는다 — 감사 로그·캐시 무효화가 권한 서비스에 이미 붙어
+    있고, 여기서 우회하면 그것들이 조용히 빠진다.
+
+    묶음 API 를 쓰는 이유는 규모다. 폴더 하나에 수백 건이 걸리는데 건별 `grant_permission` 은
+    파일마다 커밋·캐시 무효화·SSE 를 일으킨다 — 실측 데이터의 폴더 하나가 이미 367건이었다.
+    발행 권한은 `folder_scope` 가 파일마다 이미 판정했다(묶음 API 의 계약).
     """
     group_id = await get_all_users_group_id(session)
     if group_id is None:
         raise WikiServiceError(500, "@전사 시스템 그룹이 없습니다.")
 
+    detail = {"via": "wiki"}
     if public:
-        await permissions_service.grant_permission(
-            session,
-            actor,
-            file.id,
-            group_id,
-            GroupPermission.READ,
-            inherit_to_children=True,
-            expires_at=None,
+        await permissions_service.grant_permission_bulk(
+            session, actor, file_ids, group_id, GroupPermission.READ, audit_detail=detail
         )
-    else:
-        try:
-            await permissions_service.revoke_permission(session, actor, file.id, group_id)
-        except permissions_service.PermissionServiceError as exc:
-            # 이미 공개가 아니면 회수할 것이 없다 — 토글을 끄는 요청에서는 성공으로 본다.
-            if exc.status_code != 404:
-                raise
+        return
+
+    # 회수는 **위키가 색인한 적 있는 파일에만** 건다. 위키를 끄는 경로는 폴더 하위 전체를
+    # 훑으므로(sync_file), 그대로 회수하면 권한 화면에서 손으로 전사 공개해 둔 PDF·이미지의
+    # 권한까지 위키가 걷어낸다. 그건 위키가 만든 것이 아니라 위키가 건드릴 것이 아니다.
+    # `wiki_documents` 행의 존재가 "위키가 이 파일을 다뤘다"는 유일한 기록이다.
+    targets = await _indexed_file_ids(session, file_ids)
+    if targets:
+        await permissions_service.revoke_permission_bulk(
+            session, actor, targets, group_id, audit_detail=detail
+        )
+
+
+async def _indexed_file_ids(
+    session: AsyncSession, file_ids: list[int]
+) -> list[int]:
+    """주어진 파일 중 `wiki_documents` 행이 있는 것 (위키가 색인한 적 있는 파일)."""
+    from app.models import WikiDocument
+
+    if not file_ids:
+        return []
+    return list(
+        (
+            await session.execute(
+                select(WikiDocument.file_id).where(WikiDocument.file_id.in_(file_ids))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def disable_for_public_revoke(
+    session: AsyncSession, actor: User, file_id: int, group_id: int
+) -> bool:
+    """`@전사 read` 를 권한 화면에서 회수하면 위키도 함께 끈다. 반환: 껐는지 여부.
+
+    불변식(인덱싱 켜짐 ⟺ `@전사 read`)의 **반대 방향**을 지키는 훅이다. 이게 없으면 "공개는
+    껐는데 위키가 계속 답하는" 상태가 생기고, 카탈로그·질의가 권한 판정을 하지 않는 근거가
+    그 문서에서 무너진다(모듈 docstring).
+
+    회수 엔드포인트에서 부른다 — 회수가 이미 끝난 뒤라 여기서 다시 지울 것은 없고,
+    `set_wiki` 가 부르는 회수는 없는 부여를 지우는 것이므로 조용히 지나간다.
+    """
+    if group_id != await get_all_users_group_id(session):
+        return False
+    file = await session.get(File, file_id)
+    if file is None or file.is_deleted:
+        return False
+    if not (await resolve_wiki_state(session, file_id)).enabled:
+        return False
+    await set_wiki(session, actor, file_id, enabled=False, enabled_set=True)
+    return True
 
 
 @dataclass(frozen=True)
 class WikiOverview:
-    """파일 하나의 위키 화면 상태 — 토글 UI 가 필요한 값을 한 번에 담는다."""
+    """파일 하나의 위키 화면 상태 — 토글 UI 가 필요한 값을 한 번에 담는다.
+
+    공개 여부는 담지 않는다. 축이 하나가 된 뒤로 `state.enabled` 가 곧 공개 여부이고, 별도
+    필드로 두면 UI 가 "둘이 다를 수 있다"고 읽는다 — 그게 걷어낸 모델이다. 불변식이 깨진
+    경우를 진단할 때는 `is_public()` 을 직접 쓴다.
+    """
 
     file: File
     state: WikiState
-    public: bool
     verdict: IndexableVerdict
     status: WikiStatus
     indexed_version: int | None
@@ -524,7 +596,6 @@ async def get_overview(
     return WikiOverview(
         file=file,
         state=state,
-        public=await is_public(session, file_id),
         verdict=indexable(file),
         status=_status_of(doc, enabled=state.enabled),
         indexed_version=doc.version if doc else None,
@@ -636,53 +707,178 @@ class DocumentItem:
 
 
 async def list_documents(
-    session: AsyncSession, user: User, page: int, size: int
+    session: AsyncSession, page: int, size: int, *, query: str | None = None
 ) -> tuple[list[DocumentItem], int]:
-    """이 사용자가 접근할 수 있는 위키 문서 목록.
+    """전사 위키의 문서 목록. **사람마다 다르지 않다.**
 
     아직 인덱싱되지 않은 항목(pending·indexing)도 포함한다 — 폴더를 켠 뒤 문서가 하나씩
     올라오는 것을 지켜볼 수 있어야 한다. 검색(wiki_query)은 ready/stale 만 대상으로 삼으므로
     미완성 트리가 답변에 쓰이지는 않는다.
 
-    **권한 필터를 질의 대상 선정 단계에 건다** — 목록을 만든 뒤 거르지 않는다.
+    꺼진 문서(disabled)도 **상태 그대로 남긴다** — 목록에서 사라지면 소유자는 "왜 빠졌는지"를
+    알 수 없다. 질의 대상은 ready/stale 뿐이므로 목록에 있다고 답변에 쓰이지는 않는다.
 
-    후보를 모두 가져와 `get_access_level`(Redis 캐시)로 거르고 메모리에서 페이지를 자른다.
-    판정이 조상 경로를 타는 재귀 CTE 라 SQL 한 방으로 접근 가능 집합을 만들려면 판정 로직을
-    두 벌 유지하게 되고, 그 순간 목록과 실제 접근이 어긋날 수 있다. 문서 수가 커지면 SQL 쪽
-    필터로 옮겨야 하는 지점이며, 그때도 판정은 한 곳에서만 하도록 옮겨야 한다.
+    **문서별 권한 판정을 하지 않는다.** 인덱싱된 문서는 전 직원 공개라는 불변식(모듈
+    docstring)이 있고, `@전사` 는 활성 사용자 전원을 포함하므로 판정은 항상 통과한다.
+    2026-07-30 실측에서 문서 467건에 `get_access_level` 을 돌려 0.8초를 쓰고 결과는 전부
+    통과였다 — 순수 비용이었다. 그래서 페이지 자르기도 SQL 로 내려간다.
+
+    `query` 는 문서명 부분 일치(대소문자 무시). 수백 건 규모에서 이름순 페이지를 넘겨 찾는 것은
+    현실적이지 않다 — 총계도 필터를 반영해야 "몇 건 중 몇 건"이 어긋나지 않는다.
     """
     from app.models import WikiDocument
+
+    conditions = [File.is_deleted.is_(False)]
+    if query and query.strip():
+        # `%`·`_` 는 LIKE 메타문자다. 이스케이프하지 않으면 사용자가 `_` 가 든 파일명을 찾을 때
+        # 한 글자 와일드카드로 해석돼 엉뚱한 문서가 섞인다 — 파일명에 `_` 는 흔하다.
+        needle = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions.append(File.name.ilike(f"%{needle}%", escape="\\"))
+
+    total = (
+        await session.execute(
+            select(func.count())
+            .select_from(WikiDocument)
+            .join(File, File.id == WikiDocument.file_id)
+            .where(*conditions)
+        )
+    ).scalar_one()
 
     rows = (
         await session.execute(
             select(WikiDocument, File, User.display_name)
             .join(File, File.id == WikiDocument.file_id)
             .join(User, User.id == File.user_id)
-            .where(File.is_deleted.is_(False))
+            .where(*conditions)
             .order_by(File.name.asc(), File.id.asc())
+            .offset((page - 1) * size)
+            .limit(size)
         )
     ).all()
 
-    visible: list[DocumentItem] = []
-    for doc, file, owner_name in rows:
-        if file.user_id != user.id:
-            level = await permissions_service.get_access_level(session, user, file)
-            if level is None:
-                continue
-        visible.append(
-            DocumentItem(
-                file_id=file.id,
-                name=file.name,
-                owner_display_name=owner_name,
-                status=doc.status,
-                version=doc.version,
-                indexed_at=doc.indexed_at,
-                node_count=_count_nodes(doc.tree),
+    items = [
+        DocumentItem(
+            file_id=file.id,
+            name=file.name,
+            owner_display_name=owner_name,
+            status=doc.status,
+            version=doc.version,
+            indexed_at=doc.indexed_at,
+            node_count=_count_nodes(doc.tree),
+        )
+        for doc, file, owner_name in rows
+    ]
+    return items, total
+
+
+@dataclass(frozen=True)
+class CatalogNode:
+    """카탈로그의 절 하나 — 트리 노드를 UI 가 쓸 형태로만 추린 것."""
+
+    node_id: str
+    title: str
+    line_num: int
+    # 인덱싱이 붙인 절 요약. 짧은 절은 요약 대신 본문이 그대로 들어 있다(wiki_tree 참조).
+    summary: str | None
+    nodes: list[CatalogNode]
+
+
+@dataclass(frozen=True)
+class Catalog:
+    """문서 한 건의 카탈로그 — 메타 + 절 트리."""
+
+    file_id: int
+    name: str
+    owner_display_name: str
+    status: str
+    version: int
+    indexed_at: datetime | None
+    node_count: int | None
+    nodes: list[CatalogNode]
+
+
+async def get_catalog(session: AsyncSession, file_id: int) -> Catalog:
+    """문서 하나의 절 트리 (카탈로그).
+
+    위키가 **그 문서를 어떻게 쪼개 알고 있는지**를 그대로 보여준다. 질의는 이 트리의
+    title+summary 만 보고 절을 고르므로, 여기 보이는 것이 곧 검색이 보는 것이다 — 답이 이상할 때
+    소유자가 원문이 아니라 이 화면을 봐야 원인을 찾는다.
+
+    목록과 같은 이유로 권한 판정을 하지 않는다(전사 위키 = 전 직원 공개). 트리가 아직 없으면
+    (pending·indexing·실패 후 첫 시도) 노드는 빈 목록이고, 상태는 함께 실어 보내 화면이
+    "왜 비었는지"를 말할 수 있게 한다.
+
+    꺼진 문서(disabled)도 목록에 남으므로 여기서도 연다 — 목록에서 눌러 들어온 문서가 404 면
+    "왜 빠졌는지 보여준다"는 목록의 취지가 그 자리에서 끊긴다.
+    """
+    from app.models import WikiDocument
+
+    row = (
+        await session.execute(
+            select(WikiDocument, File, User.display_name)
+            .join(File, File.id == WikiDocument.file_id)
+            .join(User, User.id == File.user_id)
+            .where(
+                WikiDocument.file_id == file_id,
+                File.is_deleted.is_(False),
             )
         )
+    ).first()
+    if row is None:
+        raise WikiServiceError(404, "문서를 찾을 수 없습니다.")
 
-    offset = (page - 1) * size
-    return visible[offset : offset + size], len(visible)
+    doc, file, owner_name = row
+
+    return Catalog(
+        file_id=file.id,
+        name=file.name,
+        owner_display_name=owner_name,
+        status=doc.status,
+        version=doc.version,
+        indexed_at=doc.indexed_at,
+        node_count=_count_nodes(doc.tree),
+        nodes=_catalog_nodes(doc.tree),
+    )
+
+
+def _catalog_nodes(tree: dict[str, Any] | None) -> list[CatalogNode]:
+    """저장된 트리를 CatalogNode 로 옮긴다. 모양이 어긋난 노드는 조용히 버린다.
+
+    트리는 JSONB 라 스키마 보증이 없다 — 구 버전 트리나 실패한 인덱싱이 남긴 파편으로 화면이
+    깨지지 않게, 필수 좌표(node_id·title·line_num)가 없는 노드는 통째로 건너뛴다.
+    """
+    if not tree:
+        return []
+    structure = tree.get("structure")
+    if not isinstance(structure, list):
+        return []
+
+    def walk(nodes: list[Any]) -> list[CatalogNode]:
+        out: list[CatalogNode] = []
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            node_id = n.get("node_id")
+            title = n.get("title")
+            line_num = n.get("line_num")
+            if not isinstance(node_id, str) or not isinstance(title, str):
+                continue
+            if not isinstance(line_num, int):
+                continue
+            summary = n.get("summary")
+            children = n.get("nodes")
+            out.append(
+                CatalogNode(
+                    node_id=node_id,
+                    title=title,
+                    line_num=line_num,
+                    summary=summary if isinstance(summary, str) else None,
+                    nodes=walk(children) if isinstance(children, list) else [],
+                )
+            )
+        return out
+
+    return walk(structure)
 
 
 def _count_nodes(tree: dict[str, Any] | None) -> int | None:
@@ -744,6 +940,7 @@ __all__ = [
     "IndexableVerdict",
     "WikiServiceError",
     "WikiState",
+    "disable_for_public_revoke",
     "folder_scope",
     "get_all_users_group_id",
     "indexable",

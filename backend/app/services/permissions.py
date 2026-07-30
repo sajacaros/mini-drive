@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import bindparam, func, select, text
+from sqlalchemy import bindparam, delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -624,6 +624,119 @@ async def grant_permission(
     await session.commit()
     await _publish_permission_event(file, actor.id)
     return await _get_direct_permission(session, file_id, group_id)
+
+
+async def grant_permission_bulk(
+    session: AsyncSession,
+    actor: User,
+    file_ids: list[int],
+    group_id: int,
+    permission: GroupPermission,
+    *,
+    audit_detail: dict[str, Any] | None = None,
+) -> int:
+    """여러 파일에 같은 그룹 권한을 한 번에 부여한다. 반환: 부여한 개수.
+
+    위키 폴더 발행 전용이다(`services/wiki.py`). `grant_permission` 을 파일마다 부르면
+    커밋·캐시 무효화·SSE 발행이 **파일 수만큼** 일어난다. 폴더 하나에 수백 건이 걸리므로
+    왕복을 한 번으로 접는다 — 감사 로그도 건별이 아니라 묶음 한 줄이다.
+
+    **권한 판정은 호출자 책임이다.** `_require_manage` 를 부르지 않는다. 유일한 호출자인
+    위키가 `folder_scope` 에서 **파일마다** 발행 권한을 이미 판정하고(그 판정이 폴더가 아니라
+    파일 단위여야 하는 이유는 spec/wiki-index.md 「폴더 발행 범위」), 통과한 것만 여기 넘긴다.
+    다른 곳에서 쓰려면 그 판정을 먼저 하거나 `grant_permission` 을 써라.
+
+    `inherit_to_children` 은 항상 FALSE 다. 위키는 대상 파일에만 공개를 걸고 폴더에는 걸지
+    않는다 — 폴더에 상속 부여를 하면 인덱싱 대상이 아닌 PDF·이미지까지 열리고, 소유자가
+    파일에서 위키를 꺼도 공개가 상속으로 남는다(spec 「공개는 폴더가 아니라 대상 파일에 건다」).
+    """
+    if not file_ids:
+        return 0
+
+    group = await session.get(Group, group_id)
+    if group is None or not group.is_active:
+        raise PermissionServiceError(404, "그룹을 찾을 수 없습니다.")
+
+    stmt = pg_insert(FileGroupPermission).values(
+        [
+            {
+                "file_id": fid,
+                "group_id": group_id,
+                "permission": permission.value,
+                "inherit_to_children": False,
+                "expires_at": None,
+                "granted_by": actor.id,
+            }
+            for fid in file_ids
+        ]
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_file_group_permissions_file_group",
+        set_={
+            "permission": stmt.excluded.permission,
+            "inherit_to_children": stmt.excluded.inherit_to_children,
+            "expires_at": stmt.excluded.expires_at,
+            "granted_by": stmt.excluded.granted_by,
+            "granted_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+    _record_audit(
+        session,
+        actor.id,
+        "permission.grant_bulk",
+        file_ids[0],
+        {
+            "group_id": group_id,
+            "permission": permission.value,
+            "file_count": len(file_ids),
+            **(audit_detail or {}),
+        },
+    )
+    await invalidate_group_members(session, group_id)
+    await session.commit()
+    return len(file_ids)
+
+
+async def revoke_permission_bulk(
+    session: AsyncSession,
+    actor: User,
+    file_ids: list[int],
+    group_id: int,
+    *,
+    audit_detail: dict[str, Any] | None = None,
+) -> int:
+    """여러 파일에서 같은 그룹 권한을 한 번에 회수한다. 반환: 실제로 지운 개수.
+
+    `grant_permission_bulk` 의 짝이다. 없는 부여가 섞여 있어도 오류가 아니다 — 위키를 끄는
+    경로는 "공개였는지" 를 따지지 않고 부르므로, 없으면 지울 것이 없는 것으로 본다.
+    권한 판정은 같은 이유로 호출자 책임이다.
+    """
+    if not file_ids:
+        return 0
+
+    result = await session.execute(
+        delete(FileGroupPermission).where(
+            FileGroupPermission.file_id.in_(file_ids),
+            FileGroupPermission.group_id == group_id,
+        )
+    )
+    deleted = result.rowcount or 0
+    if deleted:
+        _record_audit(
+            session,
+            actor.id,
+            "permission.revoke_bulk",
+            file_ids[0],
+            {
+                "group_id": group_id,
+                "file_count": deleted,
+                **(audit_detail or {}),
+            },
+        )
+    await invalidate_group_members(session, group_id)
+    await session.commit()
+    return deleted
 
 
 async def update_permission(
