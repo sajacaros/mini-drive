@@ -42,6 +42,14 @@ export function formatPercent(ratio: number): string {
 }
 
 /**
+ * 폴더 경로("문서함 / 규정")를 화면 문구로. 최상위 항목은 경로가 빈 문자열로 오는데,
+ * 그대로 빈 칸을 두면 "위치를 못 받아왔나"로 읽힌다 — 최상위에 있다는 것도 위치다.
+ */
+export function folderPathLabel(path: string): string {
+  return path.trim() || "최상위";
+}
+
+/**
  * 뒤에 붙일 "로/으로" 조사를 고른다. 받침이 없거나 받침이 ㄹ이면 "로", 그 외에는 "으로".
  *
  * 폴더 이름은 사용자가 정하므로 "내 드라이브"(받침 없음)와 "사진"(받침 ㄴ)이 같은 버튼 문구에

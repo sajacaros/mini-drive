@@ -7,6 +7,13 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
+  /*
+    실행 동안만 백엔드 rate limiting 을 끄고 끝나면 원복한다(e2e/support/stack.ts).
+    한 계정이 짧은 시간에 업로드를 반복하는 테스트가 여럿이라 분당 한도(10)에 걸리는데,
+    걸리면 429 가 "완료 토스트 없음"으로 나타나 코드 회귀와 구분되지 않는다.
+  */
+  globalSetup: "./e2e/global-setup.ts",
+  globalTeardown: "./e2e/global-teardown.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,

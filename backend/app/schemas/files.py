@@ -52,6 +52,13 @@ class FileListResponse(BaseModel):
     total: int
     page: int
     size: int
+    # 파생 필드 (spec/wiki-index.md) — **지금 보고 있는 폴더**의 유효 위키 여부.
+    # 업로드 경고에 쓴다. 위키 켜진 폴더에 올리면 그 순간 전사 공개되므로 올리기 전에 알아야 한다.
+    #
+    # 항목이 아니라 목록에 붙는 이유: 경고를 봐야 하는 사람이 `write` 권한자인데, 그에게는
+    # 위키 상태 API(`/files/{id}/wiki`)가 404 다(발행 권한자만 본다). 폴더를 열 수 있으면
+    # 그 폴더가 무엇을 하는 곳인지도 알아야 한다.
+    wiki_enabled: bool = False
 
 
 class FolderCreateRequest(BaseModel):

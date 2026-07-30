@@ -21,7 +21,7 @@ import { Modal } from "./Modal";
 import { Badge, LoadingState, Spinner } from "./ui";
 import { useToast } from "./Toast";
 import { formatDateTime } from "@/lib/format";
-import { permissionLabel, permissionTone } from "@/lib/labels";
+import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 
 /**
  * 권한 수준별 허용 범위 — 부여 화면에서 그대로 보여준다.
@@ -117,6 +117,26 @@ export function PermissionModal({
 
   const grantedGroupIds = new Set(direct.map((d) => d.group_id));
 
+  /**
+   * 그룹별 상속 권한 — "여기서는 낮출 수 없다" 안내의 근거다.
+   *
+   * 유효 권한은 조상과 자신의 부여 중 **최고 수준**이므로(백엔드 resolve_effective_permission)
+   * 상속보다 낮은 직접 부여는 유효 권한을 바꾸지 못한다. 그래서 백엔드가 409 로 **거부한다**.
+   * 여기 경고는 그 거부를 누르기 전에 미리 알려주는 것이고, 눌러서 실패하면 백엔드가 보낸
+   * 사유(상속 출처 + 해결 방법)가 토스트로 뜬다. 좁히는 방법은 상속 출처 폴더에서 '하위 상속'
+   * 끄기 하나뿐이라 두 문구가 같은 곳을 가리킨다.
+   */
+  const inheritedByGroup = new Map(inherited.map((i) => [i.group_id, i]));
+
+  /** level 이 그 그룹의 상속 권한에 가려 무의미한가 — 가려지면 가리는 상속 항목을 돌려준다. */
+  const overriddenBy = (
+    groupId: number,
+    level: GroupPermissionLevel,
+  ): InheritedPermission | null => {
+    const i = inheritedByGroup.get(groupId);
+    return i && !permissionCovers(level, i.permission as GroupPermissionLevel) ? i : null;
+  };
+
   const onGrant = async () => {
     if (!file) return;
     const gid = Number(groupId);
@@ -153,7 +173,9 @@ export function PermissionModal({
       await updatePermission(file.id, d.group_id, patch);
       await load();
     } catch (err) {
+      // 상속보다 낮추면 백엔드가 409 로 거부한다 — 사유(상속 출처·해결 방법)가 그대로 실려 온다.
       toast.error(extractErrorMessage(err, "권한 수정에 실패했습니다."));
+      await load(); // 실패한 선택이 화면에 남지 않도록 서버 상태로 되돌린다.
     } finally {
       setBusyGroup(null);
     }
@@ -256,6 +278,20 @@ export function PermissionModal({
                           <span className="text-muted">{formatDateTime(d.expires_at)} 만료</span>
                         )}
                       </div>
+                      {(() => {
+                        const shadow = overriddenBy(
+                          d.group_id,
+                          d.permission as GroupPermissionLevel,
+                        );
+                        return shadow ? (
+                          <p className="mt-2 text-xs" style={{ color: "var(--warning)" }}>
+                            {shadow.source_file_name}에서{" "}
+                            <b>{permissionLabel(shadow.permission)}</b> 권한을 상속받고 있어 이
+                            항목만 낮추는 것은 <b>거부됩니다.</b> 좁히려면 그 폴더에서 '하위 상속'을
+                            끄고 필요한 항목에만 개별 부여하세요.
+                          </p>
+                        ) : null;
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -358,6 +394,17 @@ export function PermissionModal({
                         영구 삭제도 할 수 있습니다. 공동 관리자에게만 부여하세요.
                       </p>
                     )}
+                    {(() => {
+                      const shadow = groupId ? overriddenBy(Number(groupId), level) : null;
+                      return shadow ? (
+                        <p className="mt-1.5 text-xs" style={{ color: "var(--warning)" }}>
+                          이 그룹은 {shadow.source_file_name}에서{" "}
+                          <b>{permissionLabel(shadow.permission)}</b> 권한을 이미 상속받고 있습니다.
+                          더 낮은 수준으로는 <b>부여할 수 없습니다</b> — 좁히려면 그 폴더에서 '하위
+                          상속'을 끄세요.
+                        </p>
+                      ) : null;
+                    })()}
                   </div>
                   <div>
                     <label className="label" htmlFor="permExpires">

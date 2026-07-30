@@ -413,6 +413,10 @@ async def list_files(
     """폴더 내 항목 목록 (폴더 우선 + 이름순, 페이지네이션) — PRD 6.2.
 
     foldersOnly=true 면 하위 폴더만 반환한다(이동 대상 선택기).
+
+    `wiki_enabled` 는 **이 폴더**의 유효 위키 여부다 — 여기 올리는 md·html 이 곧 전사 공개되므로
+    화면이 올리기 전에 경고할 수 있어야 한다(spec/wiki-index.md 「폴더 상속 사고 경로」).
+    루트(parent_id 없음)는 파일 행이 없어 항상 꺼짐이다.
     """
     try:
         items, total = await files_service.list_children(
@@ -423,7 +427,13 @@ async def list_files(
     await favorites_service.annotate_is_favorite(session, user, items)
     await files_service.annotate_listing_meta(session, user, items)
     responses = [FileResponse.model_validate(f) for f in items]
-    return FileListResponse(items=responses, total=total, page=page, size=size)
+    wiki_enabled = (
+        parent_id is not None
+        and (await wiki_service.resolve_wiki_state(session, parent_id)).enabled
+    )
+    return FileListResponse(
+        items=responses, total=total, page=page, size=size, wiki_enabled=wiki_enabled
+    )
 
 
 @router.post("", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
@@ -882,6 +892,9 @@ async def grant_permission(
 
     read/write/manage 모두 부여할 수 있다. manage 는 받는 쪽이 이 항목을 **다른 그룹에도 열어줄
     수 있는** 권한 위임이므로(+ 영구 삭제), 부여 UI 에서 그 범위를 명시한다.
+
+    단, 그 그룹이 상위 폴더에서 상속받는 수준보다 **낮은** 부여는 409 로 거부한다. 유효 권한이
+    누적이라 저장돼도 아무 일이 일어나지 않기 때문이다(spec/permissions.md).
     """
     try:
         row = await permissions_service.grant_permission(
@@ -950,7 +963,8 @@ async def update_permission(
 ) -> DirectPermissionResponse:
     """그룹 권한 수정 (PRD 6.5). permission/inherit_to_children/expires_at 부분 갱신.
 
-    부여와 같은 정책 — read/write/manage 간 승격·강등 모두 허용한다.
+    부여와 같은 정책 — 승격은 자유롭지만, 상속받는 수준보다 낮추는 강등은 409 로 거부한다
+    (spec/permissions.md 「상속보다 낮추기는 거부한다」).
     """
     try:
         row = await permissions_service.update_permission(
@@ -974,11 +988,20 @@ async def update_permission(
 async def revoke_permission(
     file_id: int, group_id: int, user: CurrentUser, session: DbSession
 ) -> Response:
-    """그룹 권한 회수 (PRD 6.5). 소유자/manage 권한자만."""
+    """그룹 권한 회수 (PRD 6.5). 소유자/manage 권한자만.
+
+    회수 대상이 `@전사` 이고 그 파일의 위키가 켜져 있으면 **위키도 함께 끈다.** 위키를 켜는 것이
+    곧 `@전사 read` 부여이므로(spec/wiki-index.md 「왜 스위치가 하나인가」), 한쪽만 풀리면
+    "공개는 껐는데 위키가 계속 답하는" 상태가 된다. 그 상태는 카탈로그·질의가 권한 판정을
+    생략하는 근거를 무너뜨린다.
+    """
     try:
         await permissions_service.revoke_permission(session, user, file_id, group_id)
+        await wiki_service.disable_for_public_revoke(session, user, file_id, group_id)
     except PermissionServiceError as exc:
         raise _perm_http_error(exc) from exc
+    except WikiServiceError as exc:
+        raise _wiki_http_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1000,7 +1023,6 @@ def _wiki_state_response(overview: wiki_service.WikiOverview) -> WikiStateRespon
         enabled=overview.state.enabled,
         explicit=overview.state.explicit,
         source_file_id=overview.state.source_file_id,
-        public=overview.public,
         indexable=overview.verdict.ok,
         reason=overview.verdict.reason,
         status=overview.status.value,
@@ -1035,20 +1057,20 @@ async def get_wiki(
 async def set_wiki(
     file_id: int, payload: WikiSetRequest, user: CurrentUser, session: DbSession
 ) -> WikiStateResponse:
-    """위키 인덱싱 on/off + 전사 공개 (spec/wiki-index.md). 소유자·manage 만.
+    """위키 on/off (spec/wiki-index.md). 소유자·manage 만.
+
+    켜면 인덱싱과 전사 공개가 **함께** 걸린다 — 축은 하나다.
 
     `enabled` 는 null 이 '상속으로 되돌리기'라는 뜻이라 '생략'과 구분해야 한다 —
-    본문에 없으면 인덱싱 설정을 건드리지 않는다.
+    본문에 없으면 아무것도 건드리지 않는다.
     """
-    sent = payload.model_fields_set
     try:
         await wiki_service.set_wiki(
             session,
             user,
             file_id,
             enabled=payload.enabled,
-            enabled_set="enabled" in sent,
-            public=payload.public if "public" in sent else None,
+            enabled_set="enabled" in payload.model_fields_set,
         )
         overview = await wiki_service.get_overview(session, user, file_id)
     except WikiServiceError as exc:

@@ -2,11 +2,10 @@
 
 검증 축:
   1. 지원 형식(md/html)만 토글이 켜지고, 그 외는 400 + 이유.
-  2. 인덱싱과 전사 공개는 **독립**이다 — (끔, 공개) 조합이 정상 동작한다.
+  2. **축은 하나다** — 켜면 인덱싱과 전사 공개가 함께 걸리고, 끄면 함께 풀린다.
   3. 폴더 토글은 하위로 상속되고, 파일의 명시 FALSE 가 상속을 이긴다(소유자 탈출구).
   4. 폴더 scope 는 제외 사유별 개수를 돌려준다(확인 문구용).
   5. 발행 권한 없는 사용자에게는 404 (존재 은닉).
-  6. 전사 공개를 켜면 다른 사용자가 즉시 접근한다.
 """
 
 from __future__ import annotations
@@ -96,27 +95,36 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert body["source_file_id"] == md_id, body
         _ok("md — 켜기 성공 (explicit=true, 출처=자기 자신)")
 
-        # 2. 인덱싱과 전사 공개는 독립 — (끔, 공개) 조합
-        r = await c.put(
-            f"/api/files/{pdf_id}/wiki", headers=alice_h, json={"public": True}
-        )
+        # 2. 축은 하나다 (spec/wiki-index.md 「왜 스위치가 하나인가」).
+        #    md 를 켠 것 말고는 아무 권한도 준 적이 없는데 bob 이 즉시 열람해야 한다 —
+        #    별도의 공개 스위치를 한 번 더 거쳐야 했던 시절이 실측에서 467건 중 2건만
+        #    공개된 상태를 만들었고, 그래서 축을 합쳤다.
+        r = await c.get(f"/api/files/{md_id}", headers=bob_h)
         assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["enabled"] is False and body["public"] is True, body
-        _ok("(인덱싱 끔, 전사 공개 켬) 조합 — PDF 도 전사 공유 가능")
+        _ok("켜기 = 전사 공개 — 권한 부여 없이 다른 사용자가 즉시 접근")
 
-        # 6. 전사 공개 → bob 이 즉시 접근
-        r = await c.get(f"/api/files/{pdf_id}", headers=bob_h)
-        assert r.status_code == 200, r.text
-        _ok("전사 공개 → 다른 사용자가 즉시 접근")
-
+        # 끄면 공개도 **함께** 풀린다. 한쪽만 풀리면 인덱스에서 빠진 문서가 계속 열려 있거나
+        # (공개 잔류) 카탈로그가 권한 판정 없이 도는 근거가 깨진다.
         r = await c.put(
-            f"/api/files/{pdf_id}/wiki", headers=alice_h, json={"public": False}
+            f"/api/files/{md_id}/wiki", headers=alice_h, json={"enabled": False}
         )
-        assert r.status_code == 200 and r.json()["public"] is False, r.text
+        assert r.status_code == 200 and r.json()["enabled"] is False, r.text
+        r = await c.get(f"/api/files/{md_id}", headers=bob_h)
+        assert r.status_code == 404, r.text
+        _ok("끄기 → 전사 공개도 함께 풀려 즉시 차단")
+
+        # 뒤 단계(폴더 상속·scope)를 위해 상속 상태로 돌려 둔다 — 명시 OFF 로 남기면 폴더를
+        # 켜도 되살아나지 않아(skipped_by_optout) scope 의 대상 건수가 달라진다.
+        r = await c.put(
+            f"/api/files/{md_id}/wiki", headers=alice_h, json={"enabled": None}
+        )
+        assert r.status_code == 200 and r.json()["explicit"] is False, r.text
+
+        # PDF 는 애초에 켤 수 없으므로(1번) 전사 공개에 이르는 경로 자체가 없다 — 축을 합친
+        # 뒤로는 "인덱싱은 끄고 공개만" 하는 조합이 존재하지 않는다.
         r = await c.get(f"/api/files/{pdf_id}", headers=bob_h)
         assert r.status_code == 404, r.text
-        _ok("전사 공개 해제 → 즉시 차단")
+        _ok("지원 형식이 아닌 파일은 전사 공개에 이르는 경로가 없다")
 
         # 3. 폴더 토글 상속 + 파일 명시 FALSE 가 상속을 이긴다
         r = await c.put(

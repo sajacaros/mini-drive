@@ -15,8 +15,12 @@ x-backend-env: &backend-env
   JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
   REDIS_URL: redis://redis:6379/0
   # rate limiting 토글 — 기본 true(운영 안전). E2E 는 한 계정이 짧은 시간에 다수
-  # 업로드/로그인을 수행해 분당 한도에 걸리므로, 테스트 실행 시 RATE_LIMIT_ENABLED=false 로
-  # 기동해 비활성화한다 (config.py: "테스트 편의" 스위치).
+  # 업로드/로그인을 수행해 분당 한도에 걸리므로 false 로 기동해야 한다
+  # (config.py: "테스트 편의" 스위치).
+  #
+  # **손으로 바꾸지 않는다.** playwright 의 globalSetup 이 실행 동안만 이 값을 false 로 주고
+  # backend 를 다시 띄운 뒤, 끝나면 원래 값으로 되돌린다(frontend/e2e/support/stack.ts).
+  # 수동으로 끄면 되돌리는 것을 잊어 스택이 약해진 채로 남는다.
   RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
   # 휴지통 보존 기간 (spec/trash-retention-purge.md). 기본 7일 = 설정 없이도 자동 정리가 켜진다.
   # 끄려면 TRASH_RETENTION_DAYS=0 을 명시한다. 기존 스택을 업그레이드한다면 첫 회차가 예전

@@ -9,7 +9,8 @@
   3. 버전업 → 재인덱싱 예약 → 트리의 version 이 따라 올라간다.
   4. 토글 OFF → 대기 작업이 취소된다.
   5. 인덱싱은 멱등하다 — 두 번 돌려도 결과가 같다.
-  6. 문서 목록에 권한이 걸린다 — 접근 못 하는 사람에게는 보이지 않는다.
+  6. 전사 위키 불변식 — 켜면 별도 공개 스위치 없이 타인도 보고, `@전사 read` 를 회수하면
+     위키도 함께 꺼진다. 목록은 사람마다 달라지지 않는다.
 """
 
 from __future__ import annotations
@@ -59,6 +60,11 @@ HTML_DOC = """<!DOCTYPE html><html><head><title>운영 메모</title>
 
 def _ok(msg: str) -> None:
     print(f"  [PASS] {msg}")
+
+
+def _count_tree(nodes: list[dict]) -> int:
+    """카탈로그 응답의 절 수 — 목록의 node_count 와 같아야 한다(같은 트리에서 나온다)."""
+    return sum(1 + _count_tree(n["nodes"]) for n in nodes)
 
 
 async def _reset() -> None:
@@ -130,6 +136,8 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert r.json()["total"] == 2, r.text
         assert docs["deploy.md"]["status"] == "ready", docs
         assert docs["deploy.md"]["node_count"] == 3, docs  # 배포 가이드 + 사전 준비 + 롤백
+        # 위치 — 소유자 드라이브 안에서의 폴더 경로. 루트 이름('root')은 들어가지 않는다.
+        assert docs["deploy.md"]["location"] == "문서함", docs
         _ok(f"md 트리 — 노드 {docs['deploy.md']['node_count']}개, status=ready")
 
         # 2. HTML 도 같은 경로로 (style 은 걷히고 h1/h2 가 노드가 된다)
@@ -293,21 +301,102 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
             assert doc.status == "ready", doc.status
         _ok("다시 켜면 복구된 문서도 질의 대상으로 돌아온다")
 
-        # 6. 문서 목록 권한 — bob 은 접근 권한이 없어 아무것도 못 본다
+        # 6. 전사 위키 — 켜는 것이 곧 전사 공개다. bob 은 아무 권한을 받지 않았는데도
+        #    켜진 문서를 목록에서 보고 카탈로그를 열 수 있어야 한다. 별도의 공개 스위치를
+        #    거쳐야 보인다면, 실측에서 467건 중 2건만 공개됐던 그 상태로 되돌아간다
+        #    (spec/wiki-index.md 「왜 스위치가 하나인가」).
         r = await c.get("/api/wiki/documents", headers=bob_h)
-        assert r.status_code == 200 and r.json()["total"] == 0, r.text
-        r = await c.put(
-            f"/api/files/{folder}/wiki", headers=alice_h, json={"public": True}
-        )
         assert r.status_code == 200, r.text
-        r = await c.get("/api/wiki/documents", headers=bob_h)
-        # 목록은 상태와 무관하게 **접근 가능한 위키 문서 전부**를 보여준다 — 사용자가 무엇이
-        # 왜 빠졌는지(disabled) 알 수 있어야 하기 때문이다. 질의 대상은 ready/stale 뿐이다.
+        # 목록은 상태와 무관하게 **위키 문서 전부**를 보여준다 — 사용자가 무엇이 왜
+        # 빠졌는지(disabled) 알 수 있어야 하기 때문이다. 질의 대상은 ready/stale 뿐이다.
         items = {d["name"]: d["status"] for d in r.json()["items"]}
-        assert r.json()["total"] == 4, r.text
+        # 5건이다 — 예전에는 권한 필터 때문에 bob 에게 4건이었다(꺼진 폴더로 옮겨진
+        # 이동대상.md 가 빠졌다). 목록이 사람마다 달라지지 않는 것이 이 개정의 결과다.
+        assert r.json()["total"] == 5, r.text
         assert items["deploy.md"] == "ready" and items["휴지통대상.md"] == "ready", items
         assert items["ops.html"] == "disabled" and items["신규.txt"] == "disabled", items
-        _ok(f"문서 목록 권한 — 전사 공개 전 0건 → 공개 후 4건 {items}")
+        assert items["이동대상.md"] == "disabled", items
+        _ok(f"전사 위키 — 공개 스위치 없이 타인도 5건을 본다 {items}")
+
+        # 6-1. 위치도 사람마다 다르지 않다. bob 은 이 문서들에 아무 권한이 없고 자기 드라이브에
+        #      있지도 않은데, 드라이브 목록처럼 "내 드라이브" 접두사를 붙이면 그 자리에서
+        #      거짓말이 된다. 소유 여부로 접두사를 가르면 같은 문서가 사람마다 다른 위치로
+        #      보이고, 그러면 "방금 켠 그 문서"를 위치로 지목할 수 없다.
+        # 소유자는 **파일 주인**이지 요청자가 아니다 — bob 이 물었는데 bob 이 나오면
+        # 조인이 요청자에 걸린 것이고, 그러면 목록이 사람마다 달라진다.
+        owners = {d["name"]: d["owner_display_name"] for d in r.json()["items"]}
+        assert owners["deploy.md"], owners
+        assert owners["deploy.md"] != BOB["display_name"], owners
+        locs = {d["name"]: d["location"] for d in r.json()["items"]}
+        assert not any(loc.startswith("내 드라이브") for loc in locs.values()), locs
+        assert locs["deploy.md"] == "문서함", locs
+        # 중첩 폴더는 최상위부터 이어 붙인다(옮겨진 문서라 경로도 따라 바뀌어 있어야 한다).
+        assert locs["이동대상.md"] == "위키없는폴더 / 하위", locs
+        _ok(f"위치 표기 — 보는 사람과 무관하게 같은 경로 {locs['이동대상.md']!r}")
+
+        # 업로드 경고의 재료 — 목록 응답이 "이 폴더가 전사 위키인가"를 실어야 한다.
+        # 이 플래그가 항목이 아니라 목록에 붙는 이유는 경고를 봐야 하는 사람이 write 권한자라서다
+        # (그에게는 위키 상태 API 가 404 다). 그래서 **bob 으로** 확인한다.
+        r = await c.get("/api/files", headers=alice_h, params={"parentId": folder})
+        assert r.status_code == 200 and r.json()["wiki_enabled"] is True, r.text
+        r = await c.get("/api/files", headers=alice_h, params={"parentId": off_folder})
+        assert r.status_code == 200 and r.json()["wiki_enabled"] is False, r.text
+        # 루트는 파일 행이 없어 항상 꺼짐이다 — 상속 판정이 조상 없이도 안전해야 한다.
+        r = await c.get("/api/files", headers=bob_h)
+        assert r.status_code == 200 and r.json()["wiki_enabled"] is False, r.text
+        _ok("업로드 경고 — 목록 응답의 wiki_enabled 가 폴더별로 갈린다 (루트는 꺼짐)")
+
+        # 불변식: 인덱싱 켜짐 ⟺ 그 파일에 @전사 read 직접 부여. 폴더에 상속 부여가 아니라
+        # 대상 파일마다 걸려야 한다 — 폴더에 걸면 인덱싱 대상이 아닌 파일까지 공개된다.
+        async with SessionFactory() as session:
+            assert await wiki_service.is_public(session, md_id), "켠 문서가 비공개다"
+            assert not await wiki_service.is_public(session, folder), "폴더에 공개가 걸렸다"
+            # neo 는 .txt 로 이름이 바뀌어 색인 대상 밖이 된 파일이다.
+            assert not await wiki_service.is_public(session, neo), "대상 아닌 파일이 공개됐다"
+        _ok("불변식 — 공개는 대상 파일에만, 폴더·비대상 파일에는 걸리지 않는다")
+
+        # 반대 방향 — 권한 화면에서 @전사 read 를 회수하면 위키도 함께 꺼져야 한다.
+        # 한쪽만 풀리면 카탈로그·질의가 권한 판정을 생략하는 근거가 그 문서에서 무너진다.
+        async with SessionFactory() as session:
+            all_users_gid = await wiki_service.get_all_users_group_id(session)
+        r = await c.delete(
+            f"/api/files/{md_id}/permissions/{all_users_gid}", headers=alice_h
+        )
+        assert r.status_code == 204, r.text
+        async with SessionFactory() as session:
+            doc = await wiki_service.get_document(session, md_id)
+            assert doc.status == "disabled", doc.status
+            assert not await wiki_service.is_public(session, md_id)
+        _ok("불변식 — @전사 read 회수가 위키를 함께 끈다")
+
+        # 다시 켜서 이후 단계(카탈로그)가 쓸 상태로 되돌린다. 트리가 그대로라 비용 0 이다.
+        r = await c.put(
+            f"/api/files/{md_id}/wiki", headers=alice_h, json={"enabled": True}
+        )
+        assert r.status_code == 200, r.text
+        async with SessionFactory() as session:
+            assert (await wiki_service.get_document(session, md_id)).status == "ready"
+            assert await wiki_service.is_public(session, md_id)
+        _ok("다시 켜면 트리 그대로 ready + 공개 복구")
+
+        # 7. 카탈로그 — 목록에서 문서를 눌렀을 때 보이는 절 트리. 질의가 절을 고를 때 보는 것과
+        #    같은 것(title+summary)을 보여줘야 한다.
+        r2 = await c.get(f"/api/wiki/documents/{md_id}", headers=bob_h)
+        assert r2.status_code == 200, r2.text
+        catalog = r2.json()
+        assert catalog["status"] == "ready" and catalog["nodes"], catalog
+        # 상세도 목록과 같은 위치를 말해야 한다 — 목록에서 눌러 들어온 화면이라 어긋나면 안 된다.
+        assert catalog["location"] == "문서함", catalog
+        root = catalog["nodes"][0]
+        assert root["node_id"] and root["title"] and root["line_num"] >= 1, root
+        # 노드 수는 목록의 node_count 와 같은 트리에서 나온다 — 두 화면이 어긋나면 안 된다.
+        assert catalog["node_count"] == _count_tree(catalog["nodes"]), catalog
+        _ok(f"카탈로그 — 절 {catalog['node_count']}개, 최상위 '{root['title']}'")
+
+        # 위키 문서가 아닌 것(폴더)은 카탈로그도 없다 — 목록에 없는 것은 id 로도 열리지 않는다.
+        r2 = await c.get(f"/api/wiki/documents/{folder}", headers=alice_h)
+        assert r2.status_code == 404, r2.text
+        _ok("카탈로그 — 위키 문서가 아닌 대상은 404")
 
     await engine.dispose()
     print("\n위키 인덱싱 파이프라인 통합 시나리오 전체 통과.")

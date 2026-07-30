@@ -26,6 +26,8 @@ import { TodoMonthPage } from "@/pages/TodoMonthPage";
 import { TodoPage } from "@/pages/TodoPage";
 import { TodoReportsPage } from "@/pages/TodoReportsPage";
 import { TrashPage } from "@/pages/TrashPage";
+import { WikiCatalogDetailPage } from "@/pages/WikiCatalogDetailPage";
+import { WikiCatalogPage } from "@/pages/WikiCatalogPage";
 import { WikiPage } from "@/pages/WikiPage";
 import { useAuthStore } from "@/store/auth";
 
@@ -81,6 +83,8 @@ function App() {
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/shares" element={<SharesPage />} />
             <Route path="/wiki" element={<WikiPage />} />
+            <Route path="/wiki/catalog" element={<WikiCatalogPage />} />
+            <Route path="/wiki/catalog/:fileId" element={<WikiCatalogDetailPage />} />
             {/* "공유됨"은 내 드라이브 > 공유 가상 폴더로 통합됨 — 기존 경로는 홈으로 리다이렉트. */}
             <Route path="/shared" element={<Navigate to="/" replace />} />
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />

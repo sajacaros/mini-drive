@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { loginAsAdmin } from "../support/auth";
 import { existsNow } from "../support/locators";
+import { storageUsed } from "../support/storage";
 
 test.describe("실시간 목록 갱신 (SSE)", () => {
   test("업로드 후 목록이 재조회 없이 즉시 갱신된다", async ({ page }) => {
@@ -25,8 +26,9 @@ test.describe("실시간 목록 갱신 (SSE)", () => {
       }
 
       // 2. 테스트 전용 소스 파일(예: 이 테스트가 생성한 임시 텍스트 파일)을 '업로드' 버튼으로 선택
-      const storageText = page.getByText(/\/ 10\.0 GB/);
-      const beforeStorage = await storageText.textContent();
+      // 용량은 **API 값(바이트)**으로 잡는다. 사이드바 텍스트는 세 자리로 반올림돼서, 계정에
+      // 수백 MB 가 쌓인 상태에서 수십 바이트를 올리면 표시가 그대로다(support/storage.ts).
+      const beforeStorage = await storageUsed(page);
 
       const fileChooserPromise = page.waitForEvent("filechooser");
       await page.getByRole("button", { name: "업로드", exact: true }).click();
@@ -39,8 +41,11 @@ test.describe("실시간 목록 갱신 (SSE)", () => {
       await expect(page.getByText(`${fileName}: 업로드를 완료했습니다.`)).toBeVisible();
       // expect: 파일 선택 즉시(수동 새로고침·재방문 없이) 목록 테이블에 새 행이 나타난다
       await expect(page.getByRole("button", { name: fileName })).toBeVisible();
-      // expect: 사이드바 저장 용량 텍스트(예: "0 B / 10.0 GB")가 증가한다
-      await expect(storageText).not.toHaveText(beforeStorage ?? "");
+      // expect: 사용 용량이 올린 파일 크기만큼 증가한다
+      const uploadedBytes = fs.statSync(filePath).size;
+      await expect
+        .poll(() => storageUsed(page), { message: "storage_used 가 증가하지 않았다" })
+        .toBe(beforeStorage + uploadedBytes);
 
       // 3. 업로드한 파일을 삭제(휴지통 이동) 후 휴지통에서 영구 삭제
       const row = page.getByRole("row", { name: namePattern });

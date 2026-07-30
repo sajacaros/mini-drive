@@ -16,7 +16,7 @@ Phase 1 결정: v1 스냅샷은 별도 복사본을 만들지 않고 file_versio
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -33,7 +33,7 @@ from app.services import file_events as file_events_service
 from app.services import permissions as permissions_service
 from app.services import previews as previews_service
 from app.services import thumbnails as thumbnails_service
-from app.services.groups import get_user_group_ids
+from app.services.groups import get_user_group_ids, system_group_ids
 from app.services.previews import PreviewPlan
 from app.services.storage import StorageService
 
@@ -114,18 +114,20 @@ async def get_file(session: AsyncSession, file_id: int) -> File | None:
     return await session.get(File, file_id)
 
 
-async def annotate_location(
-    session: AsyncSession, user: User, files: list[File]
-) -> None:
-    """각 파일에 조상 폴더 경로 문자열 `location` 을 in-place 부착한다(최근·즐겨찾기 위치 표기용).
+async def folder_name_chains(
+    session: AsyncSession, folder_ids: Iterable[int]
+) -> dict[int, list[str]]:
+    """폴더 id -> 루트 **바로 아래**부터 그 폴더까지의 폴더명 목록.
 
-    경로는 최상위부터 직속 부모까지 폴더명을 " / " 로 이은 것이다. 루트 폴더(name='root')는
-    실제 이름 대신 소유 여부에 따라 "내 드라이브"(내 파일) 또는 "내 드라이브 / 공유"(타인 공유)로
-    대체한다 — 통합 드라이브에서 "공유됨"이 내 드라이브 아래 가상 "공유" 폴더로 합쳐지므로 위치
-    문자열도 이에 맞춘다. 부모 체인은 필요한 폴더만 배치로 모아 조회하므로(레벨당 IN 1회) N+1 회피.
+    루트 폴더(parent 가 없는 것)의 이름은 넣지 않는다 — 저장된 이름은 'root' 이고, 그 자리를
+    뭐라 부를지는 화면마다 다르다(내 드라이브 / 소유자의 드라이브 …). 접두사를 붙이는 것은
+    부르는 쪽 몫이다.
+
+    부모 체인은 필요한 폴더만 레벨당 IN 1회로 모아 조회하므로 N+1 이 없다.
     """
+    ids = set(folder_ids)  # 제너레이터로 와도 두 번 돈다(조회 / 체인 조립)
     cache: dict[int, tuple[str, int | None]] = {}  # folder_id -> (name, parent_id)
-    need = {f.parent_folder_id for f in files if f.parent_folder_id is not None}
+    need = set(ids)
     while need:
         rows = (
             await session.execute(
@@ -142,16 +144,38 @@ async def annotate_location(
             if pid is not None and pid not in cache
         }
 
-    for f in files:
+    chains: dict[int, list[str]] = {}
+    for start in ids:
         names: list[str] = []
-        pid = f.parent_folder_id
+        pid: int | None = start
         while pid is not None and pid in cache:
             name, parent = cache[pid]
-            if parent is None:  # 루트 폴더 도달 — 실제 이름은 넣지 않고 접두사로 대체
+            if parent is None:  # 루트 폴더 도달 — 실제 이름은 넣지 않는다
                 break
             names.append(name)
             pid = parent
         names.reverse()
+        chains[start] = names
+    return chains
+
+
+async def annotate_location(
+    session: AsyncSession, user: User, files: list[File]
+) -> None:
+    """각 파일에 조상 폴더 경로 문자열 `location` 을 in-place 부착한다(최근·즐겨찾기 위치 표기용).
+
+    경로는 최상위부터 직속 부모까지 폴더명을 " / " 로 이은 것이다. 루트 폴더(name='root')는
+    실제 이름 대신 소유 여부에 따라 "내 드라이브"(내 파일) 또는 "내 드라이브 / 공유"(타인 공유)로
+    대체한다 — 통합 드라이브에서 "공유됨"이 내 드라이브 아래 가상 "공유" 폴더로 합쳐지므로 위치
+    문자열도 이에 맞춘다.
+    """
+    chains = await folder_name_chains(
+        session, {f.parent_folder_id for f in files if f.parent_folder_id is not None}
+    )
+
+    for f in files:
+        # 루트 직속이면 부모가 없다 — 접두사만 남는다.
+        names = [] if f.parent_folder_id is None else chains[f.parent_folder_id]
         prefix = "내 드라이브" if f.user_id == user.id else "내 드라이브 / 공유"
         f.location = " / ".join([prefix, *names])  # type: ignore[attr-defined]
 
@@ -244,7 +268,21 @@ async def annotate_listing_meta(
         directs_by_file.setdefault(fid, []).append((gid, perm, gname))
 
     # 공유받은 항목의 직접 부여 매칭에 쓸 내 활성 그룹 id (한 번만 조회).
-    user_group_ids = await get_user_group_ids(session, user.id)
+    #
+    # **시스템 그룹(`@전사`)은 여기서 뺀다** — 위키를 켜면 그 파일에 `@전사 read` 가 걸리는데,
+    # 그걸 '나에게 접근을 준 그룹'으로 세면 두 가지가 어긋난다(spec/wiki-index.md 「프런트」):
+    #   1) 그룹 칼럼이 "@전사" 를 말한다 — 이 파일을 나에게 공유한 것은 그 그룹이 아니고,
+    #      전 직원에게 열려 있다는 사실은 문서 카탈로그가 말할 몫이다.
+    #   2) read 짜리 부여가 **상속된 더 높은 권한을 가린다** — write 로 공유받은 폴더 안의
+    #      위키 문서가 목록에서 읽기 전용으로 보인다(API 는 쓰기를 허용하므로 화면만 어긋난다).
+    # 직접 부여 매칭과 상속 폴백이 **같은 목록**을 봐야 한다 — 한쪽만 걸러내면 폴백이 방금
+    # 걸러낸 행을 다시 집어온다(`get_effective_grant` 는 depth 0 = 파일 자신을 포함한다).
+    system_gids = await system_group_ids(session)
+    user_group_ids = [
+        gid
+        for gid in await get_user_group_ids(session, user.id)
+        if gid not in system_gids
+    ]
     user_group_id_set = set(user_group_ids)
 
     # 내가 소유한 폴더 하위의 타인 항목 — 소유 경로로 전권을 갖는다(ensure_file_access 와 같은
@@ -268,7 +306,7 @@ async def annotate_listing_meta(
             f.permission = "manage"  # type: ignore[attr-defined]
             f.group_names = [gname for _, _, gname in directs]  # type: ignore[attr-defined]
             continue
-        # 공유받은 항목 — 파일 자체의 직접 부여(내 그룹) 우선.
+        # 공유받은 항목 — 파일 자체의 직접 부여(내 그룹) 우선. `@전사` 는 위에서 이미 빠졌다.
         level, names = permissions_service.select_direct_grant(directs, user_group_id_set)
         if level is None:
             # 직접 부여가 없으면 상속으로 접근하는 항목 — 항목당 상속 판정으로 폴백.

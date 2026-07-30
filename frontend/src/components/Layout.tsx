@@ -7,7 +7,7 @@
  *    다음 방문에도 유지된다.
  *  - 모바일(<md): 화면 밖 서랍(off-canvas). 기본은 닫힘이고 상단 바의 햄버거로 연다. 390px 화면에서
  *    240px 사이드바가 늘 자리를 차지하면 본문에 150px 밖에 남지 않아 표가 통째로 화면 밖으로 밀린다.
- *  - 섹션(드라이브/할 일/관리): 라벨 클릭으로 각각 접고 펼친다. 메뉴가 계속 늘어날 것을 대비한
+ *  - 섹션(드라이브/위키/할 일/관리): 라벨 클릭으로 각각 접고 펼친다. 메뉴가 계속 늘어날 것을 대비한
  *    구조로, 섹션별 선택 역시 localStorage 에 남는다. 기본은 모두 펼침.
  *
  * 높이 규약: 이 레이아웃이 h-screen 을 소유하고 각 페이지는 h-full 로 그 안을 채운다. 페이지가
@@ -25,6 +25,7 @@ import { ThemePicker } from "./ThemePicker";
 import {
   CalendarIcon,
   ChartIcon,
+  ChatIcon,
   CheckCircleIcon,
   ChevronDownIcon,
   DriveIcon,
@@ -32,6 +33,7 @@ import {
   HistoryIcon,
   BookIcon,
   LinkIcon,
+  ListIcon,
   LockIcon,
   MenuIcon,
   RepeatIcon,
@@ -195,7 +197,28 @@ export function Layout() {
             <NavItem to="/groups" icon={<UsersIcon />} label="그룹" collapsed={collapsed} />
             <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" collapsed={collapsed} />
             <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" collapsed={collapsed} />
-            <NavItem to="/wiki" icon={<BookIcon />} label="위키" collapsed={collapsed} />
+          </NavSection>
+
+          {/*
+            위키는 드라이브의 한 화면이 아니라 **자기 섹션**이다(spec/wiki-index.md 「프런트」).
+            질의와 인덱스 관리는 보는 사람도 보는 빈도도 다르다 — 질문은 매일, 무엇이 색인됐는지는
+            가끔이다. 앞으로 붙을 대화 히스토리·세션도 이 섹션 아래로 들어온다.
+          */}
+          <NavSection
+            icon={<BookIcon width={13} height={13} />}
+            label="위키"
+            collapsed={collapsed}
+            open={!closedSections["wiki"]}
+            onToggle={() => toggleSection("wiki")}
+            className="mt-4"
+          >
+            <NavItem to="/wiki" icon={<ChatIcon />} label="질문" collapsed={collapsed} end />
+            <NavItem
+              to="/wiki/catalog"
+              icon={<ListIcon />}
+              label="문서 카탈로그"
+              collapsed={collapsed}
+            />
           </NavSection>
 
           <NavSection

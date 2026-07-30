@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import bindparam, func, select, text
+from sqlalchemy import bindparam, delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -138,6 +138,8 @@ class AncestorGrantRow:
     permission: str
     inherit_to_children: bool
     expires_at: datetime | None
+    # 상속 목록 표시(select_inherited_grants)에만 쓴다 — 판정 경로는 출처 이름이 필요 없다.
+    source_file_name: str = ""
 
 
 def _highest(levels: Iterable[GroupPermission]) -> GroupPermission:
@@ -581,6 +583,7 @@ async def grant_permission(
     """파일/폴더에 그룹 권한을 부여한다. (file, group) 중복은 upsert(수정)로 처리.
 
     소유자 또는 manage 권한자만 가능. 대상 그룹은 활성이어야 한다.
+    상속받은 수준보다 낮은 부여는 409 로 거부한다(`narrowing_conflict`).
     """
     file = await _get_file(session, file_id)
     await _require_manage(session, actor, file)
@@ -588,6 +591,8 @@ async def grant_permission(
     group = await session.get(Group, group_id)
     if group is None or not group.is_active:
         raise PermissionServiceError(404, "그룹을 찾을 수 없습니다.")
+
+    await _reject_narrowing(session, file_id, group_id, permission)
 
     stmt = pg_insert(FileGroupPermission).values(
         file_id=file_id,
@@ -626,6 +631,119 @@ async def grant_permission(
     return await _get_direct_permission(session, file_id, group_id)
 
 
+async def grant_permission_bulk(
+    session: AsyncSession,
+    actor: User,
+    file_ids: list[int],
+    group_id: int,
+    permission: GroupPermission,
+    *,
+    audit_detail: dict[str, Any] | None = None,
+) -> int:
+    """여러 파일에 같은 그룹 권한을 한 번에 부여한다. 반환: 부여한 개수.
+
+    위키 폴더 발행 전용이다(`services/wiki.py`). `grant_permission` 을 파일마다 부르면
+    커밋·캐시 무효화·SSE 발행이 **파일 수만큼** 일어난다. 폴더 하나에 수백 건이 걸리므로
+    왕복을 한 번으로 접는다 — 감사 로그도 건별이 아니라 묶음 한 줄이다.
+
+    **권한 판정은 호출자 책임이다.** `_require_manage` 를 부르지 않는다. 유일한 호출자인
+    위키가 `folder_scope` 에서 **파일마다** 발행 권한을 이미 판정하고(그 판정이 폴더가 아니라
+    파일 단위여야 하는 이유는 spec/wiki-index.md 「폴더 발행 범위」), 통과한 것만 여기 넘긴다.
+    다른 곳에서 쓰려면 그 판정을 먼저 하거나 `grant_permission` 을 써라.
+
+    `inherit_to_children` 은 항상 FALSE 다. 위키는 대상 파일에만 공개를 걸고 폴더에는 걸지
+    않는다 — 폴더에 상속 부여를 하면 인덱싱 대상이 아닌 PDF·이미지까지 열리고, 소유자가
+    파일에서 위키를 꺼도 공개가 상속으로 남는다(spec 「공개는 폴더가 아니라 대상 파일에 건다」).
+    """
+    if not file_ids:
+        return 0
+
+    group = await session.get(Group, group_id)
+    if group is None or not group.is_active:
+        raise PermissionServiceError(404, "그룹을 찾을 수 없습니다.")
+
+    stmt = pg_insert(FileGroupPermission).values(
+        [
+            {
+                "file_id": fid,
+                "group_id": group_id,
+                "permission": permission.value,
+                "inherit_to_children": False,
+                "expires_at": None,
+                "granted_by": actor.id,
+            }
+            for fid in file_ids
+        ]
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_file_group_permissions_file_group",
+        set_={
+            "permission": stmt.excluded.permission,
+            "inherit_to_children": stmt.excluded.inherit_to_children,
+            "expires_at": stmt.excluded.expires_at,
+            "granted_by": stmt.excluded.granted_by,
+            "granted_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+    _record_audit(
+        session,
+        actor.id,
+        "permission.grant_bulk",
+        file_ids[0],
+        {
+            "group_id": group_id,
+            "permission": permission.value,
+            "file_count": len(file_ids),
+            **(audit_detail or {}),
+        },
+    )
+    await invalidate_group_members(session, group_id)
+    await session.commit()
+    return len(file_ids)
+
+
+async def revoke_permission_bulk(
+    session: AsyncSession,
+    actor: User,
+    file_ids: list[int],
+    group_id: int,
+    *,
+    audit_detail: dict[str, Any] | None = None,
+) -> int:
+    """여러 파일에서 같은 그룹 권한을 한 번에 회수한다. 반환: 실제로 지운 개수.
+
+    `grant_permission_bulk` 의 짝이다. 없는 부여가 섞여 있어도 오류가 아니다 — 위키를 끄는
+    경로는 "공개였는지" 를 따지지 않고 부르므로, 없으면 지울 것이 없는 것으로 본다.
+    권한 판정은 같은 이유로 호출자 책임이다.
+    """
+    if not file_ids:
+        return 0
+
+    result = await session.execute(
+        delete(FileGroupPermission).where(
+            FileGroupPermission.file_id.in_(file_ids),
+            FileGroupPermission.group_id == group_id,
+        )
+    )
+    deleted = result.rowcount or 0
+    if deleted:
+        _record_audit(
+            session,
+            actor.id,
+            "permission.revoke_bulk",
+            file_ids[0],
+            {
+                "group_id": group_id,
+                "file_count": deleted,
+                **(audit_detail or {}),
+            },
+        )
+    await invalidate_group_members(session, group_id)
+    await session.commit()
+    return deleted
+
+
 async def update_permission(
     session: AsyncSession,
     actor: User,
@@ -636,11 +754,16 @@ async def update_permission(
     expires_at: datetime | None,
     expires_at_set: bool,
 ) -> FileGroupPermission:
-    """직접 부여된 그룹 권한을 수정한다 (permission/inherit_to_children/expires_at)."""
+    """직접 부여된 그룹 권한을 수정한다 (permission/inherit_to_children/expires_at).
+
+    부여와 같은 정책 — 상속받은 수준보다 낮추려 하면 409 로 거부한다(`narrowing_conflict`).
+    """
     file = await _get_file(session, file_id)
     await _require_manage(session, actor, file)
 
     row = await _get_direct_permission(session, file_id, group_id, required=True)
+    if permission is not None:
+        await _reject_narrowing(session, file_id, group_id, permission)
 
     changes: dict[str, Any] = {}
     if permission is not None and row.permission != permission.value:
@@ -744,6 +867,117 @@ class InheritedGrant:
     expires_at: datetime | None
 
 
+def select_inherited_grants(
+    rows: Iterable[AncestorGrantRow], now: datetime
+) -> list[InheritedGrant]:
+    """조상 권한 행들에서 그룹별 상속 권한을 한 건씩 고른다 (화면 표시용, PRD 6.5/6.6).
+
+    - 자기 자신(depth 0)·비상속(inherit_to_children=FALSE)·만료 행은 제외.
+    - 그룹별로 **가장 높은 수준**을 남긴다. 동수준이면 가까운 조상(depth 작은 쪽).
+
+    '가장 가까운 조상' 이 아니라 '가장 높은 수준' 인 이유는 판정 규칙과 맞추기 위해서다 —
+    유효 권한은 누적(resolve_effective_permission)이라 조부모의 manage 가 부모의 read 에
+    덮이지 않는다. 최근접을 고르면 그 경우 화면이 read 를 표시해 **유효 권한보다 낮게** 읽힌다.
+    프런트가 "상속보다 낮게는 못 낮춘다"를 경고하는 근거로 이 값을 쓰므로(PermissionModal),
+    낮게 표시되면 경고가 새는 방향으로 틀린다.
+    """
+    best: dict[int, AncestorGrantRow] = {}
+    for r in rows:
+        if r.depth == 0 or not r.inherit_to_children:
+            continue
+        if r.expires_at is not None and r.expires_at <= now:
+            continue
+        kept = best.get(r.group_id)
+        if kept is None or (_RANK[GroupPermission(r.permission)], -r.depth) > (
+            _RANK[GroupPermission(kept.permission)],
+            -kept.depth,
+        ):
+            best[r.group_id] = r
+    return [
+        InheritedGrant(
+            group_id=r.group_id,
+            group_name=r.group_name,
+            permission=r.permission,
+            source_file_id=r.file_id,
+            source_file_name=r.source_file_name,
+            depth=r.depth,
+            expires_at=r.expires_at,
+        )
+        for r in best.values()
+    ]
+
+
+# 거부 사유 문구에 쓰는 한국어 수준명 (프런트 permissionLabel 과 같은 말).
+_LEVEL_LABEL: dict[GroupPermission, str] = {
+    GroupPermission.READ: "읽기",
+    GroupPermission.WRITE: "쓰기",
+    GroupPermission.MANAGE: "관리",
+}
+
+
+def narrowing_conflict(
+    inherited: InheritedGrant | None, new_level: GroupPermission
+) -> str | None:
+    """상속보다 낮은 수준을 부여하려는 것인가 — 맞으면 사용자에게 보일 사유를 돌려준다.
+
+    유효 권한은 누적이라(resolve_effective_permission) 상속보다 낮은 직접 부여는 유효 권한을
+    **바꾸지 못한다.** 저장은 되고 목록에는 그 낮은 값이 보이므로, 허용하면 관리자는 좁혔다고
+    믿는다 — 실패보다 나쁜 조용한 무효다. 그래서 저장 자체를 거부하고 이유를 말한다.
+
+    좁히는 방법은 하나뿐이므로(상속 출처에서 '하위 상속' 끄기) 사유에 그 경로를 함께 적는다.
+    반환: 거부 사유 문구. 문제 없으면 None.
+    """
+    if inherited is None:
+        return None
+    level = GroupPermission(inherited.permission)
+    if _RANK[level] <= _RANK[new_level]:
+        return None
+    return (
+        f"'{inherited.group_name}' 그룹은 '{inherited.source_file_name}'에서 "
+        f"{_LEVEL_LABEL[level]} 권한을 상속받고 있어 이 항목만 "
+        f"{_LEVEL_LABEL[new_level]}(으)로 낮출 수 없습니다. "
+        f"좁히려면 '{inherited.source_file_name}'에서 하위 상속을 끄고 "
+        f"필요한 항목에만 개별 부여하세요."
+    )
+
+
+async def _inherited_for_group(
+    session: AsyncSession, file_id: int, group_id: int
+) -> InheritedGrant | None:
+    """그 파일이 특정 그룹에 대해 상속받고 있는 권한 (없으면 None). 낮춤 거부 판정용."""
+    rows = (await session.execute(_ANCESTOR_ALL_PERM_SQL, {"file_id": file_id})).all()
+    for grant in select_inherited_grants(
+        [
+            AncestorGrantRow(
+                depth=r.depth,
+                file_id=r.source_file_id,
+                group_id=r.group_id,
+                group_name=r.group_name,
+                permission=r.permission,
+                inherit_to_children=r.inherit_to_children,
+                expires_at=r.expires_at,
+                source_file_name=r.source_file_name,
+            )
+            for r in rows
+        ],
+        datetime.now(UTC),
+    ):
+        if grant.group_id == group_id:
+            return grant
+    return None
+
+
+async def _reject_narrowing(
+    session: AsyncSession, file_id: int, group_id: int, new_level: GroupPermission
+) -> None:
+    """상속보다 낮은 수준을 부여/수정하려 하면 409 로 막는다 (spec/permissions.md)."""
+    conflict = narrowing_conflict(
+        await _inherited_for_group(session, file_id, group_id), new_level
+    )
+    if conflict is not None:
+        raise PermissionServiceError(409, conflict)
+
+
 # 조상(depth>0)의 상속 가능한(inherit_to_children) 권한 행을 그룹/파일명과 함께 모은다.
 _ANCESTOR_ALL_PERM_SQL = text(
     """
@@ -772,7 +1006,14 @@ async def list_permissions(
 ) -> tuple[list[DirectGrant], list[InheritedGrant]]:
     """직접 부여 목록 + 유효 상속 권한 목록을 반환한다 (PRD 6.5/6.6 통합).
 
-    상속 목록은 그룹별로 가장 가까운 상속 조상(inherit_to_children=TRUE, 미만료) 한 건을 담는다.
+    상속 목록은 그룹별로 **가장 높은 수준**의 상속 조상(inherit_to_children=TRUE, 미만료)
+    한 건을 담는다. 동수준이면 가까운 쪽이다.
+
+    '가장 가까운 조상' 이 아니라 '가장 높은 수준' 인 이유는 판정 규칙과 맞추기 위해서다 —
+    유효 권한은 누적(resolve_effective_permission)이라 조부모의 manage 가 부모의 read 에
+    덮이지 않는다. 최근접을 고르면 그 경우 화면이 read 를 표시해 **유효 권한보다 낮게**
+    읽힌다. 화면이 낮춤 불가를 경고하는 근거로 이 값을 쓰므로(프런트 PermissionModal),
+    낮게 표시되면 경고 자체가 새는 방향으로 틀린다.
 
     같은 그룹의 직접 부여가 있어도 상속 항목을 **숨기지 않는다** — 판정이 누적으로 바뀌면서
     (resolve_effective_permission, 2026-07-28) 직접 부여가 상속을 취소하지 못하기 때문이다.
@@ -803,30 +1044,26 @@ async def list_permissions(
         for p, name in direct_rows
     ]
 
-    now = datetime.now(UTC)
     ancestor_rows = (
         await session.execute(_ANCESTOR_ALL_PERM_SQL, {"file_id": file_id})
     ).all()
-    # 그룹별 최근접 상속 권한 한 건 (미만료 + inherit_to_children). ORDER BY depth ASC 이므로 첫 건.
-    # 쿼리가 depth > 0 만 뽑으므로 자기 자신 부여는 애초에 섞이지 않는다(그건 direct 목록이 담는다).
-    inherited_by_group: dict[int, InheritedGrant] = {}
-    for r in ancestor_rows:
-        if r.group_id in inherited_by_group:
-            continue
-        if not r.inherit_to_children:
-            continue
-        if r.expires_at is not None and r.expires_at <= now:
-            continue
-        inherited_by_group[r.group_id] = InheritedGrant(
-            group_id=r.group_id,
-            group_name=r.group_name,
-            permission=r.permission,
-            source_file_id=r.source_file_id,
-            source_file_name=r.source_file_name,
-            depth=r.depth,
-            expires_at=r.expires_at,
-        )
-    return direct, list(inherited_by_group.values())
+    inherited = select_inherited_grants(
+        [
+            AncestorGrantRow(
+                depth=r.depth,
+                file_id=r.source_file_id,
+                group_id=r.group_id,
+                group_name=r.group_name,
+                permission=r.permission,
+                inherit_to_children=r.inherit_to_children,
+                expires_at=r.expires_at,
+                source_file_name=r.source_file_name,
+            )
+            for r in ancestor_rows
+        ],
+        datetime.now(UTC),
+    )
+    return direct, inherited
 
 
 async def list_inherited(
@@ -886,6 +1123,17 @@ async def list_shared_with_me(session: AsyncSession, user: User) -> list[SharedI
     """내 소속 그룹에 부여된 권한의 대상 파일/폴더(부여 지점) 목록 (PRD 3.1.3 진입점).
 
     만료 행/삭제 파일은 제외하고, 본인 소유 파일은 제외한다(타인이 공유한 항목만).
+
+    **시스템 그룹(`@전사`) 유래 부여는 제외한다** (spec/wiki-index.md 「프런트」). 위키를 켜면
+    그 파일에 `@전사 read` 가 걸리고 `get_user_group_ids` 가 전 활성 사용자에게 그 그룹을
+    붙이므로, 걸러내지 않으면 **전사 위키 문서 전체가 모든 사람의 "공유" 폴더에 쏟아진다**
+    (실측 467건). 누가 나에게 공유한 항목을 찾으러 온 화면이 사내 문서 목록이 되어버린다.
+
+    이건 **보안 필터가 아니라 UI 필터다** — 권한은 실제로 있고 파일도 열린다. 위키 문서를
+    찾는 자리는 문서 카탈로그(`/wiki/catalog`)다. 그래서 '부여 지점'만 가린다.
+
+    같은 파일이 `@전사` 와 실제 그룹으로 **함께** 공유됐다면 그 파일은 남는다 — 거르는 것은
+    파일이 아니라 부여 행이고, 실제 그룹의 부여 행이 그대로 살아 있기 때문이다.
     """
     group_ids = await get_user_group_ids(session, user.id)
     if not group_ids:
@@ -899,6 +1147,9 @@ async def list_shared_with_me(session: AsyncSession, user: User) -> list[SharedI
             .join(Group, Group.id == FileGroupPermission.group_id)
             .where(
                 FileGroupPermission.group_id.in_(group_ids),
+                # 이름이 아니라 `is_system` 으로 가른다 — 앞으로 자동 멤버십 그룹이 더 생기면
+                # 같은 이유로 같은 처리가 필요하고, 이름 비교는 그때 조용히 새는 쪽이다.
+                Group.is_system.is_(False),
                 File.is_deleted.is_(False),
                 File.user_id != user.id,
                 (FileGroupPermission.expires_at.is_(None))

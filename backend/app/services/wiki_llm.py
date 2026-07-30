@@ -27,6 +27,14 @@ class WikiLLMError(Exception):
     """LLM 호출 실패 — 재시도를 소진했거나 응답이 비어 있다."""
 
 
+class WikiLLMRequestError(WikiLLMError):
+    """LLM 이 요청 자체를 거부했다 (4xx). **재시도해도 같은 결과다.**
+
+    호출자가 "서버에 연결할 수 없다"와 구분해야 하는 실패다 — 서버는 정상이고 우리가 보낸
+    것이 잘못됐다. 프롬프트가 컨텍스트를 넘긴 경우(400)가 여기로 온다.
+    """
+
+
 def _endpoint() -> str:
     return settings.wiki_llm_base_url.rstrip("/") + "/chat/completions"
 
@@ -70,6 +78,17 @@ async def complete(
             if content:
                 return content
             last = WikiLLMError("빈 응답")
+        except httpx.HTTPStatusError as exc:
+            # **4xx 는 재시도하지 않는다.** 우리 요청이 잘못된 것이라 같은 요청을 다시 보내면
+            # 같은 응답이 온다. 프롬프트가 컨텍스트를 넘었을 때(400) 900KB 짜리 본문을 세 번 더
+            # 올리는 것이 유일한 효과였다(spec/wiki-index.md 「후보 선별」). 429 만 예외다 —
+            # 그건 우리 요청이 아니라 서버 혼잡이라 기다리면 통한다.
+            status = exc.response.status_code
+            if 400 <= status < 500 and status != 429:
+                body = exc.response.text[:500]
+                log.warning("wiki_llm_bad_request", status=status, body=body)
+                raise WikiLLMRequestError(f"LLM 이 요청을 거부했다 ({status}): {body}") from exc
+            last = exc
         except Exception as exc:  # noqa: BLE001 - 네트워크/파싱 실패를 모두 재시도로 흡수
             last = exc
         if attempt < max_retries - 1:

@@ -13,10 +13,13 @@ from app.models.enums import GroupPermission
 from app.services.permissions import (
     AncestorGrantRow,
     AncestorPermRow,
+    InheritedGrant,
+    narrowing_conflict,
     permission_covers,
     resolve_effective_grant,
     resolve_effective_permission,
     select_direct_grant,
+    select_inherited_grants,
 )
 
 NOW = datetime(2026, 7, 18, tzinfo=UTC)
@@ -139,6 +142,7 @@ def _grant(
     file_id: int = 0,
     inherit: bool = True,
     expires_at: datetime | None = None,
+    source_file_name: str = "",
 ) -> AncestorGrantRow:
     return AncestorGrantRow(
         depth=depth,
@@ -148,6 +152,7 @@ def _grant(
         permission=permission,
         inherit_to_children=inherit,
         expires_at=expires_at,
+        source_file_name=source_file_name or f"폴더{depth}",
     )
 
 
@@ -242,3 +247,118 @@ class TestPermissionCovers:
         assert permission_covers(GroupPermission.WRITE, "read")
         assert permission_covers(GroupPermission.WRITE, "write")
         assert not permission_covers(GroupPermission.WRITE, "manage")
+
+
+class TestSelectInheritedGrants:
+    """권한 화면의 '상속된 권한' 목록 — 그룹별 최고 수준 한 건 (spec/permissions.md).
+
+    이 목록은 표시용이 아니라 **경고의 근거**다. 프런트가 "상속보다 낮게는 못 낮춘다"를
+    여기 실린 수준과 비교해 판단하므로, 유효 권한보다 낮게 실리면 경고가 새는 방향으로 틀린다.
+    """
+
+    def test_no_rows(self) -> None:
+        assert select_inherited_grants([], NOW) == []
+
+    def test_self_grant_excluded(self) -> None:
+        # depth 0 은 직접 부여 목록의 몫이다 — 상속 목록에 섞이면 이중으로 보인다.
+        assert select_inherited_grants([_grant(0, 1, "A팀", "manage")], NOW) == []
+
+    def test_non_inheriting_ancestor_excluded(self) -> None:
+        rows = [_grant(1, 1, "A팀", "manage", inherit=False)]
+        assert select_inherited_grants(rows, NOW) == []
+
+    def test_expired_ancestor_excluded(self) -> None:
+        rows = [_grant(1, 1, "A팀", "manage", expires_at=NOW - timedelta(hours=1))]
+        assert select_inherited_grants(rows, NOW) == []
+
+    def test_farther_higher_beats_closer_lower(self) -> None:
+        """조부 manage + 부모 read → manage. 최근접을 골랐다면 read 로 낮게 실렸다.
+
+        유효 권한이 누적이라 실제 권한은 manage 이고, 화면이 read 를 보여주면 관리자가
+        'read 니까 read 로 낮춰도 되겠지' 로 읽는다.
+        """
+        rows = [
+            _grant(1, 1, "A팀", "read", file_id=10, source_file_name="부모"),
+            _grant(2, 1, "A팀", "manage", file_id=20, source_file_name="조부"),
+        ]
+        (got,) = select_inherited_grants(rows, NOW)
+        assert got.permission == "manage"
+        assert got.source_file_id == 20 and got.source_file_name == "조부"
+
+    def test_tie_prefers_nearest(self) -> None:
+        # 동수준이면 가까운 쪽을 출처로 — 사람이 고치러 갈 폴더는 가까운 쪽이다.
+        rows = [
+            _grant(2, 1, "A팀", "read", file_id=20, source_file_name="조부"),
+            _grant(1, 1, "A팀", "read", file_id=10, source_file_name="부모"),
+        ]
+        (got,) = select_inherited_grants(rows, NOW)
+        assert got.source_file_id == 10 and got.depth == 1
+
+    def test_groups_are_independent(self) -> None:
+        rows = [
+            _grant(1, 1, "A팀", "read", file_id=10),
+            _grant(2, 2, "B팀", "manage", file_id=20),
+        ]
+        got = {g.group_id: g.permission for g in select_inherited_grants(rows, NOW)}
+        assert got == {1: "read", 2: "manage"}
+
+    def test_expired_higher_does_not_mask_live_lower(self) -> None:
+        # 만료된 manage 가 살아있는 read 를 가리면 안 된다 — 걸러진 뒤에 최고 수준을 고른다.
+        rows = [
+            _grant(1, 1, "A팀", "manage", file_id=10, expires_at=NOW - timedelta(days=1)),
+            _grant(2, 1, "A팀", "read", file_id=20),
+        ]
+        (got,) = select_inherited_grants(rows, NOW)
+        assert got.permission == "read" and got.source_file_id == 20
+
+
+class TestNarrowingConflict:
+    """상속보다 낮은 부여는 거부한다 (spec/permissions.md 「상속보다 낮추기는 거부한다」).
+
+    유효 권한이 누적이라 낮은 직접 부여는 저장돼도 유효 권한을 바꾸지 못한다. 허용하면
+    관리자가 좁혔다고 믿는 조용한 무효가 남으므로, 저장을 막고 사유를 돌려준다.
+    """
+
+    @staticmethod
+    def _inherited(permission: str) -> InheritedGrant:
+        return InheritedGrant(
+            group_id=1,
+            group_name="A팀",
+            permission=permission,
+            source_file_id=10,
+            source_file_name="공유폴더",
+            depth=1,
+            expires_at=None,
+        )
+
+    def test_no_inheritance_allows_anything(self) -> None:
+        assert narrowing_conflict(None, GroupPermission.READ) is None
+
+    def test_same_level_allowed(self) -> None:
+        assert narrowing_conflict(self._inherited("read"), GroupPermission.READ) is None
+
+    def test_promotion_allowed(self) -> None:
+        # 넓히는 방향은 자유다 — read 상속 위에 manage 를 얹는 것은 유효 권한을 실제로 바꾼다.
+        assert narrowing_conflict(self._inherited("read"), GroupPermission.MANAGE) is None
+
+    def test_demotion_rejected(self) -> None:
+        msg = narrowing_conflict(self._inherited("manage"), GroupPermission.READ)
+        assert msg is not None
+
+    def test_reason_names_source_and_escape_route(self) -> None:
+        """사유가 '어디서 상속됐고 어떻게 풀어야 하는지'를 말해야 한다.
+
+        좁히는 방법이 '상속 출처에서 하위 상속 끄기' 하나뿐이라, 출처 이름이 빠지면 거부만
+        당하고 다음 행동을 알 수 없다.
+        """
+        msg = narrowing_conflict(self._inherited("manage"), GroupPermission.WRITE)
+        assert msg is not None
+        assert "공유폴더" in msg and "A팀" in msg
+        assert "관리" in msg and "쓰기" in msg
+        assert "하위 상속" in msg
+
+    def test_write_to_read_rejected(self) -> None:
+        assert narrowing_conflict(self._inherited("write"), GroupPermission.READ) is not None
+
+    def test_manage_to_write_rejected(self) -> None:
+        assert narrowing_conflict(self._inherited("manage"), GroupPermission.WRITE) is not None
