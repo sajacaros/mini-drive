@@ -136,6 +136,8 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert r.json()["total"] == 2, r.text
         assert docs["deploy.md"]["status"] == "ready", docs
         assert docs["deploy.md"]["node_count"] == 3, docs  # 배포 가이드 + 사전 준비 + 롤백
+        # 위치 — 소유자 드라이브 안에서의 폴더 경로. 루트 이름('root')은 들어가지 않는다.
+        assert docs["deploy.md"]["location"] == "문서함", docs
         _ok(f"md 트리 — 노드 {docs['deploy.md']['node_count']}개, status=ready")
 
         # 2. HTML 도 같은 경로로 (style 은 걷히고 h1/h2 가 노드가 된다)
@@ -316,6 +318,22 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert items["이동대상.md"] == "disabled", items
         _ok(f"전사 위키 — 공개 스위치 없이 타인도 5건을 본다 {items}")
 
+        # 6-1. 위치도 사람마다 다르지 않다. bob 은 이 문서들에 아무 권한이 없고 자기 드라이브에
+        #      있지도 않은데, 드라이브 목록처럼 "내 드라이브" 접두사를 붙이면 그 자리에서
+        #      거짓말이 된다. 소유 여부로 접두사를 가르면 같은 문서가 사람마다 다른 위치로
+        #      보이고, 그러면 "방금 켠 그 문서"를 위치로 지목할 수 없다.
+        # 소유자는 **파일 주인**이지 요청자가 아니다 — bob 이 물었는데 bob 이 나오면
+        # 조인이 요청자에 걸린 것이고, 그러면 목록이 사람마다 달라진다.
+        owners = {d["name"]: d["owner_display_name"] for d in r.json()["items"]}
+        assert owners["deploy.md"], owners
+        assert owners["deploy.md"] != BOB["display_name"], owners
+        locs = {d["name"]: d["location"] for d in r.json()["items"]}
+        assert not any(loc.startswith("내 드라이브") for loc in locs.values()), locs
+        assert locs["deploy.md"] == "문서함", locs
+        # 중첩 폴더는 최상위부터 이어 붙인다(옮겨진 문서라 경로도 따라 바뀌어 있어야 한다).
+        assert locs["이동대상.md"] == "위키없는폴더 / 하위", locs
+        _ok(f"위치 표기 — 보는 사람과 무관하게 같은 경로 {locs['이동대상.md']!r}")
+
         # 업로드 경고의 재료 — 목록 응답이 "이 폴더가 전사 위키인가"를 실어야 한다.
         # 이 플래그가 항목이 아니라 목록에 붙는 이유는 경고를 봐야 하는 사람이 write 권한자라서다
         # (그에게는 위키 상태 API 가 404 다). 그래서 **bob 으로** 확인한다.
@@ -367,6 +385,8 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert r2.status_code == 200, r2.text
         catalog = r2.json()
         assert catalog["status"] == "ready" and catalog["nodes"], catalog
+        # 상세도 목록과 같은 위치를 말해야 한다 — 목록에서 눌러 들어온 화면이라 어긋나면 안 된다.
+        assert catalog["location"] == "문서함", catalog
         root = catalog["nodes"][0]
         assert root["node_id"] and root["title"] and root["line_num"] >= 1, root
         # 노드 수는 목록의 node_count 와 같은 트리에서 나온다 — 두 화면이 어긋나면 안 된다.

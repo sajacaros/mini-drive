@@ -20,7 +20,7 @@ import { PreviewModal } from "@/components/PreviewModal";
 import { WikiStatusBadge, wikiStatusHint } from "@/components/WikiStatusBadge";
 import { BookIcon, ChevronRight } from "@/components/icons";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui";
-import { formatDateTime } from "@/lib/format";
+import { folderPathLabel, formatDateTime } from "@/lib/format";
 import { fetchFilePreview } from "@/lib/preview";
 
 /**
@@ -157,8 +157,13 @@ export function WikiCatalogDetailPage() {
                   <WikiStatusBadge status={catalog.status} nodeCount={catalog.node_count} />
                 </span>
               </div>
-              <p className="mt-0.5 text-sm text-muted">
-                {catalog.owner_display_name} · v{catalog.version}
+              {/*
+                소유자와 위치를 함께 적는다 — 이름이 같은 문서가 폴더마다 있어서, 링크로 바로
+                들어온 경우 이 줄이 없으면 지금 보는 것이 어느 문서인지 가릴 수 없다.
+              */}
+              <p className="mt-0.5 truncate text-sm text-muted">
+                {catalog.owner_display_name} · {folderPathLabel(catalog.location)} · v
+                {catalog.version}
                 {catalog.indexed_at && ` · ${formatDateTime(catalog.indexed_at)} 색인`}
               </p>
             </div>

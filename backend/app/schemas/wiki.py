@@ -61,6 +61,9 @@ class WikiDocumentItem(BaseModel):
     file_id: int
     name: str
     owner_display_name: str
+    # 소유자 드라이브 안에서의 폴더 경로("문서함 / 규정"). 최상위 파일이면 빈 문자열.
+    # 보는 사람과 무관하게 같은 값이다 — 전사 위키 목록은 사람마다 다르지 않다.
+    location: str = ""
     status: str
     version: int
     indexed_at: str | None
@@ -95,6 +98,7 @@ class WikiCatalogResponse(BaseModel):
     file_id: int
     name: str
     owner_display_name: str
+    location: str = ""
     status: str
     version: int
     indexed_at: str | None

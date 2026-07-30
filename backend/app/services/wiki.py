@@ -700,6 +700,8 @@ class DocumentItem:
     file_id: int
     name: str
     owner_display_name: str
+    # 소유자 드라이브 안에서의 폴더 경로("문서함 / 규정"). 최상위면 빈 문자열.
+    location: str
     status: str
     version: int
     indexed_at: datetime | None
@@ -756,11 +758,14 @@ async def list_documents(
         )
     ).all()
 
+    locations = await _locations(session, [file for _, file, _ in rows])
+
     items = [
         DocumentItem(
             file_id=file.id,
             name=file.name,
             owner_display_name=owner_name,
+            location=locations[file.id],
             status=doc.status,
             version=doc.version,
             indexed_at=doc.indexed_at,
@@ -769,6 +774,28 @@ async def list_documents(
         for doc, file, owner_name in rows
     ]
     return items, total
+
+
+async def _locations(session: AsyncSession, files: list[File]) -> dict[int, str]:
+    """file_id -> 소유자 드라이브 안에서의 폴더 경로("문서함 / 규정"). 최상위면 빈 문자열.
+
+    드라이브 목록의 `location`(files.annotate_location)과 달리 **보는 사람에 따라 달라지지
+    않는다** — "내 드라이브"/"내 드라이브 / 공유" 접두사를 붙이지 않는다. 전사 위키의 목록은
+    사람마다 같아야 하는데(모듈 docstring), 남의 문서에 "내 드라이브"가 붙으면 그 자리에서
+    거짓말이 되고, 소유 여부로 접두사를 갈랐다가는 같은 문서가 보는 사람마다 다른 위치로
+    보인다. 루트가 누구 것인지는 옆의 소유자 열이 이미 말한다.
+    """
+    # files 쪽이 wiki 를 늦게 부르므로(services/files.py) 여기서도 함수 안에서 부른다.
+    from app.services import files as files_service
+
+    chains = await files_service.folder_name_chains(
+        session, {f.parent_folder_id for f in files if f.parent_folder_id is not None}
+    )
+    return {
+        # 루트 직속 파일은 경로가 빈 문자열이다 — 화면이 "최상위"로 옮겨 적는다.
+        f.id: " / ".join([] if f.parent_folder_id is None else chains[f.parent_folder_id])
+        for f in files
+    }
 
 
 @dataclass(frozen=True)
@@ -790,6 +817,8 @@ class Catalog:
     file_id: int
     name: str
     owner_display_name: str
+    # 소유자 드라이브 안에서의 폴더 경로. 목록과 같은 값이다(_locations).
+    location: str
     status: str
     version: int
     indexed_at: datetime | None
@@ -828,11 +857,13 @@ async def get_catalog(session: AsyncSession, file_id: int) -> Catalog:
         raise WikiServiceError(404, "문서를 찾을 수 없습니다.")
 
     doc, file, owner_name = row
+    locations = await _locations(session, [file])
 
     return Catalog(
         file_id=file.id,
         name=file.name,
         owner_display_name=owner_name,
+        location=locations[file.id],
         status=doc.status,
         version=doc.version,
         indexed_at=doc.indexed_at,

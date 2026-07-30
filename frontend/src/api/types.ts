@@ -679,6 +679,12 @@ export interface WikiDocumentItem {
   file_id: number;
   name: string;
   owner_display_name: string;
+  /**
+   * 소유자 드라이브 안에서의 폴더 경로("문서함 / 규정"). 최상위 파일이면 빈 문자열.
+   * 드라이브 목록의 `location` 과 달리 "내 드라이브" 접두사가 없다 — 전사 위키의 목록은
+   * 보는 사람과 무관하게 같아야 하고, 루트가 누구 것인지는 소유자 열이 말한다.
+   */
+  location: string;
   status: WikiStatus;
   version: number;
   indexed_at: string | null;
@@ -706,6 +712,8 @@ export interface WikiCatalog {
   file_id: number;
   name: string;
   owner_display_name: string;
+  /** 목록과 같은 폴더 경로 — 최상위면 빈 문자열. */
+  location: string;
   status: WikiStatus;
   version: number;
   indexed_at: string | null;

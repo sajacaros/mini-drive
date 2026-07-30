@@ -25,7 +25,7 @@ import { WikiStatusBadge, wikiStatusHint } from "@/components/WikiStatusBadge";
 import { BookIcon, ChevronRightIcon } from "@/components/icons";
 import { EmptyState, ErrorState, LoadingState, Pagination } from "@/components/ui";
 import { subscribeFileEvents } from "@/lib/fileEvents";
-import { formatDateTime } from "@/lib/format";
+import { folderPathLabel, formatDateTime } from "@/lib/format";
 
 const PAGE_SIZE = 50;
 
@@ -177,6 +177,19 @@ export function WikiCatalogPage() {
                             {d.name}
                           </button>
                           <ChevronRightIcon width={14} height={14} className="shrink-0 text-muted" />
+                        </span>
+                        {/*
+                          경로는 열을 하나 더 만들지 않고 이름 아래 붙인다 — 폴더 경로는 길이가
+                          제각각이라 고정 폭 열에 넣으면 대부분 잘리는데, 여기서는 이름 열의
+                          남는 폭을 그대로 쓴다(드라이브 목록도 같은 모양이다).
+                          이름이 같은 문서가 폴더마다 있는 경우가 흔해서, 이 줄이 없으면 검색
+                          결과에서 어느 것이 내 문서인지 가릴 수 없다.
+                        */}
+                        <span
+                          className="mt-0.5 block truncate text-xs text-muted"
+                          title={folderPathLabel(d.location)}
+                        >
+                          {folderPathLabel(d.location)}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-muted">{d.owner_display_name}</td>
