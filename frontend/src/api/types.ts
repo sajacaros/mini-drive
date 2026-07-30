@@ -104,6 +104,13 @@ export interface FileListResponse {
   total: number;
   page: number;
   size: number;
+  /**
+   * 지금 보고 있는 폴더가 전사 위키인가 — 여기 올리는 md·html 은 곧 전 구성원에게 공개된다.
+   *
+   * 항목이 아니라 목록에 붙는다. 경고를 봐야 하는 사람은 `write` 권한자인데 그에게는 위키 상태
+   * API 가 404 이기 때문이다(발행 권한자만 본다). 즐겨찾기·최근 목록은 채우지 않는다(false).
+   */
+  wiki_enabled?: boolean;
 }
 
 /** 파일 버전 히스토리 항목 (GET /api/files/{id}/versions). */
@@ -627,7 +634,14 @@ export type WikiStatus =
   | "indexing"
   | "ready"
   | "stale"
-  | "failed";
+  | "failed"
+  /**
+   * 껐지만 트리는 유예 기간 동안 보관 중. 질의 대상에서는 즉시 빠진다.
+   *
+   * 파일 상태 조회(`/files/{id}/wiki`)는 이 값을 주지 않는다(사용자 관점의 `off` 로 접힌다).
+   * 문서 카탈로그 목록만 이 값을 그대로 노출한다 — 무엇이 왜 빠졌는지 보여주기 위해서다.
+   */
+  | "disabled";
 
 /** 폴더 토글이 실제로 덮는 범위 — 확인 문구에 쓴다. */
 export interface WikiFolderScope {
@@ -648,8 +662,10 @@ export interface WikiState {
   explicit: boolean;
   /** 그 값이 어디서 왔는지. 자기 자신이면 file_id 와 같다. */
   source_file_id: number | null;
-  /** `@전사` read 직접 부여 여부 (전사 공개 체크박스 상태). */
-  public: boolean;
+  /*
+   * 공개 여부 필드는 없다. `enabled` 가 곧 전사 공개다 — 축을 하나로 합쳤기 때문이고,
+   * 별도 필드를 두면 화면이 "둘이 다를 수 있다"고 읽는다(spec 「왜 스위치가 하나인가」).
+   */
   /** 인덱싱 대상인가 + 아니면 이유. 토글 비활성화와 사유 표기에 쓴다. */
   indexable: boolean;
   reason: string | null;
@@ -674,6 +690,29 @@ export interface WikiDocumentList {
   total: number;
 }
 
+/** 카탈로그의 절 하나 — 자식 절을 그대로 품는 재귀 구조. */
+export interface WikiCatalogNode {
+  node_id: string;
+  title: string;
+  /** 원문의 1-based 줄 번호. 미리보기 앵커가 그대로 쓴다. */
+  line_num: number;
+  /** 인덱싱이 붙인 절 요약. 짧은 절은 본문이 그대로 들어 있다. */
+  summary: string | null;
+  nodes: WikiCatalogNode[];
+}
+
+/** 문서 한 건의 카탈로그 — 질의가 절을 고를 때 보는 트리 그대로다. */
+export interface WikiCatalog {
+  file_id: number;
+  name: string;
+  owner_display_name: string;
+  status: WikiStatus;
+  version: number;
+  indexed_at: string | null;
+  node_count: number | null;
+  nodes: WikiCatalogNode[];
+}
+
 export interface WikiCitation {
   file_id: number;
   file_name: string;
@@ -686,5 +725,13 @@ export interface WikiCitation {
 export interface WikiAnswer {
   answer: string;
   citations: WikiCitation[];
+  /** 질의 대상 문서 전체. 0 이면 "찾을 곳이 없다" — "답이 없다"와 다른 말이다. */
   searched_documents: number;
+  /**
+   * 이번 질문에서 실제로 트리를 들여다본 문서 수.
+   *
+   * 문서가 많으면 질문과 관련된 절부터 예산만큼만 모델에 올린다. 좁혀 봤다는 사실을 화면이
+   * 말하지 않으면 사용자가 "전부 뒤졌는데 없다"로 읽고 "없다"를 과신한다.
+   */
+  examined_documents: number;
 }

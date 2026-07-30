@@ -174,6 +174,12 @@ export function FileBrowserPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  /*
+    지금 폴더가 전사 위키인가. 여기 올리는 md·html 은 올리는 즉시 전 구성원에게 공개되므로,
+    올리기 전에 알려야 한다 — 특히 `write` 권한만 가진 사람이 남의 폴더에 올릴 때가 그렇다
+    (spec/wiki-index.md 「폴더 상속 사고 경로」).
+  */
+  const [wikiFolder, setWikiFolder] = useState(false);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
   const [view, setView] = useState<ViewMode>(
     () => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list",
@@ -297,11 +303,13 @@ export function FileBrowserPage({
           const rows = Array.from(byId.values());
           setItems(rows);
           setTotal(rows.length);
+          setWikiFolder(false); // 가상 "공유" 폴더에는 올릴 수 없어 경고할 대상이 없다.
           return;
         }
         const res = await listFiles(pid, pageNum, PAGE_SIZE);
         setItems(res.items);
         setTotal(res.total);
+        setWikiFolder(res.wiki_enabled ?? false);
       } catch (err) {
         setError(extractErrorMessage(err, "목록을 불러오지 못했습니다."));
       } finally {
@@ -1071,6 +1079,24 @@ export function FileBrowserPage({
         </div>
           </div>
         </PageHeader>
+
+        {/*
+          위키 켜진 폴더 경고 — 여기 올린 md·html 은 **올리는 즉시 전 구성원에게 공개**된다.
+          업로드 버튼 바로 아래 상시 노출한다. 막지는 않는다 — 폴더 관리자가 의도해서 켠 것이고,
+          올리는 사람에게 필요한 것은 금지가 아니라 "그럴 생각이 아니면 다른 폴더에 넣으라"는
+          안내다. 소유자 승인 큐는 넣지 않기로 했다(spec 「폴더 상속 사고 경로」).
+        */}
+        {wikiFolder && canWrite && (
+          <p
+            className="mt-3 rounded-lg border px-3 py-2 text-xs"
+            style={{ borderColor: "var(--warning)", color: "var(--warning)" }}
+            role="status"
+          >
+            이 폴더는 <strong>전사 위키</strong>입니다. 여기 올리는 Markdown·HTML 문서는 올리는
+            즉시 모든 구성원이 열람·다운로드할 수 있습니다. 공개할 문서가 아니면 다른 폴더에
+            올려 주세요.
+          </p>
+        )}
       </div>
 
       {/* 본문: 드롭존 */}
@@ -1792,7 +1818,8 @@ function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
             <ShieldIcon width={16} height={16} />
           </IconAction>
           {/* 발행은 소유자·manage 만 — 백엔드 _can_publish 와 같은 기준으로 게이팅한다.
-              폴더와 md/html 이 아닌 파일에서도 연다(전사 공개는 모든 형식에 가능하므로). */}
+              md/html 이 아닌 파일에서도 연다. 모달이 스위치를 비활성 + 사유로 보여주기 때문이다 —
+              숨기면 "기능이 없다"로 읽히고, 실제로는 "이 형식은 아직 안 된다"다. */}
           <IconAction title="위키 설정" onClick={() => p.onWiki(f)}>
             <BookIcon width={16} height={16} />
           </IconAction>

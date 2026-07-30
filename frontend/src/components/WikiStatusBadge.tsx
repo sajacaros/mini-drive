@@ -31,6 +31,13 @@ const DESCRIPTORS: Record<WikiStatus, Descriptor> = {
     hint: "그동안은 이전 버전 내용으로 답합니다.",
   },
   failed: { label: "인덱싱 실패", tone: "danger" },
+  // 껐지만 트리는 유예 동안 남아 있는 상태. 문서 카탈로그 목록에만 나온다 — 목록에서 사라지면
+  // 소유자가 "왜 빠졌는지" 알 수 없어서 상태 그대로 남기기로 한 결정이다(spec/wiki-index.md).
+  disabled: {
+    label: "위키 꺼짐",
+    tone: "neutral",
+    hint: "검색 대상에서 빠졌습니다. 다시 켜면 재색인 없이 돌아옵니다.",
+  },
 };
 
 export function wikiStatusLabel(status: WikiStatus): string {
