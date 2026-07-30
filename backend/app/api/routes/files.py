@@ -892,6 +892,9 @@ async def grant_permission(
 
     read/write/manage 모두 부여할 수 있다. manage 는 받는 쪽이 이 항목을 **다른 그룹에도 열어줄
     수 있는** 권한 위임이므로(+ 영구 삭제), 부여 UI 에서 그 범위를 명시한다.
+
+    단, 그 그룹이 상위 폴더에서 상속받는 수준보다 **낮은** 부여는 409 로 거부한다. 유효 권한이
+    누적이라 저장돼도 아무 일이 일어나지 않기 때문이다(spec/permissions.md).
     """
     try:
         row = await permissions_service.grant_permission(
@@ -960,7 +963,8 @@ async def update_permission(
 ) -> DirectPermissionResponse:
     """그룹 권한 수정 (PRD 6.5). permission/inherit_to_children/expires_at 부분 갱신.
 
-    부여와 같은 정책 — read/write/manage 간 승격·강등 모두 허용한다.
+    부여와 같은 정책 — 승격은 자유롭지만, 상속받는 수준보다 낮추는 강등은 409 로 거부한다
+    (spec/permissions.md 「상속보다 낮추기는 거부한다」).
     """
     try:
         row = await permissions_service.update_permission(
