@@ -179,6 +179,19 @@ async def get_user_group_ids(session: AsyncSession, user_id: int) -> list[int]:
     return list(rows)
 
 
+async def system_group_ids(session: AsyncSession) -> set[int]:
+    """자동 멤버십 시스템 그룹(`@전사`) id 들.
+
+    권한 판정에서 쓰는 게 아니라 **목록 표기에서 걸러내기 위한** 것이다 — 전 직원이 자동으로
+    속하는 그룹은 "누가 나에게 이 파일을 공유했는가"의 답이 될 수 없다(spec/wiki-index.md
+    「프런트」). 이름이 아니라 `is_system` 으로 가르므로 자동 멤버십 그룹이 더 생겨도 같이 걸린다.
+    """
+    rows = (
+        await session.execute(select(Group.id).where(Group.is_system.is_(True)))
+    ).scalars().all()
+    return set(rows)
+
+
 # --- 내부 조회 --------------------------------------------------------------
 
 

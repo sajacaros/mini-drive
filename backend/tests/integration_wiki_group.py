@@ -10,6 +10,9 @@
   4. @전사 에 read 를 주면 **멤버 등록 없이** 다른 사용자가 즉시 접근한다
      (get_user_group_ids 의 UNION 이 실제로 동작하는지).
   5. 회수하면 즉시 차단된다 (시스템 그룹 캐시 무효화가 전 활성 사용자를 덮는지).
+  6. 그런데 이 그룹은 **목록 표기에서는 정식 시민이 아니다** — 전 직원이 자동으로 속하므로
+     "누가 나에게 이 파일을 공유했는가"의 답이 될 수 없다. 공유 폴더(부여 지점)와 그룹 칼럼
+     양쪽에서 빠지고, 그 대신 소유자 자신의 목록에는 남는다.
 """
 
 from __future__ import annotations
@@ -52,7 +55,35 @@ async def _reset() -> None:
     storage_service.delete_many(leftover)
 
 
-async def main() -> None:
+async def _upload(
+    c: httpx.AsyncClient, h: dict[str, str], name: str, parent: int
+) -> int:
+    r = await c.post(
+        "/api/files/upload",
+        headers=h,
+        files={"file": (name, PAYLOAD, "text/markdown")},
+        data={"parent_id": str(parent)},
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def _grant(
+    c: httpx.AsyncClient, h: dict[str, str], file_id: int, group_id: int, perm: str
+) -> None:
+    r = await c.post(
+        f"/api/files/{file_id}/permissions",
+        headers=h,
+        json={
+            "group_id": group_id,
+            "permission": perm,
+            "inherit_to_children": True,
+        },
+    )
+    assert r.status_code == 201, r.text
+
+
+async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
     await _reset()
 
     transport = httpx.ASGITransport(app=app)
@@ -131,6 +162,60 @@ async def main() -> None:
         r = await c.get(f"/api/files/{fid}", headers=bob_h)
         assert r.status_code == 404, r.text
         _ok("회수 → 즉시 차단 (시스템 그룹 캐시 무효화가 전 사용자를 덮음)")
+
+        # 6. 목록 표기에서는 @전사 가 '공유 경로'로 세지지 않는다 (spec 「프런트」).
+        #    위키를 켜면 파일에 `@전사 read` 가 걸리고 전 직원이 그 그룹에 자동으로 속하므로,
+        #    걸러내지 않으면 전사 위키 전체(실측 467건)가 모든 사람의 공유 폴더를 덮는다.
+        r = await c.post("/api/groups", headers=alice_h, json={"name": "개발1팀"})
+        assert r.status_code == 201, r.text
+        team_gid = r.json()["id"]
+        r = await c.post(
+            f"/api/groups/{team_gid}/members",
+            headers=alice_h,
+            json={"user_id": bob_id, "role": "member"},
+        )
+        assert r.status_code == 201, r.text
+
+        # (a) @전사 만 걸린 위키 문서 — 부여 지점 목록에 없다. 그러나 **열리기는 한다**:
+        #     이건 보안 필터가 아니라 UI 필터다.
+        wiki_only = await _upload(c, alice_h, "wiki-only.md", folder)
+        await _grant(c, alice_h, wiki_only, sys_gid, "read")
+        r = await c.get("/api/files/shared-with-me", headers=bob_h)
+        assert r.status_code == 200, r.text
+        shared_names = {i["file"]["name"] for i in r.json()["items"]}
+        assert "wiki-only.md" not in shared_names, shared_names
+        r = await c.get(f"/api/files/{wiki_only}", headers=bob_h)
+        assert r.status_code == 200, r.text
+        _ok("공유 폴더 — @전사 유래 부여는 부여 지점에서 빠진다 (열람은 그대로)")
+
+        # (b) 실제 그룹 공유는 그대로 보인다 — 거르는 것은 파일이 아니라 부여 행이다.
+        r = await c.post("/api/files", headers=alice_h, json={"name": "팀공유"})
+        team_folder = r.json()["id"]
+        inside = await _upload(c, alice_h, "팀문서.md", team_folder)
+        await _grant(c, alice_h, team_folder, team_gid, "write")
+        r = await c.get("/api/files/shared-with-me", headers=bob_h)
+        entries = {i["file"]["name"]: i for i in r.json()["items"]}
+        assert "팀공유" in entries, entries
+        assert entries["팀공유"]["group_name"] == "개발1팀", entries
+        _ok("공유 폴더 — 실제 그룹 공유는 부여 지점으로 그대로 보인다")
+
+        # (c) 그 폴더 안의 위키 문서 — 그룹 칼럼에 @전사 가 없고, **상속된 write 가 살아 있다**.
+        #     @전사 read 를 접근 경로로 인정하면 그 read 가 상속 write 를 가려 화면만 읽기
+        #     전용이 된다(API 는 쓰기를 허용하므로 어긋난 채로 조용히 남는다).
+        await _grant(c, alice_h, inside, sys_gid, "read")
+        r = await c.get("/api/files", headers=bob_h, params={"parentId": team_folder})
+        assert r.status_code == 200, r.text
+        row = next(i for i in r.json()["items"] if i["name"] == "팀문서.md")
+        assert row["group_names"] == ["개발1팀"], row
+        assert row["permission"] == "write", row
+        _ok(f"공유 폴더 안 위키 문서 — 그룹 {row['group_names']}, 권한 {row['permission']}")
+
+        # (d) 소유자 자신의 목록에서는 남는다 — 거기서 "@전사" 는 "이 문서는 전 직원에게 열려
+        #     있다"는 유일한 표시이고, 그건 소유자가 봐야 하는 사실이다.
+        r = await c.get("/api/files", headers=alice_h, params={"parentId": team_folder})
+        row = next(i for i in r.json()["items"] if i["name"] == "팀문서.md")
+        assert sys_name in row["group_names"], row
+        _ok(f"소유자 목록에는 @전사 가 남는다 — 전사 공개 표시 {row['group_names']}")
 
     await engine.dispose()
     print("\n@전사 시스템 그룹 통합 시나리오 전체 통과.")

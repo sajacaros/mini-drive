@@ -999,6 +999,17 @@ async def list_shared_with_me(session: AsyncSession, user: User) -> list[SharedI
     """내 소속 그룹에 부여된 권한의 대상 파일/폴더(부여 지점) 목록 (PRD 3.1.3 진입점).
 
     만료 행/삭제 파일은 제외하고, 본인 소유 파일은 제외한다(타인이 공유한 항목만).
+
+    **시스템 그룹(`@전사`) 유래 부여는 제외한다** (spec/wiki-index.md 「프런트」). 위키를 켜면
+    그 파일에 `@전사 read` 가 걸리고 `get_user_group_ids` 가 전 활성 사용자에게 그 그룹을
+    붙이므로, 걸러내지 않으면 **전사 위키 문서 전체가 모든 사람의 "공유" 폴더에 쏟아진다**
+    (실측 467건). 누가 나에게 공유한 항목을 찾으러 온 화면이 사내 문서 목록이 되어버린다.
+
+    이건 **보안 필터가 아니라 UI 필터다** — 권한은 실제로 있고 파일도 열린다. 위키 문서를
+    찾는 자리는 문서 카탈로그(`/wiki/catalog`)다. 그래서 '부여 지점'만 가린다.
+
+    같은 파일이 `@전사` 와 실제 그룹으로 **함께** 공유됐다면 그 파일은 남는다 — 거르는 것은
+    파일이 아니라 부여 행이고, 실제 그룹의 부여 행이 그대로 살아 있기 때문이다.
     """
     group_ids = await get_user_group_ids(session, user.id)
     if not group_ids:
@@ -1012,6 +1023,9 @@ async def list_shared_with_me(session: AsyncSession, user: User) -> list[SharedI
             .join(Group, Group.id == FileGroupPermission.group_id)
             .where(
                 FileGroupPermission.group_id.in_(group_ids),
+                # 이름이 아니라 `is_system` 으로 가른다 — 앞으로 자동 멤버십 그룹이 더 생기면
+                # 같은 이유로 같은 처리가 필요하고, 이름 비교는 그때 조용히 새는 쪽이다.
+                Group.is_system.is_(False),
                 File.is_deleted.is_(False),
                 File.user_id != user.id,
                 (FileGroupPermission.expires_at.is_(None))
