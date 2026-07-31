@@ -55,6 +55,28 @@ class FileResponse(BaseModel):
     )
 
 
+class CrumbResponse(BaseModel):
+    """breadcrumb 한 칸 — 눌러서 열 수 있는 폴더."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+
+
+class BreadcrumbResponse(BaseModel):
+    """URL 로 연 폴더의 경로 (GET /api/files/{id}/breadcrumb).
+
+    crumbs 는 루트 **바로 아래**부터 그 폴더 자신까지이며, 요청자가 실제로 열 수 있는
+    칸만 들어 있다. 루트 칸은 넣지 않는다 — 화면이 shared 에 따라 "내 드라이브" 또는
+    "내 드라이브 / 공유"를 앞에 붙인다.
+    """
+
+    crumbs: list[CrumbResponse]
+    # 그룹 공유로 닿은 경로인가. True 면 crumbs 위쪽은 남의 드라이브라 잘려 있다.
+    shared: bool
+
+
 class FileListResponse(BaseModel):
     """페이지네이션된 파일 목록 (PRD 6.2 GET /api/files)."""
 

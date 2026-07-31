@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { errorStatus, extractErrorMessage } from "@/api/client";
 import {
   abortResumableUpload,
   addFavorite,
   createFolder,
-  getFile,
+  getBreadcrumb,
   listFiles,
   listRecent,
   moveFile,
@@ -126,6 +126,30 @@ interface Crumb {
   name: string;
 }
 
+const ROOT_CRUMB: Crumb = { id: null, name: "내 드라이브" };
+const SHARED_CRUMB: Crumb = { id: SHARED_VIRTUAL_ID, name: "공유" };
+
+/**
+ * crumb 하나에 대응하는 URL. 폴더 이동이 주소에 남아야 브라우저 뒤로가기가 "상위 폴더"를
+ * 뜻하고, 새로고침·링크 공유가 같은 자리를 연다.
+ */
+function folderUrl(id: number | null): string {
+  if (id === null) return "/";
+  if (id === SHARED_VIRTUAL_ID) return "/shared";
+  return `/f/${id}`;
+}
+
+/**
+ * 앱 안에서 이동할 때 history state 에 실어둔 경로. 뒤로/앞으로 하면 라우터가 그 항목의
+ * state 를 그대로 돌려주므로 서버에 다시 묻지 않고 breadcrumb 이 복원된다.
+ * 지금 URL 이 가리키는 폴더와 끝이 어긋나면(직접 입력·새로고침) 신뢰하지 않는다.
+ */
+function pathFromHistory(state: unknown, folderId: number | null): Crumb[] | null {
+  const p = (state as { path?: Crumb[] } | null)?.path;
+  if (!p?.length) return null;
+  return p[p.length - 1]?.id === folderId ? p : null;
+}
+
 interface UploadTask {
   id: number;
   name: string;
@@ -144,29 +168,27 @@ interface UploadTask {
 
 let uploadSeq = 0;
 
-interface FileBrowserPageProps {
-  /** 진입 루트 폴더 id. null 이면 내 드라이브 루트. */
-  rootId?: number | null;
-  /** 루트 breadcrumb 표시명. */
-  rootName?: string;
-  /**
-   * 초기 breadcrumb 경로. 지정하면 rootId/rootName 대신 사용한다.
-   * 공유 폴더 딥링크(/shared/f/:id)를 "내 드라이브 > 공유 > 폴더" 아래에 seed 할 때 쓴다.
-   */
-  initialPath?: Crumb[];
-}
-
-export function FileBrowserPage({
-  rootId = null,
-  rootName = "내 드라이브",
-  initialPath,
-}: FileBrowserPageProps) {
+export function FileBrowserPage() {
   const toast = useToast();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { folderId } = useParams();
   const refreshUser = useAuthStore((s) => s.refreshUser);
   const me = useAuthStore((s) => s.user);
 
+  /*
+    지금 보고 있는 폴더는 **주소가 정한다**. "공유" 가상 폴더는 실제 파일 id 가 없어
+    /shared 라우트로 구분한다. 잘못된 id 가 오면(/f/abc) 루트로 읽어 목록이 비지 않게 한다.
+  */
+  const urlFolderId = ((): number | null => {
+    if (location.pathname === "/shared") return SHARED_VIRTUAL_ID;
+    if (folderId == null) return null;
+    const n = Number(folderId);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  })();
+
   const [path, setPath] = useState<Crumb[]>(
-    () => initialPath ?? [{ id: rootId, name: rootName }],
+    () => pathFromHistory(location.state, urlFolderId) ?? [ROOT_CRUMB],
   );
   const [items, setItems] = useState<FileNode[]>([]);
   const [total, setTotal] = useState(0);
@@ -212,11 +234,13 @@ export function FileBrowserPage({
     localStorage.setItem(VIEW_KEY, v);
   };
 
-  // 현재 폴더에 대한 내 유효 권한 수준 (내 소유 폴더는 항상 manage=소유자).
-  // 공유 하위 트리로 seed 된 경우(딥링크)는 "none"에서 시작해 checkPermission 으로 보정한다.
-  const [perm, setPerm] = useState<string>(
-    (initialPath ?? []).some((c) => c.id === SHARED_VIRTUAL_ID) ? "none" : "manage",
-  );
+  /*
+    현재 폴더에 대한 내 유효 권한 수준 (내 소유 폴더는 항상 manage=소유자).
+    폴더 URL 로 바로 들어온 경우 경로가 아직 없어 "공유 하위인가"를 판단할 수 없다 —
+    닫힌 쪽(none)에서 시작해 경로가 서면 아래 effect 가 올린다. 반대로 열어두면
+    남의 공유 폴더에서 한 프레임 동안 쓰기 버튼이 켜진다.
+  */
+  const [perm, setPerm] = useState<string>(urlFolderId === null ? "manage" : "none");
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState("");
@@ -253,11 +277,18 @@ export function FileBrowserPage({
    * 읽지 못하게 막는다) 실제 노드는 ref 로 들고 있는다 — 같은 페이지 안의 이동이라 충분하다.
    */
   const draggingRef = useRef<FileNode | null>(null);
+  // 목록이 따르는 것은 path 가 아니라 URL 이다 — 경로가 복원되기 전에도 폴더는 정해져 있다.
+  const parentId = urlFolderId;
+  /*
+    breadcrumb 이 지금 URL 을 설명하고 있는가. 딥링크·새로고침 직후에는 아직 아니고,
+    그동안은 "공유 하위인가" 같은 경로 기반 판단을 믿을 수 없다.
+  */
+  const pathReady = path[path.length - 1]?.id === urlFolderId;
+  /** 현재 폴더의 표시명 — 토스트 문구용. 경로가 서기 전에는 마지막으로 알던 이름이다. */
   const current = path[path.length - 1];
-  const parentId = current.id;
 
   // 현재 경로가 "공유" 가상 폴더 목록 자체인지 (읽기 전용 컨테이너).
-  const atVirtualShared = current.id === SHARED_VIRTUAL_ID;
+  const atVirtualShared = urlFolderId === SHARED_VIRTUAL_ID;
   // 현재 경로가 "공유" 하위 트리(가상 목록 또는 그 안의 실제 공유 폴더)인지.
   const inSharedSubtree = path.some((c) => c.id === SHARED_VIRTUAL_ID);
   // 내 드라이브 루트 목록(첫 페이지)에서만 상단에 "공유" 가상 폴더 행을 고정 노출한다.
@@ -265,6 +296,64 @@ export function FileBrowserPage({
 
   const canWrite = permissionCovers(perm, "write");
   const canManage = permissionCovers(perm, "manage");
+
+  /*
+    URL → breadcrumb. 세 갈래다:
+      1) 앱 안 이동·뒤로/앞으로 — history state 에 경로가 실려 있어 서버를 부르지 않는다.
+      2) 루트·공유 — 고정 경로다.
+      3) 딥링크·새로고침 — 서버가 열 수 있는 조상만 골라 돌려준다.
+    열 수 없는 폴더면 루트로 돌린다. 여기서 에러 화면을 띄우면 상위로 갈 crumb 조차 없다.
+  */
+  useEffect(() => {
+    if (path[path.length - 1]?.id === urlFolderId) return;
+
+    const restored = pathFromHistory(location.state, urlFolderId);
+    if (restored) {
+      setPath(restored);
+      return;
+    }
+    if (urlFolderId === null) {
+      setPath([ROOT_CRUMB]);
+      return;
+    }
+    if (urlFolderId === SHARED_VIRTUAL_ID) {
+      setPath([ROOT_CRUMB, SHARED_CRUMB]);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await getBreadcrumb(urlFolderId);
+        if (cancelled) return;
+        /*
+          경로가 이 폴더로 끝나지 않으면 주소를 설명하지 못한 것이다 — 루트 폴더 행의 id 를
+          /f/ 로 직접 친 경우가 그렇다(조상이 없어 crumbs 가 빈다). 그대로 두면 effect 가
+          "아직 안 맞다"고 판단해 같은 요청을 끝없이 되쏜다. 루트로 보내고 끝낸다.
+        */
+        const next = [ROOT_CRUMB, ...(res.shared ? [SHARED_CRUMB] : []), ...res.crumbs];
+        if (next[next.length - 1].id !== urlFolderId) {
+          navigate("/", { replace: true });
+          return;
+        }
+        setPath(next);
+      } catch {
+        if (!cancelled) navigate("/", { replace: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [urlFolderId, location.state, path, navigate]);
+
+  /*
+    폴더가 바뀌면 페이지도 처음으로 — 3페이지에 머물러 빈 목록을 보는 일이 없어야 한다.
+    location.key 까지 보는 이유: 루트 3페이지에서 네비의 "내 드라이브"를 누르면 주소는 그대로
+    "/" 라 폴더 기준으로는 아무 일도 없다. 그래도 사용자는 처음으로 돌아가길 기대한다.
+  */
+  useEffect(() => {
+    setPage(1);
+  }, [urlFolderId, location.key]);
 
   const load = useCallback(
     async (pid: number | null, pageNum: number) => {
@@ -421,6 +510,11 @@ export function FileBrowserPage({
       setPerm("none");
       return;
     }
+    // 경로가 아직 URL 을 설명하지 못하면 공유 하위 여부를 알 수 없다 — 닫아두고 기다린다.
+    if (!pathReady) {
+      setPerm("none");
+      return;
+    }
     if (!inSharedSubtree) {
       setPerm("manage");
       return;
@@ -439,7 +533,7 @@ export function FileBrowserPage({
     return () => {
       cancelled = true;
     };
-  }, [atVirtualShared, inSharedSubtree, parentId]);
+  }, [atVirtualShared, inSharedSubtree, parentId, pathReady]);
 
   const reload = () => load(parentId, page);
 
@@ -508,23 +602,31 @@ export function FileBrowserPage({
 
   // --- 탐색 -----------------------------------------------------------------
 
+  /*
+    이동은 주소를 바꾸는 것으로 끝낸다 — path 는 위 effect 가 URL 을 보고 맞춘다. 새 경로를
+    history state 에 함께 실어 뒤로/앞으로 갈 때 breadcrumb 을 서버 없이 복원한다.
+  */
+  const goTo = (next: Crumb[]) => {
+    const target = next[next.length - 1];
+    // 경로가 아직 URL 을 못 따라잡았으면 그 위에 쌓은 next 도 틀렸다 — 서버에 다시 묻게 둔다.
+    navigate(folderUrl(target.id), pathReady ? { state: { path: next } } : undefined);
+  };
+
   const openFolder = (folder: FileNode) => {
     // 같은 폴더를 연속 클릭(더블클릭)해도 crumb 이 중복 쌓이지 않도록 가드.
-    setPath((p) => (p[p.length - 1]?.id === folder.id ? p : [...p, { id: folder.id, name: folder.name }]));
-    setPage(1);
+    if (urlFolderId === folder.id) return;
+    goTo([...path, { id: folder.id, name: folder.name }]);
   };
 
   // "공유" 가상 폴더 진입 — 내 드라이브 루트에서만 노출되는 고정 행.
   const openSharedVirtual = () => {
-    setPath((p) =>
-      p[p.length - 1]?.id === SHARED_VIRTUAL_ID ? p : [...p, { id: SHARED_VIRTUAL_ID, name: "공유" }],
-    );
-    setPage(1);
+    if (urlFolderId === SHARED_VIRTUAL_ID) return;
+    goTo([...path, SHARED_CRUMB]);
   };
 
   const goToCrumb = (index: number) => {
-    setPath((p) => p.slice(0, index + 1));
-    setPage(1);
+    if (index === path.length - 1) return;
+    goTo(path.slice(0, index + 1));
   };
 
   // --- 업로드 ---------------------------------------------------------------
@@ -1609,65 +1711,12 @@ export function FileBrowserPage({
 }
 
 /**
- * 공유 폴더 진입 라우트 래퍼 (/shared/f/:fileId).
- * 폴더명은 route state 로 전달받고, 없으면(직접 링크/새로고침) 메타데이터로 보강한다.
+ * 옛 공유 폴더 딥링크(/shared/f/:id). 이제 폴더는 소유든 공유든 모두 /f/:id 한 가지이고,
+ * "내 드라이브 > 공유 > 폴더명" 경로는 서버 breadcrumb 이 세워준다.
  */
 export function SharedFolderBrowserPage() {
   const { fileId } = useParams();
-  const location = useLocation();
-  const navigate = useNavigate();
-  const id = Number(fileId);
-  const stateName = (location.state as { name?: string } | null)?.name;
-  const [name, setName] = useState<string | null>(stateName ?? null);
-  const [notFound, setNotFound] = useState(false);
-
-  useEffect(() => {
-    if (name != null || Number.isNaN(id)) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const meta = await getFile(id);
-        if (!cancelled) setName(meta.name);
-      } catch {
-        if (!cancelled) setNotFound(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [id, name]);
-
-  if (Number.isNaN(id) || notFound) {
-    return (
-      <div className="flex h-full flex-col p-6">
-        <ErrorState
-          message="공유 폴더를 열 수 없습니다."
-          onRetry={() => navigate("/", { replace: true })}
-        />
-      </div>
-    );
-  }
-
-  if (name == null) {
-    return (
-      <div className="flex h-full flex-col">
-        <LoadingState />
-      </div>
-    );
-  }
-
-  // 딥링크는 "내 드라이브 > 공유 > 폴더명" 아래에 seed 해 통합 트리 내비게이션과 이어지게 한다.
-  return (
-    <FileBrowserPage
-      rootId={id}
-      rootName={name}
-      initialPath={[
-        { id: null, name: "내 드라이브" },
-        { id: SHARED_VIRTUAL_ID, name: "공유" },
-        { id, name },
-      ]}
-    />
-  );
+  return <Navigate to={`/f/${fileId}`} replace />;
 }
 
 /** 목록/그리드가 공유하는 행 동작 핸들러. */

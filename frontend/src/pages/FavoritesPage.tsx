@@ -1,6 +1,6 @@
 /**
  * 즐겨찾기 가상 폴더 (Phase 8-2). listFavorites 데이터를 FileListView 로 렌더한다.
- * 폴더는 클릭 시 공유 폴더 브라우저(/shared/f/:id — 소유/공유 무관하게 권한 재확인 후 진입)로
+ * 폴더는 클릭 시 파일 브라우저(/f/:id — 소유/공유 무관하게 권한 재확인 후 진입)로
  * 이동하고, 파일은 미리보기한다. 별을 해제하면 목록에서 즉시 빠진다(낙관적, 실패 시 복원).
  */
 
@@ -82,8 +82,8 @@ export function FavoritesPage() {
     }
   };
 
-  const openFolder = (f: FileNode) =>
-    navigate(`/shared/f/${f.id}`, { state: { name: f.name } });
+  // 폴더 주소는 소유/공유 구분 없이 /f/:id 하나다 — breadcrumb 은 브라우저가 서버에서 세운다.
+  const openFolder = (f: FileNode) => navigate(`/f/${f.id}`);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 

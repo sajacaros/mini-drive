@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -178,6 +179,79 @@ async def annotate_location(
         names = [] if f.parent_folder_id is None else chains[f.parent_folder_id]
         prefix = "내 드라이브" if f.user_id == user.id else "내 드라이브 / 공유"
         f.location = " / ".join([prefix, *names])  # type: ignore[attr-defined]
+
+
+# 대상 노드에서 루트까지의 조상 체인. depth 0 이 대상 자신이고 마지막이 루트다.
+_TRAIL_SQL = text(
+    """
+    WITH RECURSIVE trail AS (
+        SELECT id, parent_folder_id, name, user_id, 0 AS depth
+        FROM files WHERE id = :file_id
+        UNION ALL
+        SELECT f.id, f.parent_folder_id, f.name, f.user_id, t.depth + 1
+        FROM files f JOIN trail t ON f.id = t.parent_folder_id
+    )
+    SELECT id, parent_folder_id, name, user_id, depth FROM trail ORDER BY depth ASC
+    """
+)
+
+
+@dataclass(frozen=True)
+class Crumb:
+    id: int
+    name: str
+
+
+@dataclass(frozen=True)
+class Breadcrumb:
+    """폴더 하나를 URL 로 열었을 때 복원할 경로.
+
+    crumbs 는 루트 **바로 아래**부터 대상 폴더 자신까지다. 루트 자리를 뭐라 부를지는
+    부르는 쪽 몫이라 넣지 않는다(folder_name_chains 와 같은 규약) — 화면은 여기에
+    "내 드라이브"(shared=False) 또는 "내 드라이브 / 공유"(shared=True)를 앞에 붙인다.
+    """
+
+    crumbs: list[Crumb]
+    shared: bool
+
+
+async def folder_breadcrumb(
+    session: AsyncSession, user: User, file_id: int
+) -> Breadcrumb:
+    """URL 로 진입한 폴더의 breadcrumb 를 복원한다.
+
+    **열 수 있는 조상만 담는다.** 공유로 닿은 항목은 권한을 준 지점 위쪽이 남의 드라이브라
+    크럼을 눌러도 404 다 — 그 위는 잘라내고 shared=True 로 알린다. 화면은 그 자리에 "공유"
+    가상 폴더를 놓아 목록으로 돌아갈 길을 만든다.
+
+    대상부터 위로 한 칸씩 접근을 확인한다. **소유는 위로 연속이 아니다** — 남의 공유 폴더
+    안에 내가 만든 폴더는 내 것이지만 그 부모는 남의 것이다. 소유자라고 전체 체인을
+    내주면 그 경우 열리지 않는 크럼을 보여주게 된다.
+
+    조회당 조상 수만큼 권한 판정이 도는데, 이 API 는 딥링크·새로고침에서만 불린다 —
+    앱 안에서 오갈 때는 화면이 history 에 실어둔 경로를 쓴다.
+    """
+    node = await ensure_file_access(session, user, await get_file(session, file_id))
+
+    rows = (await session.execute(_TRAIL_SQL, {"file_id": node.id})).all()
+    # 루트 행(parent 없음)은 크럼에서 뺀다 — 그 자리 이름은 화면이 정한다.
+    chain = [r for r in reversed(rows) if r.parent_folder_id is not None]
+
+    start = len(chain)  # 열 수 있는 구간의 시작. 아래 루프가 위로 밀어 올린다.
+    for i in range(len(chain) - 1, -1, -1):
+        row = chain[i]
+        if row.user_id != user.id:
+            ancestor = await get_file(session, row.id)
+            if ancestor is None:
+                break
+            if await permissions_service.get_access_level(session, user, ancestor) is None:
+                break  # 여기서부터 위는 남의 드라이브다.
+        start = i
+
+    # 루트까지 온전히 이어졌더라도 그 루트가 내 것이 아니면 내 드라이브 경로가 아니다.
+    root_owner = rows[-1].user_id if rows else user.id
+    shared = start > 0 or root_owner != user.id
+    return Breadcrumb([Crumb(r.id, r.name) for r in chain[start:]], shared=shared)
 
 
 async def annotate_owner_names(
