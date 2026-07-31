@@ -15,6 +15,7 @@ import { extractErrorMessage } from "@/api/client";
 import { listFiles } from "@/api/files";
 import type { FileNode } from "@/api/types";
 import { Modal } from "@/components/Modal";
+import { WikiMark } from "@/components/WikiStatusBadge";
 import { ChevronRightIcon, FolderIcon } from "@/components/icons";
 import { ErrorState, LoadingState } from "@/components/ui";
 import { roParticle } from "@/lib/format";
@@ -148,7 +149,11 @@ export function MoveModal({ target, currentParentId, onClose, onMove }: MoveModa
                     onClick={() => setPath((p) => [...p, { id: f.id, name: f.name }])}
                   >
                     <FolderIcon width={18} height={18} className="shrink-0 text-accent" />
-                    <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
+                    {/* 목적지 폴더의 성격만 알려준다 — 고르는 것은 사용자 몫이라 막지 않는다. */}
+                    <span className="min-w-0 flex-1 truncate text-sm">
+                      <WikiMark file={f} />
+                      {f.name}
+                    </span>
                     {!isSelf && (
                       <ChevronRightIcon width={16} height={16} className="shrink-0 text-muted" />
                     )}

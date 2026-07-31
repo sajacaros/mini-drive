@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class FileResponse(BaseModel):
@@ -43,6 +43,16 @@ class FileResponse(BaseModel):
     # 파생 필드 (spec/wiki-index.md) — 위키 인덱싱 상태. 목록에서 배지로 쓴다.
     # off | pending | indexing | ready | stale | failed. **null 을 쓰지 않는다.**
     wiki_status: str = "off"
+    # 이 항목 **자신의** 위키 명시값(files.wiki_enabled 3상태) — None=상속, True=명시 ON,
+    # False=명시 OFF. 목록에서 "이 폴더는 전사 위키" 표시를 다는 데 쓴다: 폴더는 인덱싱 상태가
+    # 없어서(wiki_status 가 늘 off) 이 값이 아니면 목록에서 위키 폴더를 알아볼 방법이 없다.
+    # 들어가 보기 전에, 그리고 파일을 끌어다 놓기 전에 알아야 한다(spec 「폴더 상속 사고 경로」).
+    #
+    # 이름을 나눈 이유: 목록 최상위의 `wiki_enabled` 는 **지금 보고 있는 폴더의 유효값**(상속
+    # 포함)이고 이건 **항목 자신의 명시값**이다. 같은 이름이면 두 값을 섞어 읽게 된다.
+    wiki_declared: bool | None = Field(
+        default=None, validation_alias=AliasChoices("wiki_declared", "wiki_enabled")
+    )
 
 
 class FileListResponse(BaseModel):
@@ -58,6 +68,9 @@ class FileListResponse(BaseModel):
     # 항목이 아니라 목록에 붙는 이유: 경고를 봐야 하는 사람이 `write` 권한자인데, 그에게는
     # 위키 상태 API(`/files/{id}/wiki`)가 404 다(발행 권한자만 본다). 폴더를 열 수 있으면
     # 그 폴더가 무엇을 하는 곳인지도 알아야 한다.
+    #
+    # 항목별 표시는 `items[].wiki_declared` 가 맡는다(이 값은 상속을 포함한 **유효**값이라
+    # 항목마다 다시 계산하지 않는다).
     wiki_enabled: bool = False
 
 

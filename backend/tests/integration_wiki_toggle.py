@@ -170,6 +170,34 @@ async def main() -> None:  # noqa: PLR0915 - 순차 시나리오
         assert r.status_code == 404, r.text
         _ok("발행 권한 없는 사용자 — 조회·변경 모두 404")
 
+        # 6. 목록이 폴더의 위키 선언을 말한다 (spec 「폴더 상속 사고 경로」).
+        #    폴더는 인덱싱 상태가 없어(wiki_status 가 늘 off) 이 값이 아니면 목록에서 위키
+        #    폴더를 알아볼 방법이 없다. 폴더 행은 드롭 대상이라 **열기 전에** 알아야 한다.
+        r = await c.post(
+            "/api/files", headers=alice_h, json={"name": "하위", "parent_id": folder}
+        )
+        assert r.status_code == 201, r.text
+
+        r = await c.get("/api/files", headers=alice_h)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # 루트 자신은 위키가 아니지만, 그 안의 위키 폴더는 목록에서 드러나야 한다.
+        assert body["wiki_enabled"] is False, body
+        root_items = {i["name"]: i for i in body["items"]}
+        assert root_items["문서함"]["wiki_declared"] is True, root_items["문서함"]
+        assert root_items["문서함"]["wiki_status"] == "off", root_items["문서함"]
+        _ok("루트 목록 — 위키로 선언된 폴더가 wiki_declared=true 로 드러난다")
+
+        # 상속받는 하위 폴더는 명시값이 없다(null) — 화면도 여기에 배지를 달지 않는다.
+        # 배지는 "선언된 폴더" 하나만 말한다(spec 「표시는 여기까지다」).
+        r = await c.get("/api/files", headers=alice_h, params={"parentId": folder})
+        body = r.json()
+        # 최상위 wiki_enabled 는 **지금 폴더의 유효값**, 항목의 wiki_declared 는 **명시값**이다.
+        assert body["wiki_enabled"] is True, body
+        kids = {i["name"]: i for i in body["items"]}
+        assert kids["하위"]["wiki_declared"] is None, kids["하위"]
+        _ok("하위 목록 — 상속 폴더는 명시값 없음(null), 선언된 폴더만 표시 대상")
+
         # 문서 목록에는 인덱싱 전(pending) 항목도 나온다 — 폴더를 켜고 하나씩 올라오는 것을
         # 지켜볼 수 있어야 한다. 검색은 ready/stale 만 보므로 미완성 트리가 답변에 쓰이지 않는다.
         r = await c.get("/api/wiki/documents", headers=alice_h)
