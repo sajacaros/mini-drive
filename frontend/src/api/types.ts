@@ -71,6 +71,14 @@ export interface FileNode {
    * UI 분기가 새지 않는다. spec/wiki-index.md
    */
   wiki_status?: WikiStatus;
+  /**
+   * 이 항목 **자신의** 위키 명시값 (3상태). null/undefined = 상속, true = 명시 ON,
+   * false = 명시 OFF. 폴더는 인덱싱 상태가 없어서(`wiki_status` 가 늘 off) 목록에서
+   * 위키 폴더를 알아보려면 이 값이 필요하다. spec/wiki-index.md 「폴더 상속 사고 경로」
+   *
+   * 목록 응답 최상위의 `wiki_enabled`(지금 폴더의 **유효**값)와는 다른 값이다.
+   */
+  wiki_declared?: boolean | null;
   /** 요청 사용자의 유효 권한. owner=소유자, 그 외 그룹 권한 수준. */
   permission?: "owner" | "read" | "write" | "manage";
 }

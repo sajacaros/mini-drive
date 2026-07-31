@@ -24,7 +24,7 @@ import { MoveModal } from "@/components/MoveModal";
 import { PageHeader } from "@/components/PageHeader";
 import { PermissionModal } from "@/components/PermissionModal";
 import { WikiModal } from "@/components/WikiModal";
-import { WikiStatusBadge } from "@/components/WikiStatusBadge";
+import { WikiMark } from "@/components/WikiStatusBadge";
 import { PreviewModal } from "@/components/PreviewModal";
 import { ShareModal } from "@/components/ShareModal";
 import { Thumbnail } from "@/components/Thumbnail";
@@ -1719,7 +1719,8 @@ interface FileRowProps {
 function PermissionCell({ f }: { f: FileNode }) {
   if (!f.permission) return <span className="text-muted">-</span>;
   if (f.permission === "owner") {
-    return <span className="text-xs font-medium text-accent">소유자</span>;
+    // nowrap: 이름 열이 넓어지면 이 칸이 먼저 좁아져 "소유 / 자" 로 접혔다.
+    return <span className="whitespace-nowrap text-xs font-medium text-accent">소유자</span>;
   }
   return <Badge tone={permissionTone(f.permission)}>{permissionLabel(f.permission)}</Badge>;
 }
@@ -1995,14 +1996,14 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                     }
                     {...p}
                   >
-                    <span className={`truncate ${f.is_folder ? "font-medium" : ""}`}>{f.name}</span>
+                    {/* 위키 표식(책) — 폴더·파일 공통. 이름 앞 윗첨자 자리라 별도 컬럼이 필요 없고,
+                        표식이 세로로 정렬돼 목록을 훑을 때 한눈에 걸린다. */}
+                    <span className="truncate">
+                      <WikiMark file={f} />
+                      <span className={f.is_folder ? "font-medium" : ""}>{f.name}</span>
+                    </span>
                     {!f.is_folder && f.current_version >= 2 && (
                       <Badge tone="neutral">v{f.current_version}</Badge>
-                    )}
-                    {/* 위키 배지는 off 가 아닐 때만 — 대부분의 항목에는 붙지 않으므로 별도
-                        컬럼을 만들지 않고 이름 옆에 둔다. */}
-                    {f.wiki_status && f.wiki_status !== "off" && (
-                      <WikiStatusBadge status={f.wiki_status} />
                     )}
                   </ItemName>
                   <span {...ROW_ACTION_PROPS}>
@@ -2146,7 +2147,11 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
           {/* 이름 + 동작 */}
           <div className="flex flex-col gap-1 border-t border-token px-2.5 py-2">
             <ItemName file={f} className="min-w-0 text-left" thumb={null} {...p}>
-              <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
+              {/* 목록과 같은 자리(이름 앞 윗첨자)에 둔다 — 보기를 바꿔도 표식이 옮겨 다니지 않는다. */}
+              <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>
+                <WikiMark file={f} />
+                {f.name}
+              </p>
             </ItemName>
             <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
             {/* 좁은 셀에서 넘치지 않도록 아이콘은 줄바꿈 허용 */}
