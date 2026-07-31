@@ -129,7 +129,9 @@ export function Badge({
   // 색은 칩 배경이 담당하고 글씨는 hue 만 남긴다.
   return (
     <span
-      className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+      // shrink-0 + nowrap: 좁은 칸(파일 목록의 이름 열)에서 배지가 쪼그라들어 "전사 / 위키" 처럼
+      // 두 줄로 접히던 것을 막는다. 배지는 폭을 양보하지 않고, 줄어드는 쪽은 이름(truncate)이다.
+      className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium"
       style={{
         color: `color-mix(in srgb, ${color} 25%, var(--text-primary))`,
         background: `color-mix(in srgb, ${color} 16%, transparent)`,
