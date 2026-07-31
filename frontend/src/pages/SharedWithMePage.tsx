@@ -54,9 +54,8 @@ export function SharedWithMePage() {
   const onOpen = (item: SharedItem) => {
     if (item.file.is_folder) {
       // 공유 폴더로 진입 — 권한 게이팅된 파일 브라우저(내 권한은 진입 후 재확인).
-      navigate(`/shared/f/${item.file.id}`, {
-        state: { name: item.file.name, permission: item.permission },
-      });
+      // 주소는 소유 폴더와 같은 /f/:id 다. "내 드라이브 > 공유 > …" 경로는 서버가 세운다.
+      navigate(`/f/${item.file.id}`);
     }
   };
 

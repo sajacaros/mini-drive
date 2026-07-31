@@ -34,6 +34,7 @@ from app.schemas.files import (
     ArchiveTicketRequest,
     BatchUploadItem,
     BatchUploadResponse,
+    BreadcrumbResponse,
     DownloadTicketResponse,
     FileListResponse,
     FileMoveRequest,
@@ -571,6 +572,22 @@ async def get_metadata(file_id: int, user: CurrentUser, session: DbSession) -> F
     node.is_favorite = await favorites_service.is_favorite(session, user.id, node.id)  # type: ignore[attr-defined]
     await files_service.annotate_listing_meta(session, user, [node])
     return FileResponse.model_validate(node)
+
+
+@router.get("/{file_id}/breadcrumb", response_model=BreadcrumbResponse)
+async def breadcrumb(
+    file_id: int, user: CurrentUser, session: DbSession
+) -> BreadcrumbResponse:
+    """폴더 URL(/f/:id)로 바로 진입했을 때 복원할 경로.
+
+    새로고침·링크 공유로 중간 폴더에 떨어져도 상위로 올라갈 길이 있어야 한다. 열 수 없는
+    조상은 담기지 않는다(files_service.folder_breadcrumb).
+    """
+    try:
+        trail = await files_service.folder_breadcrumb(session, user, file_id)
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return BreadcrumbResponse.model_validate(trail, from_attributes=True)
 
 
 @router.get("/{file_id}/download")

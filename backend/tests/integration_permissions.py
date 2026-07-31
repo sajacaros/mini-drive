@@ -216,10 +216,13 @@ async def scenario() -> None:  # noqa: C901, PLR0915 - 순차 시나리오
         assert r.status_code == 200 and "X-Accel-Redirect" in r.headers, r.text
         r = await c.post("/api/shares", headers=alice_h, json={"file_id": bob_file})
         assert r.status_code == 201, r.text
+        # 부여 수준은 manage 여야 한다 — bob_file 은 depth2 에서 G write 를 상속받고 있어
+        # read 를 직접 얹으면 낮추기로 409 다(넓히기 전용, spec/permissions.md).
+        # 여기서 보려는 것은 "조상 소유자가 manage 전용 조작을 할 수 있는가" 뿐이다.
         r = await c.post(
             f"/api/files/{bob_file}/permissions",
             headers=alice_h,
-            json={"group_id": gid, "permission": "read"},
+            json={"group_id": gid, "permission": "manage"},
         )
         assert r.status_code == 201, r.text
         # 목록의 권한 컬럼도 같은 판정을 내려야 한다(UI 게이팅과 서버 인가의 불일치 방지).

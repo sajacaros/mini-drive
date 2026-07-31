@@ -38,6 +38,8 @@ ADMIN = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
 ALICE = {"email": "alice@example.com", "password": "Passw0rd!", "display_name": "Alice"}
 BOB = {"email": "bob@example.com", "password": "Passw0rd!", "display_name": "Bob"}
 CAROL = {"email": "carol@example.com", "password": "Passw0rd!", "display_name": "Carol"}
+# 시드가 만드는 유일한 사용자 그룹. 목록에는 `@전사` 시스템 그룹도 함께 나오므로 이름으로 집는다.
+GROUP_NAME = "개발1팀"
 
 
 def _ok(msg: str) -> None:
@@ -82,7 +84,7 @@ async def _seed() -> dict[str, int]:
         await create_root_folder(s, bob)
 
         # 그룹 (alice owner, bob member).
-        group = Group(name="개발1팀", description="dev", owner_user_id=alice.id, is_active=True)
+        group = Group(name=GROUP_NAME, description="dev", owner_user_id=alice.id, is_active=True)
         s.add(group)
         await s.flush()
         s.add_all([
@@ -150,28 +152,34 @@ async def scenario() -> None:
         r = await c.get("/api/admin/stats", headers=admin_h)
         assert r.status_code == 200, r.text
         st = r.json()
-        assert st["users_by_status"]["active"] == 3  # admin, alice, bob
-        assert st["users_by_status"]["inactive"] == 1  # carol
-        assert st["total_users"] == 4
-        assert st["total_files"] == 2
+        # 어긋나면 어느 칸이 틀렸는지 바로 보이도록 응답 전체를 메시지로 싣는다.
+        assert st["users_by_status"]["active"] == 3, st  # admin, alice, bob
+        assert st["users_by_status"]["inactive"] == 1, st  # carol
+        assert st["total_users"] == 4, st
+        assert st["total_files"] == 2, st
         # 루트 폴더 3개(admin/alice/bob) 가 폴더로 집계된다.
-        assert st["total_folders"] == 3
-        assert st["total_shares"] == {"active": 1, "inactive": 1, "total": 2}
-        assert st["total_groups"] == 1
-        assert st["total_storage_used"] == 4000  # alice 3000 + bob 1000
-        assert st["top_users"][0]["email"] == ALICE["email"]  # 사용량 최대
+        assert st["total_folders"] == 3, st
+        assert st["total_shares"] == {"active": 1, "inactive": 1, "total": 2}, st
+        # 시드가 만든 그룹 1 + `@전사` 시스템 그룹 1. 관리자 화면은 조회 전용이라 시스템
+        # 그룹도 그대로 세고 목록에도 내보낸다 — 통계와 목록이 어긋나지 않는 쪽을 택했다.
+        assert st["total_groups"] == 2, st
+        assert st["total_storage_used"] == 4000, st  # alice 3000 + bob 1000
+        assert st["top_users"][0]["email"] == ALICE["email"], st  # 사용량 최대
         _ok("GET /admin/stats — 상태별 사용자/파일/폴더/공유/그룹/사용량/top_users 반영")
 
         # 2. groups 목록.
         r = await c.get("/api/admin/groups", headers=admin_h)
         assert r.status_code == 200, r.text
         g = r.json()
-        assert g["total"] == 1
-        item = g["items"][0]
-        assert item["owner_email"] == ALICE["email"]
-        assert item["member_count"] == 2  # alice + bob
-        assert item["file_count"] == 1    # f2 만 group 소유
-        _ok("GET /admin/groups — owner 이메일·멤버 수·소유 파일 수")
+        assert g["total"] == 2, g  # 시드 그룹 + `@전사` 시스템 그룹
+        # 순서(created_at desc)에 기대지 않고 이름으로 집는다 — 시스템 그룹이 언제 생기든 무관하게.
+        item = next(it for it in g["items"] if it["name"] == GROUP_NAME)
+        assert item["owner_email"] == ALICE["email"], item
+        assert item["member_count"] == 2, item  # alice + bob
+        assert item["file_count"] == 1, item    # f2 만 group 소유
+        # 시스템 그룹도 목록에 나온다(관리자 화면은 조회 전용이라 숨길 이유가 없다).
+        assert any(it["name"] == "@전사" for it in g["items"]), g
+        _ok("GET /admin/groups — owner 이메일·멤버 수·소유 파일 수 (+ @전사 노출)")
 
         # 3. shares 목록 + 필터.
         r = await c.get("/api/admin/shares", headers=admin_h)

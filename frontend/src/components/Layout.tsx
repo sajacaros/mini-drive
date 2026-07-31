@@ -60,6 +60,11 @@ function loadClosedSections(): Record<string, boolean> {
   return {};
 }
 
+/** 파일 브라우저가 맡는 경로들 — 한 페이지가 폴더를 오가며 계속 살아 있는 구간이다. */
+function isDriveRoute(pathname: string): boolean {
+  return pathname === "/" || pathname === "/shared" || pathname.startsWith("/f/");
+}
+
 export function Layout() {
   const { user } = useAuthStore();
   const location = useLocation();
@@ -331,13 +336,16 @@ export function Layout() {
           돌아가게 한다.
 
           페이지들이 화면 안 위치를 URL 이 아니라 컴포넌트 state 로 들고 있어서 생기는 문제다.
-          예를 들어 FileBrowserPage 의 현재 폴더(path)는 state 라, 폴더를 파고든 뒤 "내 드라이브"를
-          눌러도 URL 이 그대로면 리마운트가 없어 화면이 그 폴더에 머문다(목록 페이지 번호도 같다).
-          React Router 는 같은 경로로 이동해도 새 location.key 를 발급하므로, 이걸 key 로 쓰면
+          같은 경로로 이동해도 React Router 는 새 location.key 를 발급하므로, 이걸 key 로 쓰면
           "같은 메뉴 다시 클릭"이 리셋으로 이어진다.
+
+          드라이브(/, /f/:id, /shared)만 예외다. 폴더가 주소에 실리면서 이 페이지의 위치는
+          URL 이 들고 있고, 네비를 눌러 "/" 로 가면 스스로 루트로 돌아온다 — 리마운트가 필요
+          없다. 오히려 폴더를 옮길 때마다 리마운트하면 **올리는 중인 파일의 진행 표시가
+          날아간다**(업로드는 폴더를 옮겨도 이어져야 한다).
         */}
         <div className="min-h-0 flex-1">
-          <Outlet key={location.key} />
+          <Outlet key={isDriveRoute(location.pathname) ? "drive" : location.key} />
         </div>
       </main>
     </div>

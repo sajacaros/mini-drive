@@ -5,6 +5,7 @@ import type { AxiosProgressEvent } from "axios";
 import apiClient from "./client";
 import type {
   BatchUploadResponse,
+  BreadcrumbResponse,
   DownloadTicketResponse,
   FileListResponse,
   FileNode,
@@ -32,6 +33,16 @@ export async function listFiles(
 
 export async function getFile(id: number): Promise<FileNode> {
   const { data } = await apiClient.get<FileNode>(`/files/${id}`);
+  return data;
+}
+
+/**
+ * 폴더 URL(/f/:id)로 바로 들어왔을 때 breadcrumb 를 복원한다.
+ * 앱 안에서 이동할 때는 history state 로 경로가 따라오므로 호출하지 않는다 — 새로고침과
+ * 링크 진입만 서버에 묻는다.
+ */
+export async function getBreadcrumb(id: number): Promise<BreadcrumbResponse> {
+  const { data } = await apiClient.get<BreadcrumbResponse>(`/files/${id}/breadcrumb`);
   return data;
 }
 

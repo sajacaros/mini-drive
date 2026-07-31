@@ -74,6 +74,8 @@ function App() {
         <Route element={<ProtectedRoute />}>
           <Route element={<Layout />}>
             <Route path="/" element={<FileBrowserPage />} />
+            {/* 폴더는 주소에 남는다 — 뒤로가기가 상위 폴더를 뜻하고 링크로 그 자리를 연다. */}
+            <Route path="/f/:folderId" element={<FileBrowserPage />} />
             <Route path="/todo" element={<TodoPage />} />
             <Route path="/todo/month" element={<TodoMonthPage />} />
             <Route path="/routines" element={<RoutinesPage />} />
@@ -85,8 +87,9 @@ function App() {
             <Route path="/wiki" element={<WikiPage />} />
             <Route path="/wiki/catalog" element={<WikiCatalogPage />} />
             <Route path="/wiki/catalog/:fileId" element={<WikiCatalogDetailPage />} />
-            {/* "공유됨"은 내 드라이브 > 공유 가상 폴더로 통합됨 — 기존 경로는 홈으로 리다이렉트. */}
-            <Route path="/shared" element={<Navigate to="/" replace />} />
+            {/* "공유됨"은 내 드라이브 > 공유 가상 폴더다 — 실제 폴더 id 가 없어 고유 경로를 준다. */}
+            <Route path="/shared" element={<FileBrowserPage />} />
+            {/* 옛 공유 폴더 딥링크 — 폴더는 이제 /f/:id 하나로 통일됐다. */}
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />

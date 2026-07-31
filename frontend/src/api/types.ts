@@ -106,6 +106,19 @@ export interface BatchUploadResponse {
   failed: number;
 }
 
+/**
+ * 폴더 URL 진입 시 복원할 경로 (GET /files/{id}/breadcrumb).
+ *
+ * crumbs 는 루트 **바로 아래**부터 그 폴더 자신까지이고, 요청자가 실제로 열 수 있는 칸만
+ * 들어 있다. 루트 칸은 서버가 넣지 않는다 — 화면이 shared 에 따라 "내 드라이브" 앞에
+ * "공유" 가상 폴더를 끼울지 정한다.
+ */
+export interface BreadcrumbResponse {
+  crumbs: { id: number; name: string }[];
+  /** 그룹 공유로 닿은 경로인가. true 면 crumbs 위쪽은 남의 드라이브라 잘려 있다. */
+  shared: boolean;
+}
+
 /** GET /api/files (페이지네이션). */
 export interface FileListResponse {
   items: FileNode[];
