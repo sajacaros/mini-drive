@@ -110,6 +110,21 @@ class Settings(BaseSettings):
     # 454건을 훑는다. 예산은 사고를 막는 상한이지 검색 범위를 좁히는 수단이 아니다.
     wiki_query_catalog_budget_chars: int = Field(default=180_000, ge=1_000)
 
+    # --- 대화형 질의 (services/chat) ---
+    chat_enabled: bool = True
+    # 비워 두면 wiki_llm_model 을 따른다. 인덱싱과 채팅이 같은 모델을 쓰는 것이 기본이고,
+    # 다른 모델을 붙여 비교하고 싶을 때만 명시한다(예: 사내 Qwen 보조 모델).
+    chat_llm_model: str = ""
+    # **인덱싱의 low 와 달라야 한다.** 툴을 고르는 일은 생성이 아니라 판정이고, Solar-Open2 는
+    # 판정에서 low 면 오판한다(wiki_llm.py 모듈 주석의 실측). 빈 문자열이면 파라미터 자체를
+    # 보내지 않는다 — reasoning 모델이 아닌 provider 로 갈아탈 때의 탈출구다.
+    chat_llm_reasoning_effort: str = "medium"
+    # 툴 왕복 상한. 모델이 검색만 반복하다 끝나지 않게 하는 하드 캡이며, 도달하면 그때까지
+    # 모은 근거로 답변을 강제한다.
+    chat_max_tool_iterations: int = Field(default=6, ge=1, le=20)
+    # 에이전트에 넘길 최근 대화 턴 수(1턴 = 질문+답변). 맥락과 프롬프트 크기의 절충이다.
+    chat_history_turns: int = Field(default=8, ge=0, le=50)
+
 
 @lru_cache
 def get_settings() -> Settings:

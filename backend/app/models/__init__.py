@@ -7,7 +7,9 @@
 from app.core.database import Base
 from app.models.app_setting import AppSetting
 from app.models.audit import AuditLog
+from app.models.chat import ChatMessage, ChatSession
 from app.models.enums import (
+    ChatRole,
     GroupPermission,
     GroupRole,
     RoutineFrequency,
@@ -46,6 +48,8 @@ __all__ = [
     "Routine",
     "TodoItem",
     "WikiDocument",
+    "ChatSession",
+    "ChatMessage",
     # 열거형
     "UserRole",
     "UserStatus",
@@ -54,4 +58,5 @@ __all__ = [
     "GroupPermission",
     "TodoStatus",
     "RoutineFrequency",
+    "ChatRole",
 ]

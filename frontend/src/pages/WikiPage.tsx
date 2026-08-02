@@ -12,8 +12,9 @@
  * 답변에는 반드시 근거를 붙인다. 근거를 누르면 그 문서의 해당 위치를 미리보기로 연다 —
  * 앵커가 페이지가 아니라 **줄 번호**인 것은 md 트리의 좌표가 line_num 이기 때문이다.
  *
- * 대화 히스토리·세션은 아직 없다(백엔드도 단발 `POST /wiki/ask` 뿐이다). 붙일 때 이 화면이
- * 좌측 세션 목록 + 우측 대화로 갈라지도록, 질문 입력과 답변 표시를 한 덩어리로 묶어 둔다.
+ * 맥락이 이어지는 대화는 **별도 화면**(ChatPage, `/chat`)으로 갈렸다. 이 화면은 세션을 만들지
+ * 않고 한 번 묻고 마는 경로로 남는다 — 답 하나만 보면 되는 사람에게 세션 목록은 소음이다.
+ * 근거 목록은 두 화면이 `components/chat/CitationList` 를 공유한다.
  */
 
 import { useState } from "react";
@@ -23,39 +24,10 @@ import type { WikiAnswer, WikiCitation } from "@/api/types";
 import { askWiki } from "@/api/wiki";
 import { PageHeader } from "@/components/PageHeader";
 import { PreviewModal } from "@/components/PreviewModal";
+import { CitationList } from "@/components/chat/CitationList";
 import { ChatIcon } from "@/components/icons";
 import { EmptyState, ErrorState, Spinner } from "@/components/ui";
 import { fetchFilePreview } from "@/lib/preview";
-
-function CitationList({
-  citations,
-  onOpen,
-}: {
-  citations: WikiCitation[];
-  onOpen: (c: WikiCitation) => void;
-}) {
-  if (citations.length === 0) return null;
-  return (
-    <div className="mt-4">
-      <h3 className="mb-2 text-xs font-semibold text-muted">근거</h3>
-      <div className="flex flex-col gap-1.5">
-        {citations.map((c) => (
-          <button
-            key={`${c.file_id}-${c.node_id}`}
-            className="flex items-center justify-between gap-2 rounded-lg border border-token px-3 py-2 text-left text-sm hover:bg-muted-token"
-            onClick={() => onOpen(c)}
-          >
-            <span className="min-w-0 truncate">
-              <span className="font-medium">{c.file_name}</span>
-              <span className="text-muted"> · {c.node_title}</span>
-            </span>
-            <span className="shrink-0 text-xs text-muted">{c.line_num}줄</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export function WikiPage() {
   const [question, setQuestion] = useState("");

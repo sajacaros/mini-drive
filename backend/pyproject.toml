@@ -21,6 +21,13 @@ dependencies = [
     "redis>=5.2.0",
     "structlog>=24.4.0",
     "prometheus-client>=0.21.0",
+    # LLM 접속을 provider 중립으로 만든다(services/llm.py). 모델 문자열이 이미
+    # hosted_vllm/ 프리픽스라는 LiteLLM 규약을 쓰고 있었다.
+    "litellm>=1.93.0",
+    # 대화형 질의의 툴 루프(services/chat/agent.py). checkpointer 는 쓰지 않으므로
+    # langgraph-checkpoint-postgres(psycopg 의존)는 들이지 않는다 — models/chat.py 주석 참조.
+    "langgraph>=1.2.10",
+    "langchain-litellm>=0.2.0",
 ]
 
 [project.optional-dependencies]

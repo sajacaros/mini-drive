@@ -36,6 +36,13 @@ x-backend-env: &backend-env
   WIKI_LLM_MODEL: ${WIKI_LLM_MODEL:-hosted_vllm/solar-open2-250b}
   # 생성 계열은 low 로 충분하다 — Solar 는 medium 이상에서 "ping" 한 마디에도 2600토큰/28초다.
   WIKI_LLM_REASONING_EFFORT: ${WIKI_LLM_REASONING_EFFORT:-low}
+  # 대화형 질의. 모델은 비우면 WIKI_LLM_MODEL 을 따르고, effort 는 **판정이라 medium 이상**이다
+  # (툴 선택을 low 로 하면 오판한다 — app/services/wiki_llm.py 주석의 실측).
+  CHAT_ENABLED: ${CHAT_ENABLED:-true}
+  CHAT_LLM_MODEL: ${CHAT_LLM_MODEL:-}
+  CHAT_LLM_REASONING_EFFORT: ${CHAT_LLM_REASONING_EFFORT:-medium}
+  CHAT_MAX_TOOL_ITERATIONS: ${CHAT_MAX_TOOL_ITERATIONS:-6}
+  CHAT_HISTORY_TURNS: ${CHAT_HISTORY_TURNS:-8}
   # 첫 admin 은 셋업 위저드(첫 부팅 시 브라우저에서 /setup)로 생성한다 (PRD 3.6.2).
   # ADMIN_* 환경변수 시드는 제거됨. 비상 복구: docker compose exec backend python -m app.cli create-admin ...
 
