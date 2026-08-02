@@ -20,3 +20,8 @@ argon2-cffi>=23.1.0
 redis>=5.2.0
 structlog>=24.4.0
 prometheus-client>=0.21.0
+# LLM provider 중립 계층 + 대화형 질의의 툴 루프.
+# langgraph-checkpoint-postgres 는 의도적으로 없다(psycopg 의존 — app/models/chat.py 주석).
+litellm>=1.93.0
+langgraph>=1.2.10
+langchain-litellm>=0.2.0

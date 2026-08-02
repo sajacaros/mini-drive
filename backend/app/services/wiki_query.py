@@ -120,6 +120,22 @@ class QueryResult:
     thinking: str | None = None
 
 
+@dataclass(frozen=True)
+class SearchResult:
+    """검색 단계의 결과 — 답변 생성 **직전**까지.
+
+    단발 질의(`ask`)와 대화형 질의의 `search_wiki` 툴이 이것을 공유한다. 예산 규율(문자
+    예산·노드 상한·본문 길이 상한)이 이 한 경로에만 있어야 문서가 늘었을 때 한쪽만 죽는 일이
+    생기지 않는다.
+    """
+
+    blocks: list[str]
+    citations: list[Citation]
+    searched_documents: int
+    examined_documents: int = 0
+    thinking: str | None = None
+
+
 def _iter_nodes(nodes: list[Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for n in nodes:
@@ -316,20 +332,17 @@ async def _node_body(
     return "\n".join(lines[start:end]).strip()[:MAX_NODE_CHARS]
 
 
-async def ask(
+async def search(
     session: AsyncSession, storage: StorageService, question: str
-) -> QueryResult:
-    """질의에 답하고 근거를 함께 돌려준다."""
+) -> SearchResult:
+    """관련 절을 찾아 본문 발췌와 근거를 돌려준다 — **답변 생성은 하지 않는다.**
+
+    단발 질의와 대화형 질의가 공유하는 검색 경로다. 답변을 여기서 만들지 않는 이유는 대화형
+    쪽이 발췌를 받아 형태(텍스트·비교표…)까지 스스로 정하기 때문이다.
+    """
     docs = await _queryable_documents(session)
     if not docs:
-        return QueryResult(
-            answer=(
-                "아직 위키에 올라온 문서가 없습니다. "
-                "드라이브에서 Markdown·HTML 문서의 위키를 켜면 검색 대상이 됩니다."
-            ),
-            citations=[],
-            searched_documents=0,
-        )
+        return SearchResult(blocks=[], citations=[], searched_documents=0)
 
     keywords = _keywords(question)
     budget = get_settings().wiki_query_catalog_budget_chars
@@ -367,15 +380,6 @@ async def ask(
                 picked.append((file, node))
                 break
 
-    if not picked:
-        return QueryResult(
-            answer="찾아본 자료 중에는 없습니다.",
-            citations=[],
-            searched_documents=len(docs),
-            examined_documents=examined,
-            thinking=thinking,
-        )
-
     blocks: list[str] = []
     citations: list[Citation] = []
     for file, node in picked:
@@ -393,20 +397,8 @@ async def ask(
             )
         )
 
-    if not blocks:
-        return QueryResult(
-            answer="찾아본 자료 중에는 없습니다.",
-            citations=[],
-            searched_documents=len(docs),
-            examined_documents=examined,
-            thinking=thinking,
-        )
-
-    answer = await wiki_llm.complete(
-        _ANSWER_PROMPT.format(question=question, context="\n\n".join(blocks))
-    )
-    return QueryResult(
-        answer=answer,
+    return SearchResult(
+        blocks=blocks,
         citations=citations,
         searched_documents=len(docs),
         examined_documents=examined,
@@ -414,4 +406,47 @@ async def ask(
     )
 
 
-__all__ = ["MAX_CONTEXT_NODES", "Citation", "QueryResult", "ask"]
+async def ask(
+    session: AsyncSession, storage: StorageService, question: str
+) -> QueryResult:
+    """질의에 답하고 근거를 함께 돌려준다 (단발 `POST /wiki/ask`)."""
+    found = await search(session, storage, question)
+    if found.searched_documents == 0:
+        return QueryResult(
+            answer=(
+                "아직 위키에 올라온 문서가 없습니다. "
+                "드라이브에서 Markdown·HTML 문서의 위키를 켜면 검색 대상이 됩니다."
+            ),
+            citations=[],
+            searched_documents=0,
+        )
+
+    if not found.blocks:
+        return QueryResult(
+            answer="찾아본 자료 중에는 없습니다.",
+            citations=[],
+            searched_documents=found.searched_documents,
+            examined_documents=found.examined_documents,
+            thinking=found.thinking,
+        )
+
+    answer = await wiki_llm.complete(
+        _ANSWER_PROMPT.format(question=question, context="\n\n".join(found.blocks))
+    )
+    return QueryResult(
+        answer=answer,
+        citations=found.citations,
+        searched_documents=found.searched_documents,
+        examined_documents=found.examined_documents,
+        thinking=found.thinking,
+    )
+
+
+__all__ = [
+    "MAX_CONTEXT_NODES",
+    "Citation",
+    "QueryResult",
+    "SearchResult",
+    "ask",
+    "search",
+]

@@ -207,7 +207,12 @@ export function Layout() {
           {/*
             위키는 드라이브의 한 화면이 아니라 **자기 섹션**이다(spec/wiki-index.md 「프런트」).
             질의와 인덱스 관리는 보는 사람도 보는 빈도도 다르다 — 질문은 매일, 무엇이 색인됐는지는
-            가끔이다. 앞으로 붙을 대화 히스토리·세션도 이 섹션 아래로 들어온다.
+            가끔이다.
+
+            질의 진입점은 **"채팅" 하나**다. 한때 단발 질의(/wiki)와 대화를 나란히 뒀지만,
+            물어보러 온 사람에게 "질문"과 "채팅" 중 무엇이 다른지는 눌러 보기 전에는 알 수
+            없다. 대화는 단발 질의를 포함하므로(한 번 묻고 닫으면 그만이다) 갈라 둘 이유가 없다.
+            /wiki 주소는 살아 있다 — 북마크와 옛 링크가 깨지지 않게.
           */}
           <NavSection
             icon={<BookIcon width={13} height={13} />}
@@ -217,7 +222,7 @@ export function Layout() {
             onToggle={() => toggleSection("wiki")}
             className="mt-4"
           >
-            <NavItem to="/wiki" icon={<ChatIcon />} label="질문" collapsed={collapsed} end />
+            <NavItem to="/chat" icon={<ChatIcon />} label="채팅" collapsed={collapsed} />
             <NavItem
               to="/wiki/catalog"
               icon={<ListIcon />}

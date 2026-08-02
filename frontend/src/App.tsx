@@ -28,6 +28,7 @@ import { TodoReportsPage } from "@/pages/TodoReportsPage";
 import { TrashPage } from "@/pages/TrashPage";
 import { WikiCatalogDetailPage } from "@/pages/WikiCatalogDetailPage";
 import { WikiCatalogPage } from "@/pages/WikiCatalogPage";
+import { ChatPage } from "@/pages/ChatPage";
 import { WikiPage } from "@/pages/WikiPage";
 import { useAuthStore } from "@/store/auth";
 
@@ -85,6 +86,7 @@ function App() {
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/shares" element={<SharesPage />} />
             <Route path="/wiki" element={<WikiPage />} />
+            <Route path="/chat" element={<ChatPage />} />
             <Route path="/wiki/catalog" element={<WikiCatalogPage />} />
             <Route path="/wiki/catalog/:fileId" element={<WikiCatalogDetailPage />} />
             {/* "공유됨"은 내 드라이브 > 공유 가상 폴더다 — 실제 폴더 id 가 없어 고유 경로를 준다. */}

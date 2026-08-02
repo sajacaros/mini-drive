@@ -73,6 +73,18 @@ class TodoStatus(StrEnum):
     FAILED = "failed"
 
 
+class ChatRole(StrEnum):
+    """대화 메시지의 화자 (chat_messages.role).
+
+    'system' 과 'tool' 은 없다. 시스템 프롬프트는 매 턴 코드가 만들고, 툴 호출/결과는
+    `tool_trace` 컬럼에 따로 남는다 — 저장한 대화가 곧 화면에 보이는 대화여야 목록·미리보기가
+    필터 없이 그려진다.
+    """
+
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
 class RoutineFrequency(StrEnum):
     """반복 루틴 주기 (routines.frequency).
 

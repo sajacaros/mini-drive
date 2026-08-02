@@ -764,3 +764,72 @@ export interface WikiAnswer {
    */
   examined_documents: number;
 }
+
+/* ── 대화형 질의 (services/chat) ─────────────────────────────── */
+
+/**
+ * 답변의 **형태**.
+ *
+ * 서버가 앞단에서 인텐트를 분류해 정하는 것이 아니라, 모델이 검색 결과를 본 뒤 마지막에
+ * 호출한 "렌더 툴"의 인자가 그대로 내려온 것이다(backend `services/chat/artifacts.py`).
+ * 그래서 형태를 하나 늘리는 일이 백엔드 툴 하나 + 여기 분기 하나 + 렌더러 하나로 끝난다.
+ *
+ * `kind` 를 판별자로 쓰는 유니온이며, 모르는 kind 가 오면 ArtifactView 가 안내 문구로
+ * 떨어뜨린다 — 서버가 먼저 배포되어도 화면이 깨지지 않는다.
+ */
+export type ChatArtifact =
+  | { kind: "text"; markdown: string }
+  | {
+      kind: "comparison";
+      columns: string[];
+      rows: string[][];
+      title: string;
+      /** 표만으로 드러나지 않는 단서. 행이 잘렸다는 사실도 여기 실린다. */
+      note: string;
+    };
+
+/** 모델이 부른 툴 한 번. 답이 이상할 때 원인은 대개 검색이 무엇을 가져왔는가에 있다. */
+export interface ChatToolCall {
+  name: string;
+  /** 검색 툴이면 실제로 보낸 질의 — 대화 맥락이 어떻게 독립형 질의가 됐는지 보인다. */
+  query: string;
+  excerpts: number;
+}
+
+export interface ChatMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  /** 어시스턴트 메시지에만 있다. */
+  artifact: ChatArtifact | null;
+  citations: WikiCitation[];
+  tool_trace: ChatToolCall[];
+  created_at: string;
+}
+
+export interface ChatSessionItem {
+  id: number;
+  title: string;
+  created_at: string;
+  /** 아직 대화가 없으면 null — 방금 만든 세션이다. */
+  last_message_at: string | null;
+}
+
+export interface ChatSessionList {
+  items: ChatSessionItem[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface ChatSessionDetail extends ChatSessionItem {
+  messages: ChatMessage[];
+}
+
+export interface ChatAskResponse {
+  /** 서버가 저장한 질문. 낙관적으로 그려 둔 임시 메시지를 이것으로 갈아 끼운다. */
+  question: ChatMessage;
+  answer: ChatMessage;
+  searched_documents: number;
+  examined_documents: number;
+}
