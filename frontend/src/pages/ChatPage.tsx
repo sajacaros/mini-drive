@@ -37,6 +37,17 @@ import { fetchFilePreview } from "@/lib/preview";
 /** 낙관적으로 그린 질문의 임시 id. 서버 id 와 겹치지 않게 음수를 쓴다. */
 const PENDING_ID = -1;
 
+/** 제목 길이 상한. 서버(`chat_sessions.title`)와 같은 값이라야 잘리는 자리가 어긋나지 않는다. */
+const TITLE_CHARS = 60;
+
+/**
+ * 첫 질문에서 제목을 만든다 — 서버 `services/chat/sessions.py` 의 `derive_title` 과 **같은 규칙**이다.
+ * 규칙이 어긋나면 답이 도착하는 순간 목록의 글자가 바뀌어, 잘못 그렸다가 고친 것처럼 보인다.
+ */
+function deriveTitle(question: string): string {
+  return question.split(/\s+/).filter(Boolean).join(" ").slice(0, TITLE_CHARS);
+}
+
 function SessionRow({
   session,
   active,
@@ -254,14 +265,30 @@ export function ChatPage() {
 
     // 세션이 없으면 첫 질문이 세션을 만든다 — "새 대화"를 먼저 누르게 하지 않는다.
     let sessionId = activeId;
+    // 낙관적으로 세운 제목을 되돌릴 대상. 실패하면 서버에도 제목이 남지 않으므로 함께 거둔다.
+    let titledSessionId: number | null = null;
     setAsking(true);
     setError(null);
     try {
+      let target = sessions.find((s) => s.id === sessionId);
       if (sessionId === null) {
         const created = await createChatSession();
         setSessions((prev) => [created, ...prev]);
         setActiveId(created.id);
         sessionId = created.id;
+        target = created;
+      }
+
+      /*
+        질문을 **목록에도 곧바로** 올린다. Solar 는 추론 모델이라 답까지 수십 초가 걸리는데,
+        그동안 왼쪽이 "제목 없음"이면 목록에는 방금 무엇을 물었는지가 없다 — 화면에 도는 것은
+        진행 표시뿐이라, 질문이 들어갔는지 목록만 보고는 알 수 없다(실측 지적).
+        제목이 이미 있는 세션(이어 묻는 경우)은 건드리지 않는다 — 서버도 첫 질문에서만 짓는다.
+      */
+      if (target && !target.title) {
+        const title = deriveTitle(q);
+        titledSessionId = sessionId;
+        setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title } : s)));
       }
 
       setQuestion("");
@@ -293,6 +320,13 @@ export function ChatPage() {
     } catch (e) {
       // 서버가 질문·답변을 함께 되돌렸으므로 화면에서도 거둬들이고, 입력창에 되돌려 준다.
       setMessages((prev) => prev.filter((m) => m.id !== PENDING_ID));
+      // 제목도 함께 거둔다 — 서버는 첫 질문과 한 트랜잭션으로 짓는다. 남겨 두면 새로고침에서
+      // 사라져, 화면과 서버가 다른 말을 하는 구간이 생긴다.
+      if (titledSessionId !== null) {
+        setSessions((prev) =>
+          prev.map((s) => (s.id === titledSessionId ? { ...s, title: "" } : s)),
+        );
+      }
       setQuestion(q);
       setError(extractErrorMessage(e));
     } finally {
