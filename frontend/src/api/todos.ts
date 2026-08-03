@@ -22,14 +22,32 @@ export async function getDay(date?: string): Promise<TodoDayResponse> {
   return data;
 }
 
-export async function createTodo(date: string, title: string): Promise<TodoItem> {
-  const { data } = await apiClient.post<TodoItem>("/todos", { date, title });
+/** startTime 은 "HH:MM" (10분 단위). 생략하거나 null 이면 종일이다. */
+export async function createTodo(
+  date: string,
+  title: string,
+  startTime?: string | null,
+): Promise<TodoItem> {
+  const { data } = await apiClient.post<TodoItem>("/todos", {
+    date,
+    title,
+    start_time: startTime ?? null,
+  });
   return data;
 }
 
+/**
+ * start_time 은 세 갈래다 — 키를 아예 빼면 그대로, null 이면 종일로 지움, "HH:MM" 이면 그 시각.
+ * (undefined 를 넣어도 axios 가 JSON 직렬화에서 키를 빼므로 '그대로'와 같다.)
+ */
 export async function updateTodo(
   id: number,
-  payload: { title?: string; status?: TodoStatus; sort_order?: number },
+  payload: {
+    title?: string;
+    status?: TodoStatus;
+    start_time?: string | null;
+    sort_order?: number;
+  },
 ): Promise<TodoItem> {
   const { data } = await apiClient.patch<TodoItem>(`/todos/${id}`, payload);
   return data;

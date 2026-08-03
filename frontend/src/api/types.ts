@@ -563,6 +563,8 @@ export interface Routine {
   days_of_week: number[];
   /** 1~31. monthly 일 때만 채워짐. 그 달에 없는 날짜면 그 달은 건너뛴다. */
   day_of_month: number | null;
+  /** "HH:MM:SS" — 파생 항목에 복사된다. 지금은 항상 null(루틴 = 종일). */
+  start_time: string | null;
   is_active: boolean;
   sort_order: number;
   created_at: string;
@@ -595,6 +597,8 @@ export interface TodoItem {
   status: TodoStatus;
   routine_id: number | null;
   routine_title: string | null;
+  /** "HH:MM:SS" 형태의 시작 시각. null = 종일 — 목록 맨 위에 모인다. */
+  start_time: string | null;
   sort_order: number;
   completed_at: string | null;
   created_at: string;

@@ -45,6 +45,7 @@ def _routine_response(routine: Routine) -> RoutineResponse:
         frequency=RoutineFrequency(routine.frequency),
         days_of_week=days_to_list(routine.days_of_week),
         day_of_month=routine.day_of_month,
+        start_time=routine.start_time,
         is_active=routine.is_active,
         sort_order=routine.sort_order,
         created_at=routine.created_at,
@@ -60,6 +61,7 @@ def _todo_response(view: TodoItemView) -> TodoResponse:
         status=TodoStatus(item.status),
         routine_id=item.routine_id,
         routine_title=view.routine_title,
+        start_time=item.start_time,
         sort_order=item.sort_order,
         completed_at=item.completed_at,
         created_at=item.created_at,
@@ -228,7 +230,7 @@ async def create_todo(
     payload: TodoCreateRequest, user: CurrentUser, session: DbSession
 ) -> TodoResponse:
     view = await todos_service.create_todo(
-        session, user.id, payload.date, payload.title
+        session, user.id, payload.date, payload.title, payload.start_time
     )
     return _todo_response(view)
 
@@ -247,7 +249,11 @@ async def update_todo(
             todo_id,
             title=payload.title,
             status=payload.status,
+            start_time=payload.start_time,
             sort_order=payload.sort_order,
+            # start_time 은 null 자체가 '종일로 지움'이라 값만으로는 미변경과 구분되지
+            # 않는다 — 요청 본문에 필드가 실제로 실려 왔는지로 가른다.
+            set_start_time="start_time" in payload.model_fields_set,
         )
     except TodoServiceError as exc:
         raise _http_error(exc) from exc

@@ -11,13 +11,18 @@
 
 "오늘"의 기준 시각대는 Asia/Seoul(KST)로 고정한다 — 국내용 서비스이며 자정 경계가 사용자
 체감과 일치해야 하기 때문이다.
+
+하루치 정렬은 start_time NULLS FIRST → sort_order → id 다. start_time 이 NULL 인 항목이
+'종일'이고, 루틴 파생 항목은 (지금은) 언제나 종일이라 목록 맨 위에 모인다. 종일 항목끼리는
+사용자가 드래그로 잡은 sort_order 를 그대로 존중하고, 시각이 있는 항목은 시각이 순서를
+결정한다 — 그래서 프런트는 시각 있는 항목의 드래그 핸들을 내린다.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -212,6 +217,9 @@ async def ensure_day_materialized(
                 title=routine.title,
                 status=TodoStatus.PENDING.value,
                 routine_id=routine.id,
+                # 루틴의 시작 시각을 그대로 물려준다(현재는 항상 NULL = 종일). 복사해 두면
+                # 나중에 루틴 시각을 바꿔도 이미 지나간 날의 기록은 그때 그대로 남는다.
+                start_time=routine.start_time,
                 sort_order=routine.sort_order,
             )
         )
@@ -239,7 +247,7 @@ class TodoItemView:
 async def get_day(
     session: AsyncSession, user_id: int, day: date
 ) -> list[TodoItemView]:
-    """하루치 투두를 물질화 후 반환한다(루틴 항목 먼저, 그다음 정렬/생성순)."""
+    """하루치 투두를 물질화 후 반환한다(종일 먼저, 그다음 시각순)."""
     await ensure_day_materialized(session, user_id, day)
 
     rows = (
@@ -248,7 +256,9 @@ async def get_day(
             .outerjoin(Routine, Routine.id == TodoItem.routine_id)
             .where(TodoItem.user_id == user_id, TodoItem.todo_date == day)
             .order_by(
-                # 사용자 드래그 정렬을 그대로 존중 — sort_order 우선, 동률은 생성순(id).
+                # 종일(start_time NULL)이 무조건 위 — 그다음 시각순.
+                TodoItem.start_time.asc().nullsfirst(),
+                # 같은 칸 안에서는 사용자 드래그 정렬을 존중하고, 동률은 생성순(id).
                 TodoItem.sort_order.asc(),
                 TodoItem.id.asc(),
             )
@@ -258,9 +268,13 @@ async def get_day(
 
 
 async def create_todo(
-    session: AsyncSession, user_id: int, day: date, title: str
+    session: AsyncSession,
+    user_id: int,
+    day: date,
+    title: str,
+    start_time: time | None = None,
 ) -> TodoItemView:
-    """그날의 임시 투두(루틴 아님) 추가. 정렬은 기존 최대 + 1."""
+    """그날의 임시 투두(루틴 아님) 추가. start_time 이 None 이면 종일. 정렬은 기존 최대 + 1."""
     max_order = (
         await session.execute(
             select(TodoItem.sort_order)
@@ -275,6 +289,7 @@ async def create_todo(
         title=title.strip(),
         status=TodoStatus.PENDING.value,
         routine_id=None,
+        start_time=start_time,
         sort_order=(max_order or 0) + 1,
     )
     session.add(item)
@@ -299,8 +314,16 @@ async def update_todo(
     *,
     title: str | None,
     status: TodoStatus | None,
+    start_time: time | None,
     sort_order: int | None,
+    set_start_time: bool = False,
 ) -> TodoItemView:
+    """투두 부분 수정.
+
+    start_time 만 None 이 '값'(= 종일)이기도 해서 다른 필드처럼 "None 이면 미변경"으로 볼 수
+    없다. set_start_time=True 일 때만 start_time 을 반영한다(라우터가 요청에 필드가 실제로
+    들어왔는지 보고 세운다).
+    """
     item = await _get_owned_todo(session, user_id, todo_id)
 
     if title is not None:
@@ -309,6 +332,8 @@ async def update_todo(
         item.status = status.value
         # 완료 시각 기록 — done 이면 지금(UTC), 아니면 해제.
         item.completed_at = datetime.now(UTC) if status == TodoStatus.DONE else None
+    if set_start_time:
+        item.start_time = start_time
     if sort_order is not None:
         item.sort_order = sort_order
 

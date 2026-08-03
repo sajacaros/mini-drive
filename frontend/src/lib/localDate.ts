@@ -66,3 +66,35 @@ export function weekLabel(s: string): string {
 }
 
 export const WEEKDAY_LABELS = WEEKDAY_KO;
+
+// --- 시작 시각 (할 일) -------------------------------------------------------
+// 서버는 "HH:MM:SS" 로 주고 "HH:MM" 도 받는다. null 은 '종일'이라는 뜻이라 시·분 어느 쪽도
+// 없는 상태다 — 화면에서는 시각 대신 아무것도 그리지 않는다.
+
+/** 할 일 시작 시각의 눈금 — 10분. "9시 반쯤"이면 충분한 목록이라 분 단위로 쪼개지 않는다. */
+export const MINUTE_STEP = 10;
+
+export const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => i);
+export const MINUTE_OPTIONS = Array.from(
+  { length: 60 / MINUTE_STEP },
+  (_, i) => i * MINUTE_STEP,
+);
+
+/** "09:30:00" → { hour: 9, minute: 30 }. null/빈 값이면 null(= 종일). */
+export function parseTimeStr(s: string | null): { hour: number; minute: number } | null {
+  if (!s) return null;
+  const [h, m] = s.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return { hour: h, minute: m };
+}
+
+/** 시·분을 서버가 받는 "HH:MM" 으로. */
+export function toTimeStr(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+/** "09:30:00" → "09:30". 종일이면 빈 문자열. */
+export function formatTimeLabel(s: string | null): string {
+  const t = parseTimeStr(s);
+  return t ? toTimeStr(t.hour, t.minute) : "";
+}

@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import RoutineFrequency, TodoStatus
+
+
+def validate_start_time(value: time | None) -> time | None:
+    """시작 시각은 10분 단위 정각만 받는다(None = 종일).
+
+    할 일 목록은 분 단위로 촘촘히 쪼갤 대상이 아니라 "9시 반쯤" 정도의 눈금이면 충분하다.
+    입력 UI 도 10분 단위 선택이라 초/자투리 분은 들어올 일이 없지만, 클라이언트를 믿지 않고
+    서버에서 한 번 더 막는다.
+    """
+    if value is None:
+        return None
+    if value.minute % 10 != 0 or value.second != 0 or value.microsecond != 0:
+        raise ValueError("시작 시각은 10분 단위여야 합니다.")
+    return value
 
 
 def days_to_list(value: str | None) -> list[int]:
@@ -70,6 +84,8 @@ class RoutineResponse(BaseModel):
     frequency: RoutineFrequency
     days_of_week: list[int]
     day_of_month: int | None = None
+    # 파생 항목에 복사되는 시작 시각. 지금은 항상 None(루틴 = 종일 → 목록 맨 위).
+    start_time: time | None = None
     is_active: bool
     sort_order: int
     created_at: datetime
@@ -83,18 +99,34 @@ class RoutineListResponse(BaseModel):
 
 
 class TodoCreateRequest(BaseModel):
-    """특정 날짜에 임시 투두 추가."""
+    """특정 날짜에 임시 투두 추가. start_time 을 생략하거나 null 로 두면 종일이다."""
 
     date: date
     title: str = Field(min_length=1, max_length=500)
+    start_time: time | None = None
+
+    @field_validator("start_time")
+    @classmethod
+    def _valid_start_time(cls, v: time | None) -> time | None:
+        return validate_start_time(v)
 
 
 class TodoUpdateRequest(BaseModel):
-    """투두 부분 수정 (제목/상태/정렬). 체크 순환: pending → done → failed → pending."""
+    """투두 부분 수정 (제목/상태/시작 시각/정렬). 체크 순환: pending → done → failed → pending.
+
+    start_time 은 "안 보냄 = 그대로", "null = 종일로 지움", "값 = 그 시각" 세 갈래다. 앞의 둘이
+    같은 None 으로 도착하므로 라우터가 model_fields_set 으로 구분한다.
+    """
 
     title: str | None = Field(default=None, min_length=1, max_length=500)
     status: TodoStatus | None = None
+    start_time: time | None = None
     sort_order: int | None = None
+
+    @field_validator("start_time")
+    @classmethod
+    def _valid_start_time(cls, v: time | None) -> time | None:
+        return validate_start_time(v)
 
 
 class TodoResponse(BaseModel):
@@ -104,6 +136,8 @@ class TodoResponse(BaseModel):
     status: TodoStatus
     routine_id: int | None = None
     routine_title: str | None = None
+    # None = 종일 — 정렬에서 시각 있는 항목보다 앞선다.
+    start_time: time | None = None
     sort_order: int
     completed_at: datetime | None = None
     created_at: datetime
