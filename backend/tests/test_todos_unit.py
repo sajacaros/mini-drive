@@ -6,14 +6,20 @@
   - _DayCount.achieved: '실행 대상 1개↑ & 미완료 0' 규칙
   - _compute_streaks: 현재/최장 연속(가짜 세션이 (date,status) 행 반환)
   - build_report: 합계·완료율(분모 = 전체 항목, 실패 포함)·일별 포인트 개수
-멱등 물질화·부분 유니크 인덱스 등 postgres 특화 동작은 실 DB 통합 시나리오에서 별도 검증한다.
+  - 시작 시각 스키마: 10분 단위 강제 + None(= 종일) 허용, 부분 수정의 3갈래 구분
+멱등 물질화·부분 유니크 인덱스·NULLS FIRST 정렬 등 postgres 특화 동작은 실 DB 통합
+시나리오에서 별도 검증한다.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+from pydantic import ValidationError
+
 from app.models import Routine
+from app.schemas.todos import TodoCreateRequest, TodoUpdateRequest
 from app.services import todos
 from app.services.todos import (
     _DayCount,
@@ -92,6 +98,35 @@ class TestRoutineApplies:
         # 2026-02 는 28일까지, 2026-04 는 30일까지 — 맞는 날짜 자체가 없다.
         for day in (dt.date(2026, 2, 28), dt.date(2026, 4, 30)):
             assert routine_applies_on(r, day) is False
+
+
+class TestStartTime:
+    def test_accepts_ten_minute_marks_and_all_day(self) -> None:
+        day = dt.date(2026, 8, 3)
+
+        def start_time(v: dt.time | None) -> dt.time | None:
+            return TodoCreateRequest(date=day, title="회의", start_time=v).start_time
+
+        assert start_time(dt.time(9, 30)) == dt.time(9, 30)
+        assert start_time(dt.time(0, 0)) == dt.time(0, 0)
+        # 생략하면 종일 — 정렬에서 시각 있는 항목보다 위로 간다.
+        assert TodoCreateRequest(date=day, title="회의").start_time is None
+
+    def test_rejects_off_grid_minutes_and_seconds(self) -> None:
+        day = dt.date(2026, 8, 3)
+        for bad in (dt.time(9, 35), dt.time(9, 31), dt.time(9, 30, 30)):
+            with pytest.raises(ValidationError):
+                TodoCreateRequest(date=day, title="회의", start_time=bad)
+
+    def test_update_distinguishes_unset_from_explicit_null(self) -> None:
+        """start_time 은 null 자체가 '종일로 지움'이라 미변경과 값으로는 갈리지 않는다."""
+        # 안 보냄 → 라우터가 set_start_time=False 로 읽어 건드리지 않는다.
+        untouched = TodoUpdateRequest.model_validate({"status": "done"})
+        assert "start_time" not in untouched.model_fields_set
+        # 명시적 null → 종일로 지운다.
+        cleared = TodoUpdateRequest.model_validate({"start_time": None})
+        assert "start_time" in cleared.model_fields_set
+        assert cleared.start_time is None
 
 
 class TestBounds:

@@ -8,11 +8,13 @@
     파생된 것, NULL 이면 그날 직접 추가한 임시 항목이다.
   - (user_id, todo_date, routine_id) 부분 유니크 인덱스로 같은 루틴이 같은 날 중복
     물질화되는 것을 막는다(routine_id IS NOT NULL 인 행만 대상).
+  - start_time 은 컬럼 하나로 '종일'과 '시각'을 함께 말한다 — NULL 이 곧 종일이다. 별도
+    is_all_day 불린은 (NULL, false) 같은 모순 상태를 만들 수 있어 두지 않는다.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -24,6 +26,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Time,
     func,
     text,
 )
@@ -58,6 +61,9 @@ class Routine(Base):
     days_of_week: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # monthly 일 때만 의미 — 1~31. 그 외 주기면 NULL.
     day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 파생 TodoItem 에 그대로 복사되는 시작 시각. NULL = 종일. 지금은 항상 NULL 이며,
+    # 시각 있는 루틴을 열 때 요청 스키마만 더하면 되도록 자리를 미리 잡아 둔다.
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")
     )
@@ -101,6 +107,8 @@ class TodoItem(Base):
     routine_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("routines.id", ondelete="SET NULL"), nullable=True
     )
+    # 시작 시각(10분 단위). NULL = 종일 — 목록 맨 위에 모이고 그 안에서 sort_order 를 따른다.
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
@@ -131,6 +139,14 @@ class TodoItem(Base):
             postgresql_where=text("routine_id IS NOT NULL"),
         ),
         Index("idx_todo_items_user_date", "user_id", "todo_date"),
+        # 하루치 조회 정렬(start_time NULLS FIRST → sort_order → id) 그대로.
+        Index(
+            "idx_todo_items_user_date_time",
+            "user_id",
+            "todo_date",
+            "start_time",
+            "sort_order",
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의

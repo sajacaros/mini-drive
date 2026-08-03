@@ -4,6 +4,10 @@
  * 빈칸 으로 돈다. X 는 '오늘은 안 함(skip)'이 아니라 자기 반성으로 남기는 명시적 수행 실패이며,
  * 달성률 분모에서 빠지지 않는다. 임시 항목은 그날 직접 추가/삭제할 수 있고, 루틴 파생 항목은
  * 배지로 구분한다(삭제 불가 — 실패로 기록).
+ *
+ * 순서: 종일(start_time = null)이 맨 위, 그 아래로 시작 시각순이다. 루틴은 언제나 종일이라
+ * 항상 위에 모인다. 시각이 있는 항목은 시각이 순서를 결정하므로 드래그 핸들을 내리고, 종일
+ * 항목끼리만 드래그로 순서를 잡는다 — 그래야 놓은 자리에서 도로 튕기는 일이 없다.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,13 +25,23 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ClockIcon,
   GripIcon,
   PlusIcon,
   RepeatIcon,
   TrashIcon,
   XIcon,
 } from "@/components/icons";
-import { addDays, formatDayLabel, todayStr } from "@/lib/localDate";
+import {
+  HOUR_OPTIONS,
+  MINUTE_OPTIONS,
+  addDays,
+  formatDayLabel,
+  formatTimeLabel,
+  parseTimeStr,
+  toTimeStr,
+  todayStr,
+} from "@/lib/localDate";
 import { useTodoBadgeStore } from "@/store/todoBadge";
 
 /** 체크를 누를 때 도는 순서. 빈칸 → 완료(v) → 실패(x) → 빈칸. */
@@ -57,6 +71,8 @@ export function TodoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
+  /** 새 항목의 시작 시각 ("HH:MM"). null 이면 종일 — 기본값이다. */
+  const [newTime, setNewTime] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [draggingId, setDraggingId] = useState<number | null>(null);
 
@@ -119,15 +135,35 @@ export function TodoPage() {
     if (!title) return;
     setAdding(true);
     try {
-      const created = await createTodo(date, title);
+      const created = await createTodo(date, title, newTime);
       setDayData((d) =>
-        d ? recount({ ...d, items: [...d.items, created] }) : d,
+        d ? recount({ ...d, items: sortItems([...d.items, created]) }) : d,
       );
       setNewTitle("");
+      // 시각은 남겨 둔다 — 같은 시간대 할 일을 연달아 넣는 흐름이 흔하다.
     } catch (err) {
       toast.error(extractErrorMessage(err, "추가에 실패했습니다."));
     } finally {
       setAdding(false);
+    }
+  };
+
+  /** 항목의 시작 시각 변경("HH:MM" 또는 null=종일). 저장 후 목록 순서를 다시 잡는다. */
+  const setStartTime = async (item: TodoItem, next: string | null) => {
+    const prev = day;
+    try {
+      const saved = await updateTodo(item.id, { start_time: next });
+      setDayData((d) =>
+        d
+          ? {
+              ...d,
+              items: sortItems(d.items.map((it) => (it.id === saved.id ? saved : it))),
+            }
+          : d,
+      );
+    } catch (err) {
+      setDayData(prev);
+      toast.error(extractErrorMessage(err, "시각 변경에 실패했습니다."));
     }
   };
 
@@ -145,7 +181,9 @@ export function TodoPage() {
   };
 
   // --- 드래그 정렬 ---------------------------------------------------------
-  // 드래그하는 동안 로컬 목록을 실시간으로 재배열하고, 놓을 때 바뀐 항목의 sort_order 만 저장한다.
+  // 시각이 있는 항목은 시각이 순서를 정하므로 드래그 대상이 아니다. 종일 항목끼리만 실시간으로
+  // 재배열하고, 놓을 때 바뀐 항목의 sort_order 만 저장한다. 종일 항목은 언제나 목록의 앞쪽
+  // 연속 구간이라 그 안에서만 자리를 바꾸면 전체 순서가 깨지지 않는다.
   const onDragOverItem = (targetId: number) => {
     if (draggingId === null || draggingId === targetId) return;
     setDayData((prev) => {
@@ -154,6 +192,8 @@ export function TodoPage() {
       const from = list.findIndex((i) => i.id === draggingId);
       const to = list.findIndex((i) => i.id === targetId);
       if (from === -1 || to === -1 || from === to) return prev;
+      // 시각이 붙은 항목은 집지도, 그 자리에 끼워 넣지도 않는다.
+      if (list[from].start_time !== null || list[to].start_time !== null) return prev;
       const [moved] = list.splice(from, 1);
       list.splice(to, 0, moved);
       return { ...prev, items: list };
@@ -164,17 +204,25 @@ export function TodoPage() {
     const wasDragging = draggingId !== null;
     setDraggingId(null);
     if (!wasDragging) return;
-    const list = day?.items ?? [];
-    // 현재 화면 순서를 sort_order 0..n-1 로 정규화하되, 실제로 바뀐 항목만 저장한다.
-    const changed = list.filter((it, idx) => it.sort_order !== idx);
+    // 정규화 대상은 종일 항목뿐 — 화면 순서대로 sort_order 0..k-1 을 매기고 바뀐 것만 저장한다.
+    const allDay = (day?.items ?? []).filter((it) => it.start_time === null);
+    const orderOf = new Map(allDay.map((it, idx) => [it.id, idx]));
+    const changed = allDay.filter((it, idx) => it.sort_order !== idx);
     if (changed.length === 0) return;
     setDayData((prev) =>
       prev
-        ? { ...prev, items: prev.items.map((it, idx) => ({ ...it, sort_order: idx })) }
+        ? {
+            ...prev,
+            items: prev.items.map((it) =>
+              orderOf.has(it.id) ? { ...it, sort_order: orderOf.get(it.id)! } : it,
+            ),
+          }
         : prev,
     );
     try {
-      await Promise.all(changed.map((it) => updateTodo(it.id, { sort_order: list.indexOf(it) })));
+      await Promise.all(
+        changed.map((it) => updateTodo(it.id, { sort_order: orderOf.get(it.id)! })),
+      );
     } catch (err) {
       toast.error(extractErrorMessage(err, "정렬 저장에 실패했습니다."));
       void load(date);
@@ -306,10 +354,10 @@ export function TodoPage() {
             </div>
           )}
 
-          {/* 추가 입력 */}
-          <div className="mb-4 flex items-center gap-2">
+          {/* 추가 입력 — 제목 + 시작 시각(기본 종일). 좁은 화면에서는 시각 줄이 아래로 접힌다. */}
+          <div className="mb-4 flex flex-wrap items-center gap-2">
             <input
-              className="input flex-1"
+              className="input min-w-40 flex-1"
               placeholder="할 일을 추가하세요"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
@@ -318,6 +366,7 @@ export function TodoPage() {
               }}
               maxLength={500}
             />
+            <TimeSelect value={newTime} onChange={setNewTime} idPrefix="new-todo" />
             <button
               className="btn btn-primary"
               disabled={adding || !newTitle.trim()}
@@ -349,6 +398,12 @@ export function TodoPage() {
                   dragging={draggingId === item.id}
                   onDragStart={() => setDraggingId(item.id)}
                   onCycleStatus={() => void cycleStatus(item)}
+                  // 루틴 파생 항목은 종일로 고정한다 — 삭제를 막는 것과 같은 선(임시 항목만 손댄다).
+                  onSetStartTime={
+                    item.routine_id === null
+                      ? (next) => void setStartTime(item, next)
+                      : undefined
+                  }
                   onDelete={item.routine_id === null ? () => void remove(item) : undefined}
                 />
               ))}
@@ -356,6 +411,80 @@ export function TodoPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 서버(get_day)와 같은 순서로 다시 세운다 — 종일 먼저, 그다음 시각순, 같은 칸 안에서는
+ * 드래그 순서(sort_order), 마지막은 생성순(id). 항목을 추가하거나 시각을 바꾼 뒤 새로고침
+ * 없이 제자리를 찾게 하려고 클라이언트에도 같은 규칙을 둔다.
+ */
+function sortItems(items: TodoItem[]): TodoItem[] {
+  return [...items].sort((a, b) => {
+    const at = a.start_time === null;
+    const bt = b.start_time === null;
+    if (at !== bt) return at ? -1 : 1;
+    // 서버는 "HH:MM:SS", 낙관적 갱신은 "HH:MM" 이라 자릿수를 맞춰 비교한다.
+    const av = formatTimeLabel(a.start_time);
+    const bv = formatTimeLabel(b.start_time);
+    if (av !== bv) return av < bv ? -1 : 1;
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+    return a.id - b.id;
+  });
+}
+
+/**
+ * 시작 시각 선택 — 10분 단위. "종일"이 기본이고, 시를 고르면 분 선택이 따라 나온다.
+ * 144칸짜리 단일 드롭다운보다 시/분 두 칸이 훑기 쉽다.
+ */
+function TimeSelect({
+  value,
+  onChange,
+  idPrefix,
+}: {
+  value: string | null;
+  onChange: (next: string | null) => void;
+  idPrefix: string;
+}) {
+  const t = parseTimeStr(value);
+  return (
+    <div className="flex items-center gap-1.5">
+      <select
+        id={`${idPrefix}-hour`}
+        className="input w-auto"
+        aria-label="시작 시각 (시)"
+        value={t ? t.hour : ""}
+        onChange={(e) =>
+          onChange(
+            e.target.value === ""
+              ? null
+              : toTimeStr(Number(e.target.value), t?.minute ?? 0),
+          )
+        }
+      >
+        <option value="">종일</option>
+        {HOUR_OPTIONS.map((h) => (
+          <option key={h} value={h}>
+            {String(h).padStart(2, "0")}시
+          </option>
+        ))}
+      </select>
+      {t && (
+        <select
+          id={`${idPrefix}-minute`}
+          className="input w-auto"
+          aria-label="시작 시각 (분)"
+          value={t.minute}
+          onChange={(e) => onChange(toTimeStr(t.hour, Number(e.target.value)))}
+        >
+          {MINUTE_OPTIONS.map((m) => (
+            <option key={m} value={m}>
+              {String(m).padStart(2, "0")}분
+            </option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }
@@ -373,16 +502,23 @@ function TodoRow({
   dragging,
   onDragStart,
   onCycleStatus,
+  onSetStartTime,
   onDelete,
 }: {
   item: TodoItem;
   dragging: boolean;
   onDragStart: () => void;
   onCycleStatus: () => void;
+  /** 없으면 시각 고정(루틴 파생) — 종일로 남는다. */
+  onSetStartTime?: (next: string | null) => void;
   onDelete?: () => void;
 }) {
   const done = item.status === "done";
   const failed = item.status === "failed";
+  const allDay = item.start_time === null;
+  const timeLabel = formatTimeLabel(item.start_time);
+  const [editingTime, setEditingTime] = useState(false);
+
   return (
     <li
       data-todo-id={item.id}
@@ -390,18 +526,24 @@ function TodoRow({
         dragging ? "opacity-40" : ""
       }`}
     >
-      {/* 드래그 핸들 (마우스·터치 통합). touch-action:none 으로 드래그 중 스크롤을 막는다. */}
-      <span
-        className="shrink-0 cursor-grab touch-none text-muted active:cursor-grabbing"
-        title="드래그하여 순서 변경"
-        aria-label="순서 변경 핸들"
-        onPointerDown={(e) => {
-          e.preventDefault();
-          onDragStart();
-        }}
-      >
-        <GripIcon width={16} height={16} />
-      </span>
+      {/* 드래그 핸들 (마우스·터치 통합). touch-action:none 으로 드래그 중 스크롤을 막는다.
+          시각이 있는 항목은 시각이 순서를 정하므로 핸들을 내리고, 자리만 비워 행 높이·정렬을
+          유지한다. */}
+      {allDay ? (
+        <span
+          className="shrink-0 cursor-grab touch-none text-muted active:cursor-grabbing"
+          title="드래그하여 순서 변경"
+          aria-label="순서 변경 핸들"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            onDragStart();
+          }}
+        >
+          <GripIcon width={16} height={16} />
+        </span>
+      ) : (
+        <span className="w-4 shrink-0" aria-hidden />
+      )}
 
       {/* 상태 체크 — 누를 때마다 빈칸 → 완료(v) → 실패(x) → 빈칸 으로 돈다.
           미완료 상태는 채움 없이 테두리만으로 존재를 알리므로, 장식용인 --border-color 로는
@@ -427,6 +569,15 @@ function TodoRow({
         {failed ? <XIcon width={14} height={14} /> : <CheckIcon width={14} height={14} />}
       </button>
 
+      {/* 시각 — tabular-nums 로 자릿수를 맞춰 세로로 줄이 선다. 종일이면 자리를 쓰지 않는다. */}
+      {!allDay && (
+        <span
+          className={`shrink-0 text-sm tabular-nums ${done || failed ? "text-muted" : ""}`}
+        >
+          {timeLabel}
+        </span>
+      )}
+
       <div className="min-w-0 flex-1">
         <div
           className={`truncate text-sm ${
@@ -446,6 +597,35 @@ function TodoRow({
           </span>
         )}
       </div>
+
+      {/* 시각 편집 — 열면 시/분 선택이 그 자리에 뜨고, 고르는 즉시 저장되며 목록이 다시 정렬된다. */}
+      {onSetStartTime &&
+        (editingTime ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <TimeSelect
+              value={item.start_time}
+              onChange={(next) => onSetStartTime(next)}
+              idPrefix={`todo-${item.id}`}
+            />
+            <button
+              className="btn btn-ghost px-2 py-1 text-xs"
+              onClick={() => setEditingTime(false)}
+            >
+              완료
+            </button>
+          </div>
+        ) : (
+          <button
+            className="flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-muted transition-colors hover:text-[color:var(--accent)]"
+            title={allDay ? "시작 시각 정하기" : `시작 시각 ${timeLabel} — 누르면 변경`}
+            aria-label={
+              allDay ? "시작 시각 정하기 (종일)" : `시작 시각 ${timeLabel} 변경`
+            }
+            onClick={() => setEditingTime(true)}
+          >
+            <ClockIcon width={15} height={15} />
+          </button>
+        ))}
 
       {onDelete && (
         <button
