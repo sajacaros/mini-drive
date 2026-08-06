@@ -129,6 +129,10 @@ export function PublicSharePage() {
 
   const isFolderBrowser = state.kind === "ready" && state.meta.is_folder && listing !== null;
 
+  // 읽기 전용 공유는 다운로드 동선을 걷어낸다 — 백엔드도 403 으로 막으므로, 버튼을 남기면
+  // 누르는 족족 오류만 보게 된다. 미리보기(열람)는 read 가 주는 것 그 자체라 그대로 둔다.
+  const readOnly = state.kind === "ready" && state.meta.permission === "read";
+
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <div className={`w-full ${isFolderBrowser ? "max-w-2xl" : "max-w-md"}`}>
@@ -175,7 +179,8 @@ export function PublicSharePage() {
                 <PasswordField
                   value={password}
                   onChange={setPassword}
-                  onEnter={() => void onDownload()}
+                  // 읽기 전용이면 Enter 가 갈 곳은 미리보기뿐이다.
+                  onEnter={() => (readOnly ? setPreviewOpen(true) : void onDownload())}
                 />
               )}
 
@@ -184,24 +189,32 @@ export function PublicSharePage() {
               )}
 
               <div className="flex flex-col gap-2">
-                <button className="btn btn-secondary" onClick={() => setPreviewOpen(true)}>
+                {/* 읽기 전용이면 미리보기가 유일한 동작이므로 주 버튼 자리를 물려받는다. */}
+                <button
+                  className={readOnly ? "btn btn-primary" : "btn btn-secondary"}
+                  onClick={() => setPreviewOpen(true)}
+                >
                   <EyeIcon width={16} height={16} />
                   미리보기
                 </button>
-                <button className="btn btn-primary" onClick={onDownload} disabled={downloading}>
-                  {downloading ? (
-                    <Spinner className="h-4 w-4" />
-                  ) : (
-                    <>
-                      <DownloadIcon width={16} height={16} />
-                      다운로드
-                    </>
-                  )}
-                </button>
+                {!readOnly && (
+                  <button className="btn btn-primary" onClick={onDownload} disabled={downloading}>
+                    {downloading ? (
+                      <Spinner className="h-4 w-4" />
+                    ) : (
+                      <>
+                        <DownloadIcon width={16} height={16} />
+                        다운로드
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
-              {state.meta.permission === "read" && (
-                <p className="text-center text-xs text-muted">읽기 전용으로 공유된 파일입니다.</p>
+              {readOnly && (
+                <p className="text-center text-xs text-muted">
+                  읽기 전용으로 공유된 파일입니다. 미리보기만 할 수 있습니다.
+                </p>
               )}
             </div>
           )}
@@ -268,20 +281,22 @@ export function PublicSharePage() {
                     )}
                   </div>
                 </div>
-                <button
-                  className="btn btn-primary shrink-0"
-                  onClick={onDownload}
-                  disabled={downloading}
-                >
-                  {downloading ? (
-                    <Spinner className="h-4 w-4" />
-                  ) : (
-                    <>
-                      <DownloadIcon width={16} height={16} />
-                      전체 ZIP
-                    </>
-                  )}
-                </button>
+                {!readOnly && (
+                  <button
+                    className="btn btn-primary shrink-0"
+                    onClick={onDownload}
+                    disabled={downloading}
+                  >
+                    {downloading ? (
+                      <Spinner className="h-4 w-4" />
+                    ) : (
+                      <>
+                        <DownloadIcon width={16} height={16} />
+                        전체 ZIP
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
               {/* 브레드크럼 — 공유 루트가 시작점이고, 그 위로는 올라갈 수 없다. */}
@@ -356,22 +371,26 @@ export function PublicSharePage() {
                             <EyeIcon width={16} height={16} />
                           </button>
                         )}
-                        <button
-                          className="btn btn-ghost"
-                          title={entry.is_folder ? "ZIP 으로 다운로드" : "다운로드"}
-                          aria-label={`${entry.name} 다운로드`}
-                          onClick={() => void onChildDownload(entry)}
-                        >
-                          <DownloadIcon width={16} height={16} />
-                        </button>
+                        {!readOnly && (
+                          <button
+                            className="btn btn-ghost"
+                            title={entry.is_folder ? "ZIP 으로 다운로드" : "다운로드"}
+                            aria-label={`${entry.name} 다운로드`}
+                            onClick={() => void onChildDownload(entry)}
+                          >
+                            <DownloadIcon width={16} height={16} />
+                          </button>
+                        )}
                       </div>
                     </li>
                   ))}
                 </ul>
               )}
 
-              {state.meta.permission === "read" && (
-                <p className="text-center text-xs text-muted">읽기 전용으로 공유된 폴더입니다.</p>
+              {readOnly && (
+                <p className="text-center text-xs text-muted">
+                  읽기 전용으로 공유된 폴더입니다. 미리보기만 할 수 있습니다.
+                </p>
               )}
             </div>
           )}
@@ -384,10 +403,16 @@ export function PublicSharePage() {
         title={state.kind === "ready" ? state.meta.file_name : ""}
         onClose={() => setPreviewOpen(false)}
         load={() => fetchPublicSharePreview(shareUrl, password || undefined)}
-        onDownload={() => {
-          setPreviewOpen(false);
-          void onDownload();
-        }}
+        // 읽기 전용이면 onDownload 를 넘기지 않는다 — "미리보기 미지원 → 다운로드" 폴백
+        // 버튼까지 함께 사라진다.
+        onDownload={
+          readOnly
+            ? undefined
+            : () => {
+                setPreviewOpen(false);
+                void onDownload();
+              }
+        }
       />
 
       {/* 폴더 공유 안의 파일 미리보기 — 같은 규약, 대상만 하위 파일이다. */}
@@ -400,10 +425,14 @@ export function PublicSharePage() {
             ? fetchPublicShareChildPreview(shareUrl, childPreview.id, password || undefined)
             : Promise.reject(new Error("no target"))
         }
-        onDownload={() => {
-          if (childPreview) void onChildDownload(childPreview);
-          setChildPreview(null);
-        }}
+        onDownload={
+          readOnly
+            ? undefined
+            : () => {
+                if (childPreview) void onChildDownload(childPreview);
+                setChildPreview(null);
+              }
+        }
       />
     </div>
   );

@@ -64,11 +64,18 @@ async def _active_alice_headers(c: httpx.AsyncClient) -> dict[str, str]:
     return alice_h
 
 
-async def _upload(c: httpx.AsyncClient, headers: dict[str, str], name: str) -> int:
+async def _upload(
+    c: httpx.AsyncClient,
+    headers: dict[str, str],
+    name: str,
+    parent_id: int | None = None,
+    mime: str = "application/octet-stream",
+) -> int:
     r = await c.post(
         "/api/files/upload",
         headers=headers,
-        files={"file": (name, PAYLOAD, "application/octet-stream")},
+        files={"file": (name, PAYLOAD, mime)},
+        data={"parent_id": str(parent_id)} if parent_id is not None else None,
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]
@@ -161,7 +168,7 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         r = await c.post(
             "/api/shares",
             headers=alice_h,
-            json={"file_id": pw_file, "permission": "read", "password": "s3cr3t!"},
+            json={"file_id": pw_file, "permission": "download", "password": "s3cr3t!"},
         )
         assert r.status_code == 201 and r.json()["password_required"] is True, r.text
         pw_url = r.json()["share_url"]
@@ -179,6 +186,45 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         assert r.status_code == 200, r.text
         assert await _direct_minio_bytes(r.headers["X-Accel-Redirect"]) == PAYLOAD
         _ok("비밀번호 공유 정답 200 (바이트 일치)")
+
+        # --- 읽기 전용 공유: 다운로드 계열 전부 403, 열람은 그대로 -------------
+        # 미리보기가 실제로 열리는 형식이어야 "열람은 살아 있다"를 검증할 수 있다.
+        ro_file = await _upload(c, alice_h, "readonly.txt", mime="text/plain")
+        r = await c.post(
+            "/api/shares", headers=alice_h, json={"file_id": ro_file, "permission": "read"}
+        )
+        assert r.status_code == 201, r.text
+        ro_url, ro_id = r.json()["share_url"], r.json()["id"]
+
+        r = await c.post(f"/api/public/shares/{ro_url}/download")
+        assert r.status_code == 403, r.text
+        r = await c.post(f"/api/public/shares/{ro_url}/download-ticket")
+        assert r.status_code == 403, r.text
+        # 막힌 다운로드는 횟수도 깎지 않는다.
+        r = await c.get(f"/api/shares/{ro_id}/stats", headers=alice_h)
+        assert r.json()["download_count"] == 0, r.json()
+        # 열람(미리보기)은 read 권한이 주는 것 그 자체라 계속 열려 있어야 한다.
+        r = await c.post(f"/api/public/shares/{ro_url}/preview")
+        assert r.status_code == 200, r.text
+        _ok("읽기 전용 공유: 다운로드/티켓 403 (횟수 미소모), 미리보기는 200")
+
+        # 폴더 읽기 전용 — 전체 ZIP 도, 하위 항목도 막힌다.
+        r = await c.post("/api/files", headers=alice_h, json={"name": "ro-folder"})
+        ro_folder = r.json()["id"]
+        ro_child = await _upload(c, alice_h, "inner.bin", parent_id=ro_folder)
+        r = await c.post(
+            "/api/shares", headers=alice_h, json={"file_id": ro_folder, "permission": "read"}
+        )
+        assert r.status_code == 201, r.text
+        rof_url = r.json()["share_url"]
+        r = await c.post(f"/api/public/shares/{rof_url}/download")
+        assert r.status_code == 403, r.text
+        r = await c.post(f"/api/public/shares/{rof_url}/files/{ro_child}/download-ticket")
+        assert r.status_code == 403, r.text
+        # 폴더 탐색과 하위 미리보기는 계속 된다.
+        r = await c.post(f"/api/public/shares/{rof_url}/list")
+        assert r.status_code == 200, r.text
+        _ok("읽기 전용 폴더 공유: 전체 ZIP/하위 다운로드 403, 탐색은 200")
 
         # --- 만료 공유: 410 (메타 + 다운로드) --------------------------------
         exp_file = await _upload(c, alice_h, "expiring.bin")

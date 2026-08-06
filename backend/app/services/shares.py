@@ -291,6 +291,20 @@ async def authorize_share_access(
     return share, file
 
 
+def ensure_download_permitted(share: Share) -> None:
+    """읽기 전용(permission="read") 공유의 다운로드를 막는다 — 403. (PRD 3.4)
+
+    검사를 공용 관문(authorize_share_access)이 아니라 다운로드 계열 라우트에만 두는 게 핵심이다.
+    미리보기도 그 관문을 지나가므로, 거기 넣으면 read 공유의 열람까지 함께 막혀 권한 이름이
+    무의미해진다. read 가 주는 것이 바로 열람이다.
+
+    다만 이 차단은 "다운로드 동선과 attachment 응답"까지다. 미리보기가 열리는 형식(이미지·PDF·
+    mp4)은 바이트가 이미 브라우저로 가므로 유출 방지가 아니다 — 인라인 미리보기의 성질이다.
+    """
+    if share.permission != SharePermission.DOWNLOAD:
+        raise ShareServiceError(403, "읽기 전용으로 공유된 링크입니다. 다운로드할 수 없습니다.")
+
+
 async def consume_download_quota(session: AsyncSession, share: Share) -> None:
     """다운로드 횟수 원자적 소모 — 초과면 410. 비밀번호(인가) 통과 후에만 호출한다."""
     if not await _try_increment(session, share.id):
