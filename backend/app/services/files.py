@@ -1058,6 +1058,26 @@ async def prepare_preview(
     return plan, file.name
 
 
+async def prepare_preview_stream(
+    session: AsyncSession, storage: StorageService, user: User, file_id: int
+) -> tuple[str, str, str]:
+    """영상 미리보기 스트림 준비 (PRD 3.2). 반환: (internal_redirect, filename, mime).
+
+    미리보기 티켓은 재사용되므로 발급 시점의 인가를 믿지 않고 **매 Range 요청마다** 여기서 다시
+    본다 — 티켓이 남아 있어도 권한이 회수되거나 파일이 지워지면 그 즉시 404 다.
+    영상이 아닌 파일은 애초에 스트림 주소를 받은 적이 없으므로 404 로 막는다.
+    """
+    file = await ensure_file_access(session, user, await get_file(session, file_id))
+    if file.is_folder or file.is_deleted:
+        raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+    if previews_service.classify(file.mime_type) != "video":
+        raise FileServiceError(404, "파일을 찾을 수 없습니다.")
+
+    presigned = await storage.presign_get_async(file.file_key)
+    internal = storage.to_internal_redirect(presigned)
+    return internal, file.name, file.mime_type or "application/octet-stream"
+
+
 # --- 버전 관리 (PRD 3.3, 5.3, 6.2) ------------------------------------------
 #
 # 키 불변식(invariant): 어떤 파일이든 `version == current_version` 인 file_versions 행의

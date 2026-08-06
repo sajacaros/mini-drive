@@ -8,6 +8,8 @@
  * 응답 규약:
  *   - 이미지/PDF: 게이트웨이 인라인 스트리밍(바이트) → blob → objectURL 로 <img>/<iframe> 렌더.
  *   - 텍스트:     text/plain 본문. X-Preview-Truncated: true 면 앞부분만 표시된 것.
+ *   - 영상(mp4):  바이트 대신 JSON 으로 재생 주소를 준다. <video src> 가 그 주소로 Range 요청을
+ *                 보내 필요한 구간만 받아 오므로, 파일이 커도 즉시 재생·구간 이동이 된다.
  *   - 미지원:     415 → "미리보기 미지원, 다운로드" 폴백.
  *
  * objectURL 은 호출부가 화면에서 내릴 때 releasePreview() 로 해제해야 누수가 없다.
@@ -21,16 +23,29 @@ export type PreviewResult =
   | { kind: "image"; url: string }
   | { kind: "pdf"; url: string }
   | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "video"; url: string; mime: string }
   | { kind: "unsupported" };
 
-/** objectURL 을 만든 미리보기 결과라면 해제한다(text/unsupported 는 no-op). */
+/**
+ * objectURL 을 만든 미리보기 결과라면 해제한다(text/unsupported 는 no-op).
+ * video 의 url 은 백엔드 스트림 주소지 objectURL 이 아니라 해제 대상이 아니다 — 티켓은 마지막
+ * 사용 시점부터 만료되므로 창을 닫으면 알아서 정리된다.
+ */
 export function releasePreview(result: PreviewResult | null): void {
   if (result && (result.kind === "image" || result.kind === "pdf")) {
     URL.revokeObjectURL(result.url);
   }
 }
 
-/** content-type + blob 을 PreviewResult 로 변환한다(이미지/PDF/텍스트 공통). */
+/** 영상 미리보기 응답(JSON 포인터). 백엔드 PreviewStreamResponse 와 짝이다. */
+interface PreviewStreamPointer {
+  kind: string;
+  mime: string;
+  url: string;
+  expires_in: number;
+}
+
+/** content-type + blob 을 PreviewResult 로 변환한다(이미지/PDF/텍스트/영상 공통). */
 async function toResult(
   contentType: string,
   blob: Blob,
@@ -40,10 +55,15 @@ async function toResult(
   if (ct.startsWith("text/")) {
     return { kind: "text", text: await blob.text(), truncated };
   }
+  if (ct.includes("application/json")) {
+    // 영상: 바이트가 아니라 재생 주소. 서브패스 배포에서도 게이트웨이에 닿도록 베이스를 붙인다.
+    const pointer = JSON.parse(await blob.text()) as PreviewStreamPointer;
+    return { kind: "video", url: withBase(pointer.url), mime: pointer.mime };
+  }
   if (ct.includes("application/pdf")) {
     return { kind: "pdf", url: URL.createObjectURL(blob) };
   }
-  // 나머지는 이미지로 간주(백엔드가 image/*·pdf·text 외에는 415 로 거른다).
+  // 나머지는 이미지로 간주(백엔드가 image/*·pdf·text·영상 외에는 415 로 거른다).
   return { kind: "image", url: URL.createObjectURL(blob) };
 }
 

@@ -180,3 +180,16 @@ class DownloadTicketResponse(BaseModel):
     ticket: str
     url: str
     expires_in: int
+
+
+class PreviewStreamResponse(BaseModel):
+    """영상 미리보기 응답 — 바이트 대신 재생할 주소를 준다 (PRD 3.2).
+
+    프론트는 `url` 을 `<video src>` 에 그대로 걸고, 브라우저가 Range 로 필요한 구간만 받아 간다.
+    티켓은 마지막 사용 시점부터 `expires_in` 초 뒤 만료된다(재생 중에는 계속 갱신).
+    """
+
+    kind: str = "video"
+    mime: str
+    url: str
+    expires_in: int

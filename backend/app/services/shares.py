@@ -498,14 +498,42 @@ async def prepare_share_preview(
     storage: StorageService,
     share_url: str,
     password: str | None,
-) -> tuple[PreviewPlan, str, int]:
-    """공개 미리보기 준비 (PRD 3.2). 인가(횟수 미소모) 후 (plan, filename, share_id) 반환.
+) -> tuple[PreviewPlan, str, int, int]:
+    """공개 미리보기 준비 (PRD 3.2). 인가(횟수 미소모) 후 (plan, filename, share_id, file_id) 반환.
 
-    지원 타입은 게이트웨이 인라인(image/pdf) 또는 텍스트 head, 미지원은 plan.kind=="unsupported".
+    지원 타입은 게이트웨이 인라인(image/pdf), 텍스트 head, 영상 스트림(mp4)이고 미지원은
+    plan.kind=="unsupported". file_id 는 영상 스트림 티켓이 대상을 다시 찾는 데 쓴다.
     """
     share, file = await authorize_share_view(session, share_url, password)
     plan = await previews_service.build_preview_plan(storage, file)
-    return plan, file.name, share.id
+    return plan, file.name, share.id, file.id
+
+
+async def prepare_ticketed_share_preview(
+    session: AsyncSession,
+    storage: StorageService,
+    share_id: int,
+    file_id: int,
+) -> tuple[str, str, str]:
+    """공개 영상 미리보기 스트림 준비. 반환: (internal_redirect, filename, mime).
+
+    미리보기 티켓은 재생 내내 재사용되므로 발급 시 판정을 믿지 않고 매 Range 요청마다 다시 본다:
+    공유가 살아 있는지(비활성·만료 410), 대상이 아직 공유 트리 안의 영상 파일인지(404).
+    비밀번호는 티켓을 받을 때 이미 통과했으므로 다시 묻지 않는다 — 티켓 자체가 그 증표다.
+    다운로드 횟수는 건드리지 않는다(미리보기는 다운로드가 아니다).
+    """
+    share = await session.get(Share, share_id)
+    if share is None:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    _ensure_accessible(share)
+
+    root = await session.get(File, share.file_id)
+    if root is None or root.is_deleted:
+        raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
+    node, _crumbs = await _resolve_share_node(session, root, file_id)
+    if node.is_folder or previews_service.classify(node.mime_type) != "video":
+        raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
+    return await presign_share_file(storage, node)
 
 
 async def prepare_ticketed_share_download(
