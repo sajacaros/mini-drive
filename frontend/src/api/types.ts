@@ -837,3 +837,103 @@ export interface ChatAskResponse {
   searched_documents: number;
   examined_documents: number;
 }
+
+// --- 그룹 게시판 (spec/group-board.md) ---------------------------------------
+
+/** 게시판 권한은 두 단계뿐이다 — 드라이브의 manage 는 게시판에 없는 개념이다. */
+export type BoardPermission = "read" | "write";
+
+export interface Board {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  /** 내 유효 권한. 관리자가 그룹 할당 없이 열람 중이면 null 이다(읽기만 가능). */
+  permission: BoardPermission | null;
+  post_count: number;
+}
+
+export interface BoardListResponse {
+  items: Board[];
+}
+
+/** 관리 화면 전용 — 할당 그룹 수·글 수를 함께 준다. */
+export interface AdminBoard {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  group_count: number;
+  post_count: number;
+}
+
+export interface AdminBoardListResponse {
+  items: AdminBoard[];
+}
+
+export interface BoardGroupGrant {
+  group_id: number;
+  group_name: string;
+  permission: BoardPermission;
+  granted_at: string;
+}
+
+export interface BoardGroupListResponse {
+  items: BoardGroupGrant[];
+}
+
+export interface BoardAttachment {
+  id: number;
+  filename: string;
+  mime_type: string | null;
+  size: number;
+  uploaded_at: string;
+}
+
+export interface BoardPostSummary {
+  id: number;
+  title: string;
+  author_id: number;
+  author_name: string;
+  comment_count: number;
+  attachment_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoardPostListResponse {
+  items: BoardPostSummary[];
+  total: number;
+  page: number;
+  size: number;
+}
+
+export interface BoardPostDetail {
+  id: number;
+  board_id: number;
+  title: string;
+  body: string;
+  author_id: number;
+  author_name: string;
+  attachments: BoardAttachment[];
+  /** 수정은 작성자 본인만, 삭제는 작성자·관리자 — 버튼 노출의 유일한 근거다. */
+  can_edit: boolean;
+  can_delete: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoardComment {
+  id: number;
+  author_id: number;
+  author_name: string;
+  /** 삭제된 댓글이면 안내 문구로 갈아끼워져 온다(원문은 서버 밖으로 나가지 않는다). */
+  body: string;
+  is_deleted: boolean;
+  can_delete: boolean;
+  created_at: string;
+}
+
+export interface BoardCommentListResponse {
+  items: BoardComment[];
+}

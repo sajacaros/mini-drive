@@ -7,8 +7,16 @@
 from app.core.database import Base
 from app.models.app_setting import AppSetting
 from app.models.audit import AuditLog
+from app.models.board import (
+    Board,
+    BoardAttachment,
+    BoardComment,
+    BoardGroup,
+    BoardPost,
+)
 from app.models.chat import ChatMessage, ChatSession
 from app.models.enums import (
+    BoardPermission,
     ChatRole,
     GroupPermission,
     GroupRole,
@@ -50,12 +58,18 @@ __all__ = [
     "WikiDocument",
     "ChatSession",
     "ChatMessage",
+    "Board",
+    "BoardGroup",
+    "BoardPost",
+    "BoardComment",
+    "BoardAttachment",
     # 열거형
     "UserRole",
     "UserStatus",
     "GroupRole",
     "SharePermission",
     "GroupPermission",
+    "BoardPermission",
     "TodoStatus",
     "RoutineFrequency",
     "ChatRole",
