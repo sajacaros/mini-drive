@@ -378,6 +378,24 @@ async def scenario() -> None:
         assert r.headers.get("Content-Type") == "video/mp4", r.headers
         _ok("폴더 공유 안의 mp4 → 재생 주소 → 스트림 200")
 
+        # 읽기 전용 공유의 mp4 — 다운로드는 403 이어도 재생은 끝까지 된다.
+        r = await c.post(
+            "/api/shares",
+            headers=alice_h,
+            json={"file_id": mp4_id, "permission": "read"},
+        )
+        assert r.status_code == 201, r.text
+        roshare_url = r.json()["share_url"]
+        r = await c.post(f"/api/public/shares/{roshare_url}/download")
+        assert r.status_code == 403, r.text
+        r = await c.post(f"/api/public/shares/{roshare_url}/preview")
+        assert r.status_code == 200 and r.json()["kind"] == "video", r.text
+        r = await c.get(r.json()["url"])
+        assert r.status_code == 200, r.text
+        assert r.headers.get("Content-Type") == "video/mp4", r.headers
+        assert r.headers.get("X-Accel-Redirect", "").startswith("/_minio/"), r.headers
+        _ok("읽기 전용 공유: 다운로드 403 이어도 mp4 재생 주소·스트림은 200")
+
         # 링크를 내리면 남아 있던 티켓도 그 즉시 막힌다(매 요청 재판정).
         r = await c.delete(f"/api/shares/{vshare_id}", headers=alice_h)
         assert r.status_code == 204, r.text

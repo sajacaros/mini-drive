@@ -143,7 +143,8 @@ function PreviewBody({
       <div className="flex h-full flex-col">
         {result.truncated && (
           <p className="border-b border-token bg-[color:var(--bg-secondary)] px-4 py-2 text-xs text-muted">
-            파일이 커서 앞부분만 표시됩니다. 전체 내용은 다운로드해 확인하세요.
+            파일이 커서 앞부분만 표시됩니다.
+            {onDownload ? " 전체 내용은 다운로드해 확인하세요." : ""}
           </p>
         )}
         <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed">
@@ -152,11 +153,15 @@ function PreviewBody({
       </div>
     );
   }
-  // unsupported
+  // unsupported — 다운로드가 없는 경로(읽기 전용 공유)에서는 다운로드를 권하지 않는다.
   return (
     <PreviewMessage
       title="미리보기를 지원하지 않는 형식입니다"
-      hint="이 파일 형식은 브라우저에서 미리 볼 수 없습니다. 다운로드해 확인하세요."
+      hint={
+        onDownload
+          ? "이 파일 형식은 브라우저에서 미리 볼 수 없습니다. 다운로드해 확인하세요."
+          : "이 파일 형식은 브라우저에서 미리 볼 수 없습니다."
+      }
       onDownload={onDownload}
     />
   );
@@ -183,7 +188,11 @@ function VideoPreview({
     return (
       <PreviewMessage
         title="영상을 재생하지 못했습니다"
-        hint="재생 시간이 만료됐거나 링크가 더 이상 유효하지 않을 수 있습니다. 새로고침하거나 다운로드해 확인하세요."
+        hint={
+          onDownload
+            ? "재생 시간이 만료됐거나 링크가 더 이상 유효하지 않을 수 있습니다. 새로고침하거나 다운로드해 확인하세요."
+            : "재생 시간이 만료됐거나 링크가 더 이상 유효하지 않을 수 있습니다. 새로고침해 보세요."
+        }
         onDownload={onDownload}
       />
     );
@@ -194,6 +203,10 @@ function VideoPreview({
       <video
         src={result.url}
         controls
+        // 읽기 전용 공유에서 브라우저 기본 플레이어의 다운로드 버튼이 서버 차단을 우회하지
+        // 못하게 한다. 스트림 주소를 직접 긁으면 그만이라 유출 방지는 아니고, 다운로드
+        // 동선을 지우지 않는 UI 를 남겨 두지 않기 위한 것이다.
+        controlsList="nodownload"
         preload="metadata"
         playsInline
         className="max-h-[74vh] w-full"

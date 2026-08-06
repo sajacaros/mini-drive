@@ -42,6 +42,40 @@ export async function seedShares(page: Page, name: string, count: number): Promi
 }
 
 /**
+ * 파일 1개를 올리고 그 파일로 공유 링크 1개를 만든다. 반환: 파일 id + 공개 URL.
+ * 권한(read/download)에 따라 공개 화면이 어떻게 달라지는지 검증할 때 쓴다.
+ */
+export async function seedShareLink(
+  page: Page,
+  name: string,
+  permission: "read" | "download",
+  body: string,
+): Promise<{ fileId: number; shareUrl: string }> {
+  return page.evaluate(
+    async ({ tokenKey, fileName, perm, content }) => {
+      const token = localStorage.getItem(tokenKey);
+      const auth = { Authorization: `Bearer ${token}` };
+
+      const form = new FormData();
+      // 미리보기가 실제로 열려야 하므로 text/plain 으로 올린다(백엔드는 클라이언트 MIME 을 믿는다).
+      form.append("file", new Blob([content], { type: "text/plain" }), fileName);
+      const up = await fetch("/api/files/upload", { method: "POST", headers: auth, body: form });
+      if (!up.ok) throw new Error(`업로드 실패: ${up.status} ${await up.text()}`);
+      const fileId = (await up.json()).id as number;
+
+      const res = await fetch("/api/shares", {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ file_id: fileId, permission: perm }),
+      });
+      if (!res.ok) throw new Error(`공유 생성 실패: ${res.status} ${await res.text()}`);
+      return { fileId, shareUrl: (await res.json()).share_url as string };
+    },
+    { tokenKey: TOKEN_KEY, fileName: name, perm: permission, content: body },
+  );
+}
+
+/**
  * 시드 파일을 영구 삭제한다(best-effort). 파일을 영구 삭제하면 그 파일의 shares 행도 함께
  * 지워지므로 공유 목록까지 한 번에 정리된다.
  */

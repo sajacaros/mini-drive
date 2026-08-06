@@ -335,12 +335,14 @@ async def public_child_download_ticket(
 
     폴더 공유는 max_downloads 가 없어(생성 시 422) 횟수로 막히지 않지만, download_count 는
     통계로 계속 쌓는다. 하위 폴더 ZIP 은 발급 시점에 계획(상한 413)을 세워 본다.
+    읽기 전용 공유는 403 — 하위 항목도 루트 공유의 권한을 그대로 따른다.
     """
     password = payload.password if payload is not None else None
     try:
         share, node, _crumbs = await shares_service.authorize_share_child(
             session, share_url, password, file_id
         )
+        shares_service.ensure_download_permitted(share)
         if node.is_folder:
             await shares_service.plan_share_archive(session, share, node)
         await shares_service.consume_download_quota(session, share)
@@ -403,12 +405,13 @@ async def public_download(
     redis: RedisClient,
     payload: SharePasswordRequest | None = None,
 ) -> Response:
-    """공개 다운로드 (PRD 6.3, 2.2). 검증 순서: 활성→만료→비밀번호(401)→횟수(410).
+    """공개 다운로드 (PRD 6.3, 2.2). 검증 순서: 활성→만료→비밀번호(401)→권한(403)→횟수(410).
 
     통과 시 download_count 원자적 증가 후 파일은 X-Accel-Redirect 스트리밍, 폴더는 backend
     스트리밍 ZIP. 폴더는 아카이브 계획(413 상한)을 횟수 소모 **전에** 세운다 — 내려받을 수
-    없는 다운로드로 횟수를 깎지 않기 위해서다. 권한 구분(read/download)은 X-Share-Permission
-    헤더로 응답에 담는다. 접근 통계도 기록한다.
+    없는 다운로드로 횟수를 깎지 않기 위해서다. 읽기 전용 공유는 계획도 세우기 전에 403 으로
+    끊는다(내려줄 수 없는 다운로드는 상한을 따질 이유도 없다). 남은 권한(download)은
+    X-Share-Permission 헤더로 응답에 담는다. 접근 통계도 기록한다.
     """
     password = payload.password if payload is not None else None
     plan: ArchivePlan | None = None
@@ -416,6 +419,7 @@ async def public_download(
         share, file = await shares_service.authorize_share_access(
             session, share_url, password
         )
+        shares_service.ensure_download_permitted(share)
         if file.is_folder:
             plan = await shares_service.plan_share_archive(session, share, file)
         await shares_service.consume_download_quota(session, share)
@@ -445,8 +449,8 @@ async def public_download_ticket(
 ) -> DownloadTicketResponse:
     """공개 다운로드 티켓 발급 (브라우저 대용량 다운로드용).
 
-    직접 다운로드와 동일하게 활성/만료/비밀번호/횟수를 검증하고 횟수를 소모한 뒤, 60초 1회용
-    티켓을 발급한다. 폴더는 발급 시점에 아카이브 계획을 실제로 세워 본다(횟수 소모 전 413) —
+    직접 다운로드와 동일하게 활성/만료/비밀번호/권한(403)/횟수를 검증하고 횟수를 소모한 뒤,
+    60초 1회용 티켓을 발급한다. 폴더는 발급 시점에 아카이브 계획을 실제로 세워 본다(413) —
     소비 시 같은 판정을 다시 한다. 브라우저는 `GET /api/public/shares/download?ticket=...`
     로 스트리밍한다.
     """
@@ -455,6 +459,7 @@ async def public_download_ticket(
         share, file = await shares_service.authorize_share_access(
             session, share_url, password
         )
+        shares_service.ensure_download_permitted(share)
         if file.is_folder:
             await shares_service.plan_share_archive(session, share, file)
         await shares_service.consume_download_quota(session, share)
