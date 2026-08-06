@@ -6,6 +6,8 @@ Phase 5-1 시나리오:
   - 비이미지 업로드 → 썸네일 미생성(/thumbnail 404). 이미지→텍스트 재업로드 시 이전 썸네일 제거.
   - 미리보기: 이미지/PDF 게이트웨이 인라인 redirect, 텍스트 인라인 본문(+1MiB 초과 truncated),
     미지원(zip) 415(구조화 detail), 폴더 400.
+  - mp4 미리보기: 바이트 대신 재생 주소(JSON)를 주고, 그 스트림 티켓은 재사용되며(Range 재생)
+    다운로드 티켓 공간과 분리된다. 공유 비활성화·파일 삭제 시 남은 티켓도 즉시 막힌다.
   - 권한: 소유자 아닌 사용자/admin 은 썸네일·미리보기 404(파일 내용 접근 불가).
   - 공유 접근 통계: 공개 메타/미리보기/다운로드가 view_count·last_access 를 기록하고, 목록/단건
     통계 API 로 조회된다. 미리보기는 download_count 를 소모하지 않는다.
@@ -275,6 +277,120 @@ async def scenario() -> None:
         r = await c.get(f"/api/shares/{share_id}/stats", headers=bob_h)
         assert r.status_code == 404, r.text
         _ok("타인 공유 통계 조회 404 (소유자 전용)")
+
+        # === 10. mp4 미리보기 = 재생 주소(스트림 티켓) ===
+        mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\x11" * 4096
+        r = await c.post(
+            "/api/files/upload",
+            headers=alice_h,
+            files={"file": ("clip.mp4", mp4, "video/mp4")},
+        )
+        assert r.status_code == 201, r.text
+        mp4_id = r.json()["id"]
+
+        r = await c.get(f"/api/files/{mp4_id}/preview", headers=alice_h)
+        assert r.status_code == 200, r.text
+        assert r.headers.get("Content-Type", "").startswith("application/json"), r.headers
+        pointer = r.json()
+        assert pointer["kind"] == "video" and pointer["mime"] == "video/mp4", pointer
+        stream_url = pointer["url"]
+        assert stream_url.startswith("/api/files/preview-stream?ticket="), stream_url
+        _ok("mp4 GET /preview → 200 JSON 재생 주소 (바이트 아님)")
+
+        # 스트림은 게이트웨이 인라인 — 실제 오브젝트 바이트까지 확인.
+        r = await c.get(stream_url)
+        assert r.status_code == 200, r.text
+        accel = r.headers.get("X-Accel-Redirect", "")
+        assert accel.startswith("/_minio/"), r.headers
+        assert r.headers.get("Content-Type") == "video/mp4", r.headers
+        assert "inline" in r.headers.get("Content-Disposition", ""), r.headers
+        got = await _fetch_minio(accel)
+        assert got.status_code == 200 and got.content == mp4, got.status_code
+        _ok("preview-stream → 200 인라인 redirect, 오브젝트 바이트 일치")
+
+        # 재생 한 편 = Range 요청 여러 건 → 같은 티켓이 계속 통해야 한다.
+        r = await c.get(stream_url)
+        assert r.status_code == 200, r.text
+        _ok("같은 티켓 재사용 → 200 (Range 재생 전제)")
+
+        # 미리보기 티켓은 다운로드 티켓 공간과 분리 — 다운로드 라우트에서 쓸 수 없다.
+        pv_ticket = stream_url.split("ticket=", 1)[1]
+        r = await c.get(f"/api/files/download?ticket={pv_ticket}", headers=alice_h)
+        assert r.status_code == 404, r.text
+        _ok("미리보기 티켓을 /download 에 사용 → 404 (티켓 공간 분리)")
+
+        # 영상이 아닌 파일의 id 로는 스트림 주소 자체가 나오지 않는다(발급 경로가 없음).
+        r = await c.get(f"/api/files/{zip_id}/preview", headers=alice_h)
+        assert r.status_code == 415, r.text
+        _ok("zip 은 여전히 415 (mp4 만 재생 대상)")
+
+        # === 11. 공유 링크의 mp4 (비밀번호 + 폴더 공유 안의 파일) ===
+        r = await c.post(
+            "/api/shares",
+            headers=alice_h,
+            json={"file_id": mp4_id, "permission": "download", "password": "s3cret!"},
+        )
+        assert r.status_code == 201, r.text
+        vshare = r.json()
+        vshare_id, vshare_url = vshare["id"], vshare["share_url"]
+
+        r = await c.post(f"/api/public/shares/{vshare_url}/preview")
+        assert r.status_code == 401, r.text
+        r = await c.post(
+            f"/api/public/shares/{vshare_url}/preview", json={"password": "s3cret!"}
+        )
+        assert r.status_code == 200, r.text
+        vpointer = r.json()
+        assert vpointer["kind"] == "video", vpointer
+        vstream = vpointer["url"]
+        assert vstream.startswith("/api/public/shares/preview-stream?ticket="), vstream
+        _ok("공유 mp4 공개 미리보기 → 비밀번호 확인 후 재생 주소")
+
+        r = await c.get(vstream)
+        assert r.status_code == 200, r.text
+        assert r.headers.get("Content-Type") == "video/mp4", r.headers
+        assert r.headers.get("X-Accel-Redirect", "").startswith("/_minio/"), r.headers
+        # 재생은 다운로드가 아니다 — 횟수는 그대로.
+        r = await c.get(f"/api/shares/{vshare_id}/stats", headers=alice_h)
+        assert r.json()["download_count"] == 0, r.json()
+        _ok("공유 스트림 200, download_count 는 0 (재생은 다운로드가 아님)")
+
+        # 폴더 공유 안의 mp4 도 같은 규약.
+        r = await c.post("/api/files", headers=alice_h, json={"name": "clips"})
+        clips_id = r.json()["id"]
+        r = await c.post(
+            "/api/files/upload",
+            headers=alice_h,
+            files={"file": ("inner.mp4", mp4, "video/mp4")},
+            data={"parent_id": str(clips_id)},
+        )
+        inner_id = r.json()["id"]
+        r = await c.post(
+            "/api/shares",
+            headers=alice_h,
+            json={"file_id": clips_id, "permission": "download"},
+        )
+        fshare_url = r.json()["share_url"]
+        r = await c.post(f"/api/public/shares/{fshare_url}/files/{inner_id}/preview")
+        assert r.status_code == 200, r.text
+        r = await c.get(r.json()["url"])
+        assert r.status_code == 200, r.text
+        assert r.headers.get("Content-Type") == "video/mp4", r.headers
+        _ok("폴더 공유 안의 mp4 → 재생 주소 → 스트림 200")
+
+        # 링크를 내리면 남아 있던 티켓도 그 즉시 막힌다(매 요청 재판정).
+        r = await c.delete(f"/api/shares/{vshare_id}", headers=alice_h)
+        assert r.status_code == 204, r.text
+        r = await c.get(vstream)
+        assert r.status_code == 410, r.text
+        _ok("공유 비활성화 후 기존 스트림 티켓 → 410")
+
+        # 파일이 휴지통으로 가면 내 드라이브 스트림도 막힌다.
+        r = await c.post(f"/api/files/{mp4_id}/delete", headers=alice_h)
+        assert r.status_code == 204, r.text
+        r = await c.get(stream_url)
+        assert r.status_code == 404, r.text
+        _ok("파일 삭제 후 기존 스트림 티켓 → 404")
 
     await engine.dispose()
     await redis_client.aclose()

@@ -20,7 +20,11 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import CurrentUser, DbSession, RedisClient
-from app.api.download import content_disposition, gateway_download_response
+from app.api.download import (
+    content_disposition,
+    gateway_download_response,
+    gateway_inline_response,
+)
 from app.api.preview import render_preview
 from app.core.metrics import observe_download_bytes
 from app.schemas.files import DownloadTicketResponse
@@ -146,8 +150,8 @@ async def disable_share(
 
 # --- 공개(무인증) 접근 (/api/public/shares/{shareUrl}) ----------------------
 
-# 주의: 고정 경로 `/download` 는 `/{share_url}` 보다 먼저 선언해야 한다. FastAPI 는 선언 순서로
-# 매칭하므로, 뒤에 두면 `download` 가 share_url 로 잡혀 티켓 다운로드가 동작하지 않는다.
+# 주의: 고정 경로 `/download`·`/preview-stream` 은 `/{share_url}` 보다 먼저 선언해야 한다.
+# FastAPI 는 선언 순서로 매칭하므로, 뒤에 두면 그 이름이 share_url 로 잡혀 티켓 경로가 죽는다.
 
 
 async def _stream_share_archive(session: DbSession, plan: ArchivePlan) -> StreamingResponse:
@@ -196,6 +200,28 @@ async def public_download_by_ticket(
     except ShareServiceError as exc:
         raise _http_error(exc) from exc
     return gateway_download_response(internal, filename, mime)
+
+
+@public_router.get("/preview-stream")
+async def public_preview_stream_by_ticket(
+    session: DbSession, redis: RedisClient, ticket: str = Query(...)
+) -> Response:
+    """티켓 기반 무헤더 공개 영상 스트리밍 (`<video src>` 전용).
+
+    티켓을 소비하지 않고 조회만 한다 — 재생 한 번이 Range 요청 여러 건이기 때문이다. 대신 매
+    요청 공유 유효성(비활성·만료 410)과 트리 소속(404)을 다시 보고, 다운로드 횟수는 소모하지
+    않는다(미리보기는 다운로드가 아니다).
+    """
+    payload = await tickets_service.peek_preview_ticket(redis, ticket)
+    if payload is None or payload.get("kind") != "share-preview":
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+    try:
+        internal, filename, mime = await shares_service.prepare_ticketed_share_preview(
+            session, get_storage(), int(payload["share_id"]), int(payload["file_id"])
+        )
+    except ShareServiceError as exc:
+        raise _http_error(exc) from exc
+    return gateway_inline_response(internal, filename, mime)
 
 
 @public_router.get("/{share_url}", response_model=SharePublicMeta)
@@ -270,8 +296,8 @@ async def public_child_preview(
 ) -> Response:
     """폴더 공유 안의 파일 하나 미리보기. 트리 밖 file_id 는 404 (존재 여부 비노출).
 
-    단일 파일 공유의 미리보기와 같은 규약(이미지/PDF 인라인·텍스트 head·미지원 415)이고,
-    다운로드 횟수와 무관하다. 접근 통계를 기록한다.
+    단일 파일 공유의 미리보기와 같은 규약(이미지/PDF 인라인·텍스트 head·영상 재생 주소·미지원
+    415)이고, 다운로드 횟수와 무관하다. 접근 통계를 기록한다.
     """
     password = payload.password if payload is not None else None
     try:
@@ -281,7 +307,17 @@ async def public_child_preview(
     except ShareServiceError as exc:
         raise _http_error(exc) from exc
     await share_stats_service.record_access(redis, share_id)
-    return render_preview(plan, filename)
+    return await render_preview(
+        plan,
+        filename,
+        redis=redis,
+        stream_path="/api/public/shares/preview-stream",
+        ticket_payload={
+            "kind": "share-preview",
+            "share_id": share_id,
+            "file_id": file_id,
+        },
+    )
 
 
 @public_router.post(
@@ -336,17 +372,28 @@ async def public_preview(
     """공개 미리보기 (PRD 3.2, 3.4). 검증: 활성→만료→폴더(400)→비밀번호(401).
 
     다운로드 횟수(max_downloads)는 소모하지 않는다 — 미리보기는 열람이지 다운로드가 아니다.
-    이미지/PDF 는 게이트웨이 인라인, 텍스트는 앞부분 인라인 본문, 미지원은 415. 접근 통계 기록.
+    이미지/PDF 는 게이트웨이 인라인, 텍스트는 앞부분 인라인 본문, 영상(mp4)은 재생 주소 JSON,
+    미지원은 415. 접근 통계 기록.
     """
     password = payload.password if payload is not None else None
     try:
-        plan, filename, share_id = await shares_service.prepare_share_preview(
+        plan, filename, share_id, file_id = await shares_service.prepare_share_preview(
             session, get_storage(), share_url, password
         )
     except ShareServiceError as exc:
         raise _http_error(exc) from exc
     await share_stats_service.record_access(redis, share_id)
-    return render_preview(plan, filename)
+    return await render_preview(
+        plan,
+        filename,
+        redis=redis,
+        stream_path="/api/public/shares/preview-stream",
+        ticket_payload={
+            "kind": "share-preview",
+            "share_id": share_id,
+            "file_id": file_id,
+        },
+    )
 
 
 @public_router.post("/{share_url}/download")

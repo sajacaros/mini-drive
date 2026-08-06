@@ -482,6 +482,33 @@ async def download_by_ticket(
     return gateway_download_response(internal, filename, mime)
 
 
+@router.get("/preview-stream")
+async def preview_stream_by_ticket(
+    session: DbSession, redis: RedisClient, ticket: str = Query(...)
+) -> Response:
+    """티켓 기반 무헤더 영상 스트리밍 (`<video src>` 전용).
+
+    다운로드 티켓과 달리 소비하지 않고 조회만 한다 — 재생 한 번이 Range 요청 여러 건이라
+    일회용이면 첫 조각에서 끊긴다. 대신 인가를 매 요청 다시 판정한다(권한 회수 즉시 차단).
+    `Content-Disposition: inline` 이므로 브라우저가 받아 저장하지 않고 재생한다.
+    """
+    payload = await tickets_service.peek_preview_ticket(redis, ticket)
+    if payload is None or payload.get("kind") != "file-preview":
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+
+    user = await get_user_by_id(session, int(payload["uid"]))
+    if user is None or user.status != UserStatus.ACTIVE:
+        raise HTTPException(status_code=404, detail="유효하지 않거나 만료된 티켓입니다.")
+
+    try:
+        internal, filename, mime = await files_service.prepare_preview_stream(
+            session, get_storage(), user, int(payload["file_id"])
+        )
+    except FileServiceError as exc:
+        raise _http_error(exc) from exc
+    return gateway_inline_response(internal, filename, mime)
+
+
 # --- ZIP 아카이브 다운로드 (폴더 / 다중 선택) --------------------------------
 #
 # 여기만 게이트웨이 모델의 예외다: X-Accel-Redirect 는 오브젝트 하나만 흘려보낼 수 있어,
@@ -624,11 +651,14 @@ async def thumbnail(file_id: int, user: CurrentUser, session: DbSession) -> Resp
 
 
 @router.get("/{file_id}/preview")
-async def preview(file_id: int, user: CurrentUser, session: DbSession) -> Response:
+async def preview(
+    file_id: int, user: CurrentUser, session: DbSession, redis: RedisClient
+) -> Response:
     """파일 미리보기 (PRD 3.2). read 권한 필요.
 
     이미지/PDF 는 게이트웨이 인라인 스트리밍, 텍스트는 앞부분(최대 1MiB) 인라인 본문,
-    미지원 형식은 415(구조화 detail)로 프론트가 다운로드로 폴백하게 한다. 폴더 400.
+    영상(mp4)은 재생 주소 JSON(위 /preview-stream), 미지원 형식은 415(구조화 detail)로
+    프론트가 다운로드로 폴백하게 한다. 폴더 400.
     """
     try:
         plan, filename = await files_service.prepare_preview(
@@ -638,7 +668,13 @@ async def preview(file_id: int, user: CurrentUser, session: DbSession) -> Respon
         raise _http_error(exc) from exc
     # 미리보기 성공 = 최근 이용 기록 (fail-open). 공개 공유(무인증) 경로는 이 라우트를 타지 않는다.
     await recents_service.record_recent(session, user.id, file_id)
-    return render_preview(plan, filename)
+    return await render_preview(
+        plan,
+        filename,
+        redis=redis,
+        stream_path="/api/files/preview-stream",
+        ticket_payload={"kind": "file-preview", "uid": user.id, "file_id": file_id},
+    )
 
 
 @router.put("/{file_id}/favorite", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,7 +1,8 @@
 /**
- * 파일 미리보기 모달 (PRD 3.2). 이미지/PDF/텍스트를 인라인으로 보여주고, 미지원 형식(415)은
- * "미리보기 미지원 → 다운로드" 로 폴백한다. 인증 파일과 공개 공유 양쪽에서 재사용한다:
- * 실제 로딩은 `load` 콜백에 위임하고(경로별로 다름), 이 컴포넌트는 표시와 objectURL 수명만 맡는다.
+ * 파일 미리보기 모달 (PRD 3.2). 이미지/PDF/텍스트/영상(mp4)을 인라인으로 보여주고, 미지원
+ * 형식(415)은 "미리보기 미지원 → 다운로드" 로 폴백한다. 인증 파일과 공개 공유 양쪽에서
+ * 재사용한다: 실제 로딩은 `load` 콜백에 위임하고(경로별로 다름), 이 컴포넌트는 표시와
+ * objectURL 수명만 맡는다.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -134,6 +135,9 @@ function PreviewBody({
   if (result.kind === "pdf") {
     return <iframe src={result.url} title="PDF 미리보기" className="h-[74vh] w-full" />;
   }
+  if (result.kind === "video") {
+    return <VideoPreview result={result} onDownload={onDownload} />;
+  }
   if (result.kind === "text") {
     return (
       <div className="flex h-full flex-col">
@@ -155,6 +159,47 @@ function PreviewBody({
       hint="이 파일 형식은 브라우저에서 미리 볼 수 없습니다. 다운로드해 확인하세요."
       onDownload={onDownload}
     />
+  );
+}
+
+/**
+ * 영상 재생. src 는 objectURL 이 아니라 백엔드 스트림 주소라, 브라우저가 Range 로 필요한 구간만
+ * 받아 온다(전체를 받고 나서 시작하지 않는다). 자동재생은 하지 않는다 — 공유 링크를 연 사람이
+ * 소리부터 나는 걸 원하진 않는다.
+ *
+ * 재생 도중 티켓이 만료되거나 공유가 비활성화되면 구간 이동이 실패하는데, 그때 화면이 먹통이
+ * 되지 않도록 오류를 잡아 다운로드 안내로 떨어뜨린다.
+ */
+function VideoPreview({
+  result,
+  onDownload,
+}: {
+  result: Extract<PreviewResult, { kind: "video" }>;
+  onDownload?: () => void;
+}) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <PreviewMessage
+        title="영상을 재생하지 못했습니다"
+        hint="재생 시간이 만료됐거나 링크가 더 이상 유효하지 않을 수 있습니다. 새로고침하거나 다운로드해 확인하세요."
+        onDownload={onDownload}
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center bg-black p-2">
+      <video
+        src={result.url}
+        controls
+        preload="metadata"
+        playsInline
+        className="max-h-[74vh] w-full"
+        onError={() => setFailed(true)}
+      />
+    </div>
   );
 }
 

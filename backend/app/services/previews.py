@@ -7,8 +7,12 @@
   - 텍스트 계열(text/*, application/json, csv, xml, javascript 등) → backend 가 앞부분 최대 1MiB 만
     범위 요청으로 읽어 인라인 본문으로 반환한다. 1MiB 초과 원본은 앞부분만 잘라 주고
     `truncated=True` 로 표시한다(전체 적재 방지 + 사용 가능한 head 미리보기 제공).
-  - 그 외(zip, office 바이너리, video/audio 등) → 미지원. 라우트가 415 로 응답하며 프론트는
-    다운로드로 폴백한다.
+  - video/mp4 → 바이트가 아니라 **스트림 주소**를 계획한다. 영상은 처음부터 끝까지 받아야
+    재생되는 게 아니라 `<video>` 가 Range 로 필요한 구간만 집어 오므로, 미리보기 라우트는
+    단기 티켓이 붙은 무헤더 GET 주소만 돌려주고 실제 바이트는 그 스트림 라우트가 매 요청
+    게이트웨이(X-Accel-Redirect)로 흘린다. 10GB 짜리도 즉시 재생·구간 이동이 된다.
+  - 그 외(zip, office 바이너리, mp4 아닌 video/audio 등) → 미지원. 라우트가 415 로 응답하며
+    프론트는 다운로드로 폴백한다.
 
 접근 검증(파일 소유/그룹 권한, 공유 유효성)은 각 호출자(파일 라우트/공유 라우트)가 담당하고,
 이 모듈은 검증이 끝난 File 로 "무엇을 어떻게 렌더할지"만 계획한다.
@@ -42,7 +46,10 @@ _TEXT_LIKE_MIMES = {
     "image/svg+xml",  # SVG 는 텍스트지만 스크립트 위험이 있어 렌더 대신 원문 텍스트로 취급.
 }
 
-PreviewKind = Literal["image", "pdf", "text", "unsupported"]
+# 인라인 재생을 지원하는 영상 MIME. 브라우저 호환이 사실상 보장되는 mp4 하나만 연다.
+VIDEO_MIMES = {"video/mp4"}
+
+PreviewKind = Literal["image", "pdf", "text", "video", "unsupported"]
 
 
 def classify(mime_type: str | None) -> PreviewKind:
@@ -56,6 +63,8 @@ def classify(mime_type: str | None) -> PreviewKind:
         return "image"
     if mime == "application/pdf":
         return "pdf"
+    if mime in VIDEO_MIMES:
+        return "video"
     if mime.startswith("text/") or mime in _TEXT_LIKE_MIMES:
         return "text"
     return "unsupported"
@@ -67,10 +76,12 @@ class PreviewPlan:
 
     - kind="redirect": 게이트웨이 인라인 스트리밍(internal_redirect, mime).
     - kind="text": backend 인라인 본문(text_content, truncated). mime 은 text/plain 계열.
+    - kind="stream": 바이트 대신 스트림 주소를 준다(영상). 라우트가 티켓을 발급해 JSON 포인터로
+      응답하고, 브라우저가 그 주소로 Range 요청을 보낸다.
     - kind="unsupported": 미지원(415). mime 은 원본 MIME(프론트 폴백 판단용).
     """
 
-    kind: Literal["redirect", "text", "unsupported"]
+    kind: Literal["redirect", "text", "stream", "unsupported"]
     mime: str
     internal_redirect: str | None = None
     text_content: bytes | None = None
@@ -84,6 +95,10 @@ async def build_preview_plan(storage: StorageService, file: File) -> PreviewPlan
 
     if kind == "unsupported":
         return PreviewPlan(kind="unsupported", mime=original_mime)
+
+    if kind == "video":
+        # presign 하지 않는다 — 재생은 Range 요청 여러 건이라 그때마다 스트림 라우트가 새로 만든다.
+        return PreviewPlan(kind="stream", mime=original_mime)
 
     if kind in ("image", "pdf"):
         presigned = await storage.presign_get_async(file.file_key)
