@@ -6,11 +6,15 @@ import { Layout } from "@/components/Layout";
 import { Toaster } from "@/components/Toast";
 import { LoadingState } from "@/components/ui";
 import { AdminAuditPage } from "@/pages/AdminAuditPage";
+import { AdminBoardsPage } from "@/pages/AdminBoardsPage";
 import { AdminDashboardPage } from "@/pages/AdminDashboardPage";
 import { AdminGroupsPage } from "@/pages/AdminGroupsPage";
 import { AdminSharesPage } from "@/pages/AdminSharesPage";
 import { AdminSignupCodesPage } from "@/pages/AdminSignupCodesPage";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
+import { BoardPage } from "@/pages/BoardPage";
+import { BoardPostPage } from "@/pages/BoardPostPage";
+import { BoardsPage } from "@/pages/BoardsPage";
 import { FavoritesPage } from "@/pages/FavoritesPage";
 import { FileBrowserPage, SharedFolderBrowserPage } from "@/pages/FileBrowserPage";
 import { GroupDetailPage } from "@/pages/GroupDetailPage";
@@ -93,6 +97,9 @@ function App() {
             <Route path="/shared" element={<FileBrowserPage />} />
             {/* 옛 공유 폴더 딥링크 — 폴더는 이제 /f/:id 하나로 통일됐다. */}
             <Route path="/shared/f/:fileId" element={<SharedFolderBrowserPage />} />
+            <Route path="/boards" element={<BoardsPage />} />
+            <Route path="/boards/:boardId" element={<BoardPage />} />
+            <Route path="/boards/:boardId/posts/:postId" element={<BoardPostPage />} />
             <Route path="/groups" element={<GroupsPage />} />
             <Route path="/groups/:id" element={<GroupDetailPage />} />
             {/* 프로필은 모달로 전환됨 — 딥링크/구링크는 홈으로. */}
@@ -107,6 +114,7 @@ function App() {
             <Route path="/admin/users" element={<AdminUsersPage />} />
             <Route path="/admin/signup-codes" element={<AdminSignupCodesPage />} />
             <Route path="/admin/groups" element={<AdminGroupsPage />} />
+            <Route path="/admin/boards" element={<AdminBoardsPage />} />
             <Route path="/admin/shares" element={<AdminSharesPage />} />
             <Route path="/admin/audit" element={<AdminAuditPage />} />
           </Route>

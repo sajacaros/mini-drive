@@ -8,7 +8,8 @@
  *  - 모바일(<md): 화면 밖 서랍(off-canvas). 기본은 닫힘이고 상단 바의 햄버거로 연다. 390px 화면에서
  *    240px 사이드바가 늘 자리를 차지하면 본문에 150px 밖에 남지 않아 표가 통째로 화면 밖으로 밀린다.
  *  - 섹션(드라이브/위키/할 일/관리): 라벨 클릭으로 각각 접고 펼친다. 메뉴가 계속 늘어날 것을 대비한
- *    구조로, 섹션별 선택 역시 localStorage 에 남는다. 기본은 모두 펼침.
+ *    구조로, 섹션별 선택 역시 localStorage 에 남는다. 기본은 모두 펼침. 화면이 하나뿐인
+ *    "게시판"은 섹션 없이 항목 하나로 놓이고, 접근 가능한 게시판이 없으면 아예 사라진다.
  *
  * 높이 규약: 이 레이아웃이 h-screen 을 소유하고 각 페이지는 h-full 로 그 안을 채운다. 페이지가
  * 직접 h-screen 을 쓰면 모바일 상단 바 높이만큼 화면 밖으로 넘쳐 body 가 세로로 흔들린다.
@@ -20,9 +21,11 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { formatBytes, formatPercent } from "@/lib/format";
 import { todayStr } from "@/lib/localDate";
 import { useAuthStore } from "@/store/auth";
+import { useBoardAccessStore } from "@/store/boardAccess";
 import { useTodoBadgeStore } from "@/store/todoBadge";
 import { ThemePicker } from "./ThemePicker";
 import {
+  BoardIcon,
   CalendarIcon,
   ChartIcon,
   ChatIcon,
@@ -120,6 +123,13 @@ export function Layout() {
   const todoBadge =
     badgeDate === todayStr() && badgeTotal > 0 ? `(${badgeDone}/${badgeTotal})` : undefined;
 
+  // 게시판 메뉴는 **열린 게시판이 하나라도 있을 때만** 나온다(spec/group-board.md 「프런트」).
+  // 조회는 세션당 한 번이라 페이지 이동마다 비용이 붙지 않는다.
+  const { hasBoards, refresh: refreshBoards } = useBoardAccessStore();
+  useEffect(() => {
+    void refreshBoards();
+  }, [refreshBoards]);
+
   useEffect(() => {
     if (!drawerOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -205,6 +215,21 @@ export function Layout() {
           </NavSection>
 
           {/*
+            게시판은 접근 가능한 것이 하나도 없으면 **항목 자체를 감춘다**. 눌러도 빈 화면만
+            나오는 메뉴를 남겨 두면 "권한이 없나?"를 사용자가 추측하게 된다 — 서버가 이름조차
+            내려주지 않는 설계와 같은 방향이다.
+          */}
+          {/*
+            화면이 하나뿐이라 섹션으로 감싸지 않는다 — 라벨과 항목이 똑같은 접이식 섹션은 접는
+            보람이 없다. 게시판이 여러 화면으로 늘면 그때 NavSection 으로 승격한다.
+          */}
+          {hasBoards && (
+            <div className="mt-4">
+              <NavItem to="/boards" icon={<BoardIcon />} label="게시판" collapsed={collapsed} />
+            </div>
+          )}
+
+          {/*
             위키는 드라이브의 한 화면이 아니라 **자기 섹션**이다(spec/wiki-index.md 「프런트」).
             질의와 인덱스 관리는 보는 사람도 보는 빈도도 다르다 — 질문은 매일, 무엇이 색인됐는지는
             가끔이다.
@@ -273,6 +298,12 @@ export function Layout() {
                 collapsed={collapsed}
               />
               <NavItem to="/admin/groups" icon={<UsersIcon />} label="그룹" collapsed={collapsed} />
+              <NavItem
+                to="/admin/boards"
+                icon={<BoardIcon />}
+                label="게시판"
+                collapsed={collapsed}
+              />
               <NavItem
                 to="/admin/shares"
                 icon={<LinkIcon />}

@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     # 454건을 훑는다. 예산은 사고를 막는 상한이지 검색 범위를 좁히는 수단이 아니다.
     wiki_query_catalog_budget_chars: int = Field(default=180_000, ge=1_000)
 
+    # --- 그룹 게시판 (spec/group-board.md) ---
+    # 첨부는 드라이브와 분리되어 개인 할당량을 차감하지 않는다. 대신 작게 묶는다 — 큰 파일은
+    # 드라이브에 올리고 공유 링크를 글에 붙이는 것이 이 기능의 전제다.
+    # 10 MB 상한이라 단일 요청 multipart 로 충분하고 재개 가능 업로드가 필요 없다.
+    board_attachment_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1)
+    board_attachment_max_count: int = Field(default=5, ge=1)
+
     # --- 대화형 질의 (services/chat) ---
     chat_enabled: bool = True
     # 비워 두면 wiki_llm_model 을 따른다. 인덱싱과 채팅이 같은 모델을 쓰는 것이 기본이고,

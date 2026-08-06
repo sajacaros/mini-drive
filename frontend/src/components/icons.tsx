@@ -166,6 +166,14 @@ export const InboxIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 게시판 — 핀으로 꽂은 글판. */
+export const BoardIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M7 9h10M7 13h7" />
+  </svg>
+);
+
 /** 권한 관리 — 방패. */
 export const ShieldIcon = (p: IconProps) => (
   <svg {...base(p)}>

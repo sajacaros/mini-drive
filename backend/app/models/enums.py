@@ -59,6 +59,18 @@ class GroupPermission(StrEnum):
     MANAGE = "manage"
 
 
+class BoardPermission(StrEnum):
+    """게시판에 할당된 그룹의 권한 (board_groups.permission) — spec/group-board.md.
+
+    **두 단계뿐이다.** 드라이브의 GroupPermission(read/write/manage)을 재사용하지 않는 이유는
+    `manage` 가 게시판에 없는 개념이기 때문이다 — 게시판 운영은 시스템 관리자만 하고 게시판별
+    운영자 역할을 두지 않았다. 값만 받아들이면 언젠가 저장되고, 그때 두 축이 의미 없이 얽힌다.
+    """
+
+    READ = "read"
+    WRITE = "write"
+
+
 class TodoStatus(StrEnum):
     """데일리 투두 항목 상태 (todo_items.status).
 
