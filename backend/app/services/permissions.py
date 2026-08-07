@@ -30,9 +30,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from sqlalchemy import bindparam, delete, func, select, text
+from sqlalchemy import CursorResult, bindparam, delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -720,11 +720,14 @@ async def revoke_permission_bulk(
     if not file_ids:
         return 0
 
-    result = await session.execute(
-        delete(FileGroupPermission).where(
-            FileGroupPermission.file_id.in_(file_ids),
-            FileGroupPermission.group_id == group_id,
-        )
+    result = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            delete(FileGroupPermission).where(
+                FileGroupPermission.file_id.in_(file_ids),
+                FileGroupPermission.group_id == group_id,
+            )
+        ),
     )
     deleted = result.rowcount or 0
     if deleted:

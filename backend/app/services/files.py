@@ -16,12 +16,12 @@ Phase 1 결정: v1 스냅샷은 별도 복사본을 만들지 않고 file_versio
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal, cast
 
-from sqlalchemy import Select, func, inspect, select, text, update
+from sqlalchemy import CursorResult, Select, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
@@ -148,13 +148,13 @@ async def folder_name_chains(
     chains: dict[int, list[str]] = {}
     for start in ids:
         names: list[str] = []
-        pid: int | None = start
-        while pid is not None and pid in cache:
-            name, parent = cache[pid]
+        cursor: int | None = start
+        while cursor is not None and cursor in cache:
+            name, parent = cache[cursor]
             if parent is None:  # 루트 폴더 도달 — 실제 이름은 넣지 않는다
                 break
             names.append(name)
-            pid = parent
+            cursor = parent
         names.reverse()
         chains[start] = names
     return chains
@@ -291,7 +291,7 @@ async def _annotate_wiki_status(
             )
         )
     ).all()
-    by_file = dict(rows)
+    by_file: dict[int, str] = {file_id: status for file_id, status in rows}
     for f in files:
         f.wiki_status = by_file.get(f.id, "off")  # type: ignore[attr-defined]
 
@@ -410,7 +410,7 @@ async def _resolve_parent(
     return parent
 
 
-def _child_listing_query(parent_id: int, folders_only: bool = False) -> Select:
+def _child_listing_query(parent_id: int, folders_only: bool = False) -> Select[tuple[File]]:
     """활성 하위 항목 — 폴더 우선, 이름순 (PRD 6.2)."""
     query = select(File).where(
         File.parent_folder_id == parent_id, File.is_deleted.is_(False)
@@ -835,7 +835,8 @@ async def revive(session: AsyncSession, instance: object) -> None:
       - 썸네일 생성 실패(SVG·깨진 이미지): maybe_generate 가 내부에서 rollback 하는데 file 만
         되살려서, 호출자가 이어서 읽는 user 가 expire 상태로 남았다.
     """
-    if inspect(instance).expired:
+    state = inspect(instance, raiseerr=False)
+    if state is not None and state.expired:
         await session.refresh(instance)
 
 
@@ -913,7 +914,7 @@ async def batch_upload(
     paths: Sequence[str],
     dirs: Sequence[str],
     parent_id: int | None,
-) -> tuple[list[dict], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """여러 파일을 상대 경로대로 저장한다. (항목별 결과, 경로→폴더 id 맵) 을 반환한다.
 
     uploads 가 비고 dirs 만 있는 요청도 유효하다 — 폴더 트리만 먼저 확정하는 용도로,
@@ -926,7 +927,7 @@ async def batch_upload(
 
     cache: dict[tuple[int, str], int] = {}
     folders: dict[str, int] = {}
-    items: list[dict] = []
+    items: list[dict[str, Any]] = []
 
     async def resolve_dir(segments: Sequence[str]) -> int:
         """디렉터리 경로 → 폴더 id. 조상 경로도 folders 맵에 함께 기록한다."""
@@ -1126,7 +1127,7 @@ async def _commit_new_version(
     size: int,
     mime: str,
     uploaded_by: int,
-    write_new_content,
+    write_new_content: Callable[[str], Awaitable[None]],
 ) -> File:
     """새 버전 생성의 공통 절차 — 재업로드/복구가 공유한다.
 
@@ -1644,9 +1645,12 @@ async def purge_tree(
         text(_SUBTREE_CTE + " DELETE FROM shares WHERE file_id IN (SELECT id FROM sub)"),
         {"root": root_id},
     )
-    deleted = await session.execute(
-        text(_SUBTREE_CTE + " DELETE FROM files WHERE id IN (SELECT id FROM sub)"),
-        {"root": root_id},
+    deleted = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            text(_SUBTREE_CTE + " DELETE FROM files WHERE id IN (SELECT id FROM sub)"),
+            {"root": root_id},
+        ),
     )
     rows = deleted.rowcount or 0
     for owner_id, size in size_by_owner.items():

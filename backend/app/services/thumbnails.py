@@ -61,15 +61,19 @@ def render_png(data: bytes) -> bytes:
     EXIF 회전 정보를 반영하고, 알파가 있으면 RGBA, 없으면 RGB 로 정규화해 PNG 로 저장한다.
     디코딩 불가/픽셀 초과 등은 Pillow 예외를 그대로 올려 호출자가 best-effort 로 처리한다.
     """
-    with Image.open(io.BytesIO(data)) as image:
-        image = ImageOps.exif_transpose(image) or image
-        has_alpha = image.mode in ("RGBA", "LA") or (
-            image.mode == "P" and "transparency" in image.info
+    with Image.open(io.BytesIO(data)) as opened:
+        # exif_transpose/convert 는 원본을 고치지 않고 **새 Image 를 돌려준다**. 한 이름에
+        # 계속 담으면 ImageFile(연 것)과 Image(파생) 두 타입이 한 변수에 섞여, 읽는 사람도
+        # 타입 검사기도 지금 무엇을 들고 있는지 알 수 없다. 단계마다 이름을 나눠 둔다.
+        # (with 는 자기가 연 객체를 따로 붙들고 있으므로 재바인딩해도 닫히는 대상은 그대로다.)
+        oriented = ImageOps.exif_transpose(opened) or opened
+        has_alpha = oriented.mode in ("RGBA", "LA") or (
+            oriented.mode == "P" and "transparency" in oriented.info
         )
-        image = image.convert("RGBA" if has_alpha else "RGB")
-        image.thumbnail((THUMBNAIL_MAX_DIM, THUMBNAIL_MAX_DIM))
+        thumbnail = oriented.convert("RGBA" if has_alpha else "RGB")
+        thumbnail.thumbnail((THUMBNAIL_MAX_DIM, THUMBNAIL_MAX_DIM))
         out = io.BytesIO()
-        image.save(out, format="PNG")
+        thumbnail.save(out, format="PNG")
         return out.getvalue()
 
 

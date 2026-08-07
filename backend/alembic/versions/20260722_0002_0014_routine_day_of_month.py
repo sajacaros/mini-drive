@@ -13,6 +13,7 @@ monthly 가 아닌 루틴에서는 NULL 이라 기존 행은 손댈 것이 없�
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

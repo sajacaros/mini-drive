@@ -17,6 +17,7 @@ UNIQUE 가 더 강한 제약이었으므로 현재 데이터는 그대로 새 �
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.

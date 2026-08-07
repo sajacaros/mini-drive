@@ -4,7 +4,9 @@ from redis.asyncio import Redis, from_url
 
 from app.core.config import settings
 
-redis_client: Redis = from_url(
+# redis-py 의 from_url 은 아직 반환 타입 주석이 없어 strict 모드에서 untyped call 로 잡힌다.
+# 좌변 주석으로 타입은 확정되므로 호출만 무시한다.
+redis_client: Redis = from_url(  # type: ignore[no-untyped-call]
     settings.redis_url,
     encoding="utf-8",
     decode_responses=True,

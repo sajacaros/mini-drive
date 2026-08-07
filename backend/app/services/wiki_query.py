@@ -156,20 +156,17 @@ async def _queryable_documents(
     권한 판정을 하지 않는다. 인덱싱된 문서는 전 직원 공개라는 불변식(`services/wiki.py`)이
     있고, `@전사` 는 활성 사용자 전원을 포함하므로 판정이 항상 통과한다.
     """
-    return list(
-        (
-            await session.execute(
-                select(WikiDocument, File)
-                .join(File, File.id == WikiDocument.file_id)
-                .where(
-                    File.is_deleted.is_(False),
-                    WikiDocument.status.in_(wiki_service.QUERYABLE_STATUSES),
-                    WikiDocument.tree.is_not(None),
-                )
-                .order_by(File.name.asc())
-            )
-        ).all()
+    rows = await session.execute(
+        select(WikiDocument, File)
+        .join(File, File.id == WikiDocument.file_id)
+        .where(
+            File.is_deleted.is_(False),
+            WikiDocument.status.in_(wiki_service.QUERYABLE_STATUSES),
+            WikiDocument.tree.is_not(None),
+        )
+        .order_by(File.name.asc())
     )
+    return [(document, file) for document, file in rows]
 
 
 def _keywords(question: str) -> list[str]:

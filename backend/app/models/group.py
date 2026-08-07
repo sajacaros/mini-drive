@@ -67,7 +67,10 @@ class Group(Base):
 
 
 class GroupMember(Base):
-    """그룹원. `removed_at` soft delete + UNIQUE(group_id, user_id) 로 재초대 upsert 지원 (PRD 5.6)."""
+    """그룹원.
+
+    `removed_at` soft delete + UNIQUE(group_id, user_id) 로 재초대 upsert 를 지원한다 (PRD 5.6).
+    """
 
     __tablename__ = "group_members"
 
