@@ -199,7 +199,10 @@ class StorageService:
         errors = self._client.remove_objects(
             self.bucket, (DeleteObject(k) for k in keys)
         )
-        return [err.object_name for err in errors]
+        # DeleteError 의 키 필드는 `name` 이다(`object_name` 이 아니다 — minio.deleteobjects).
+        # 삭제가 하나라도 실패하면 여기서 AttributeError 가 나던 자리였고, purge_tree 는 이
+        # 호출을 감싸지 않아 DB 커밋이 끝난 뒤 500 으로 터졌다. name 은 Optional 이라 걸러 낸다.
+        return [err.name for err in errors if err.name]
 
     # --- 비동기 래퍼 (blocking SDK 를 스레드로) -----------------------------
 
