@@ -16,6 +16,7 @@ import getpass
 import sys
 from datetime import UTC, datetime
 
+import structlog
 from prometheus_client import start_http_server
 
 from app.core.config import settings
@@ -108,7 +109,7 @@ _METRICS_PORT = 8000
 _IDLE_SLEEP_SECONDS = 5
 
 
-def _serve_metrics(log) -> None:  # noqa: ANN001 - structlog BoundLogger
+def _serve_metrics(log: structlog.stdlib.BoundLogger) -> None:
     """`--loop` 전용 Prometheus 노출.
 
     이 프로세스는 ASGI 앱이 아니라 `/metrics` 라우트가 없고, backend 의 `/metrics` 는 **다른

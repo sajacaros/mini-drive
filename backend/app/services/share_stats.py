@@ -54,19 +54,30 @@ async def record_access(redis: Redis, share_id: int) -> None:
         pass
 
 
+def _as_text(raw: object) -> str | None:
+    """Redis 원문을 문자열로 되돌린다. decode_responses 설정에 따라 str/bytes 가 섞여 온다."""
+    if isinstance(raw, bytes):
+        return raw.decode(errors="replace")
+    return raw if isinstance(raw, str) else None
+
+
 def _parse_views(raw: object) -> int:
+    text = _as_text(raw)
+    if text is None:
+        return 0
     try:
-        return int(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+        return int(text)
+    except ValueError:
         return 0
 
 
 def _parse_last_access(raw: object) -> datetime | None:
-    if not raw:
+    text = _as_text(raw)
+    if not text:
         return None
     try:
-        return datetime.fromisoformat(raw if isinstance(raw, str) else raw.decode())
-    except (TypeError, ValueError, AttributeError):
+        return datetime.fromisoformat(text)
+    except ValueError:
         return None
 
 

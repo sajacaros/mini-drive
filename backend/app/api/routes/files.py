@@ -29,6 +29,7 @@ from app.api.download import gateway_download_response, gateway_inline_response
 from app.api.preview import render_preview
 from app.core.config import settings
 from app.core.metrics import observe_download_bytes
+from app.models import UploadSession
 from app.models.enums import UserStatus
 from app.schemas.files import (
     ArchiveTicketRequest,
@@ -270,7 +271,7 @@ async def batch_upload(
 
 
 def _session_response(
-    row, parts: list[tuple[int, int, str]] | None = None
+    row: UploadSession, parts: list[tuple[int, int, str]] | None = None
 ) -> ResumableSessionResponse:
     """UploadSession + (선택) 스테이징 파트 목록을 재개 응답으로 변환."""
     return ResumableSessionResponse(

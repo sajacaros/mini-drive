@@ -95,6 +95,8 @@ def _decode(raw: Any) -> dict[str, Any] | None:
     if raw is None:
         return None
     try:
-        return json.loads(raw)
+        payload = json.loads(raw)
     except (ValueError, TypeError):
         return None
+    # 객체가 아닌 JSON(배열·문자열)이면 호출자의 .get 이 터진다 — 무효 티켓으로 접는다.
+    return payload if isinstance(payload, dict) else None

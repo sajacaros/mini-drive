@@ -367,7 +367,10 @@ async def list_groups(
 async def get_group_detail(
     session: AsyncSession, group_id: int, user_id: int
 ) -> tuple[Group, int, str | None, str, list[tuple[GroupMember, str, str]]]:
-    """그룹 상세 — 그룹 + 멤버 수 + 요청자 역할 + 소유자 표시명 + 활성 멤버 목록. 비멤버도 조회 가능."""
+    """그룹 상세 — 그룹 + 멤버 수 + 요청자 역할 + 소유자 표시명 + 활성 멤버 목록.
+
+    비멤버도 조회할 수 있다.
+    """
     group = await _get_active_group(session, group_id)
     members = await fetch_members(session, group_id)
     my_role = next(

@@ -56,7 +56,7 @@ export function avatarExtension(blob: Blob): string {
  */
 async function drawCenterCropped(ctx: CanvasRenderingContext2D, file: File): Promise<void> {
   if (typeof createImageBitmap === "function") {
-    let source: ImageBitmap | null = null;
+    let source: ImageBitmap | null;
     try {
       source = await createImageBitmap(file);
     } catch {

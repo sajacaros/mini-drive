@@ -38,18 +38,40 @@ export function setAuthFailureHandler(handler: () => void): void {
 // 진행 중인 refresh 를 공유하기 위한 단일 프라미스. null 이면 아무도 갱신 중이 아님.
 let refreshInFlight: Promise<string> | null = null;
 
+/**
+ * 세션을 끝내고 한 번만 통지한다.
+ *
+ * 토큰 저장소 자체가 멱등 가드다 — 이미 비어 있으면 아무것도 하지 않는다. refresh 실패는
+ * 대기 중이던 요청 수만큼 관측되지만 "로그아웃되었다"는 사건은 하나뿐이라, 통지가 요청 수에
+ * 비례해 늘어나면 안 된다(로그아웃 처리에 토스트나 이벤트가 붙는 순간 곧바로 드러난다).
+ */
+function endSession(): void {
+  if (!getAccessToken() && !getRefreshToken()) return;
+  clearTokens();
+  onAuthFailure?.();
+}
+
 /** 필요 시 refresh 를 한 번만 실행하고, 동시 호출은 같은 프라미스를 공유한다. */
 function refreshAccessToken(): Promise<string> {
   if (refreshInFlight) return refreshInFlight;
 
   const refreshToken = getRefreshToken();
-  if (!refreshToken) return Promise.reject(new Error("no refresh token"));
+  if (!refreshToken) {
+    endSession();
+    return Promise.reject(new Error("no refresh token"));
+  }
 
   refreshInFlight = requestRefresh(refreshToken)
     .then((tokens) => {
       // 회전: 응답의 새 refresh 토큰으로 교체 저장 (필수).
       setTokens(tokens.access_token, tokens.refresh_token);
       return tokens.access_token;
+    })
+    .catch((err: unknown) => {
+      // 회전 실패 = 세션의 끝. 정리·통지를 **공유 체인 안에서** 한 번만 하고, 거절은 그대로
+      // 흘려보내 각 요청이 자기 실패를 알게 한다.
+      endSession();
+      throw err;
     })
     .finally(() => {
       refreshInFlight = null;
@@ -92,9 +114,8 @@ apiClient.interceptors.response.use(
         original.headers.Authorization = `Bearer ${newToken}`;
         return apiClient(original);
       } catch {
-        // 회전 실패 → 세션 종료 후 로그인으로.
-        clearTokens();
-        onAuthFailure?.();
+        // 세션 종료·통지는 refreshAccessToken 의 공유 체인에서 이미 끝났다. 여기서 또 하면
+        // 대기 중이던 요청 수만큼 중복된다 — 원래 요청의 오류만 돌려준다.
         return Promise.reject(error);
       }
     }

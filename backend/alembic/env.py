@@ -7,10 +7,10 @@ autogenerate 대상 메타데이터는 app.models 를 전부 import 한 뒤의 B
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
 from app.core.config import settings
 
 # app.models 를 import 해야 모든 테이블이 Base.metadata 에 등록된다.

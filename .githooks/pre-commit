@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# 커밋 직전 품질 게이트 (2026-08-07 신설).
+#
+# 왜 두는가 — 이 저장소는 pyproject.toml 에 mypy strict 를 켜 두고도 아무도 돌리지 않아
+# 27건이 쌓였고, 그 사이에 진짜 버그가 하나 섞여 있었다(storage.delete_many 의 err.object_name).
+# 그 버그는 2026-07-18 에 들어와 147커밋 20일을 살아남았다. 도구는 처음부터 설정에 있었고
+# 없던 것은 "돌리는 시점"뿐이라, 사람의 기억이 아니라 커밋이라는 행위에 묶는다.
+#
+# 원칙
+#   - 빠르게: 스테이지된 경로를 보고 바뀐 쪽만 돈다(백엔드 ~6초 / 프론트 ~8초).
+#   - 막지 않게: 도구가 없으면 실패시키지 않고 건너뛴다. 새 clone 이나 CI 없는 환경에서
+#     커밋 자체가 불가능해지면 곧 --no-verify 가 습관이 되고 훅은 없느니만 못해진다.
+#   - 되돌릴 수 있게: git config core.hooksPath 로 붙였다 뗐다 한다(맨 아래 주석).
+
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 0
+
+# 머지 커밋에서는 건너뛴다 — 충돌 해소 중에 게이트가 막으면 되돌릴 길이 좁아진다.
+if [ -e "$ROOT/.git/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$STAGED" ] && exit 0
+
+# ruff 캐시는 반드시 쓰기 가능한 곳으로 보낸다. backend/.ruff_cache 가 예전 도커 실행 탓에
+# root 소유로 남아 있으면 ruff 가 "Permission denied" 로 죽는데, 그건 코드 문제가 아니다.
+export RUFF_CACHE_DIR="${TMPDIR:-/tmp}/flex-drive-ruff-cache-$(id -u)"
+
+FAILED=""
+START=$(date +%s)
+
+note() { printf '\033[2m[pre-commit] %s\033[0m\n' "$1"; }
+fail() { printf '\033[31m[pre-commit] ✗ %s\033[0m\n' "$1"; FAILED="yes"; }
+
+# ── 백엔드 ──────────────────────────────────────────────
+if grep -q '^backend/' <<<"$STAGED"; then
+  PY="$ROOT/backend/.venv/bin/python"
+  if [ ! -x "$PY" ]; then
+    note "backend/.venv 가 없어 파이썬 검사를 건너뜁니다"
+  else
+    note "backend: ruff · mypy · 단위 테스트"
+    "$PY" -m ruff check backend >/dev/null 2>&1 || {
+      "$PY" -m ruff check backend
+      fail "ruff"
+    }
+    ( cd backend && "$PY" -m mypy app ) >/dev/null 2>&1 || {
+      ( cd backend && "$PY" -m mypy app )
+      fail "mypy (strict)"
+    }
+    # integration_* 는 DB 를 비우고 시작하므로 절대 여기서 돌리지 않는다.
+    ( cd backend && "$PY" -m pytest tests -k "not integration" -q -p no:cacheprovider ) >/dev/null 2>&1 || {
+      ( cd backend && "$PY" -m pytest tests -k "not integration" -q -p no:cacheprovider | tail -25 )
+      fail "pytest"
+    }
+  fi
+fi
+
+# ── 프론트엔드 ──────────────────────────────────────────
+if grep -q '^frontend/' <<<"$STAGED"; then
+  if [ ! -d "$ROOT/frontend/node_modules" ]; then
+    note "frontend/node_modules 가 없어 프론트 검사를 건너뜁니다"
+  else
+    note "frontend: tsc · eslint"
+    ( cd frontend && npx tsc -b --noEmit ) || fail "tsc"
+    # eslint 의 남은 react-hooks 부채는 warn 이라 통과한다(frontend/eslint.config.js 참조).
+    ( cd frontend && npx eslint . ) >/dev/null 2>&1 || {
+      ( cd frontend && npx eslint . | tail -30 )
+      fail "eslint"
+    }
+  fi
+fi
+
+ELAPSED=$(( $(date +%s) - START ))
+
+if [ -n "$FAILED" ]; then
+  printf '\033[31m[pre-commit] 커밋을 중단했습니다 (%s초)\033[0m\n' "$ELAPSED"
+  printf '\033[2m고친 뒤 다시 커밋하세요. 정말 건너뛰어야 하면: git commit --no-verify\033[0m\n'
+  exit 1
+fi
+
+note "통과 (${ELAPSED}초)"
+exit 0
+
+# ── 붙이기 / 떼기 ───────────────────────────────────────
+#   붙이기: git config core.hooksPath .githooks
+#   떼기  : git config --unset core.hooksPath
+#
+# 이 디렉터리는 저장소에 커밋되므로 clone 해도 따라오지만, core.hooksPath 는 clone 마다
+# 한 번 설정해야 한다(git 이 저장소 설정을 자동으로 신뢰하지 않는다 — 훅은 임의 코드 실행이라
+# 그게 맞는 기본값이다).
+#
+# 검사 대상은 **워킹 트리**이지 스테이지된 내용이 아니다. 일부만 stage 하고 커밋하면 훅이 본
+# 것과 커밋되는 것이 다를 수 있다. stash 로 분리하는 방법이 있으나 훅 안에서의 stash 는
+# 실패 시 작업을 잃는 사고가 알려져 있어 택하지 않았다.

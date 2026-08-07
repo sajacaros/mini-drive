@@ -18,7 +18,9 @@ from urllib.parse import urlsplit
 
 from minio import Minio
 from minio.commonconfig import CopySource
+from minio.datatypes import Object, Part
 from minio.deleteobjects import DeleteObject
+from urllib3.response import BaseHTTPResponse
 
 from app.core.config import settings
 from app.core.metrics import observe_upload_bytes
@@ -80,7 +82,7 @@ class StorageService:
         # 실제 저장된 업로드 바이트 계측 (PRD 11장). copy(스냅샷)는 put 을 거치지 않으므로 제외.
         observe_upload_bytes(length)
 
-    def get(self, key: str):
+    def get(self, key: str) -> BaseHTTPResponse:
         """오브젝트 스트림(urllib3 응답)을 반환한다. 호출자가 close/release 해야 한다."""
         return self._client.get_object(self.bucket, key)
 
@@ -110,7 +112,7 @@ class StorageService:
             resp.close()
             resp.release_conn()
 
-    def stat(self, key: str):
+    def stat(self, key: str) -> Object:
         """오브젝트 메타데이터. 없으면 minio.error.S3Error(NoSuchKey)."""
         return self._client.stat_object(self.bucket, key)
 
@@ -168,7 +170,8 @@ class StorageService:
             res = self._client._list_parts(
                 self.bucket, key, upload_id, part_number_marker=marker
             )
-            collected.extend((p.part_number, p.size, p.etag) for p in res.parts)
+            # p.size 는 Optional — 스테이징 파트에는 늘 값이 있지만 타입상 열려 0 으로 접는다.
+            collected.extend((p.part_number, p.size or 0, p.etag) for p in res.parts)
             if not res.is_truncated:
                 break
             marker = res.next_part_number_marker
@@ -179,8 +182,6 @@ class StorageService:
         self, key: str, upload_id: str, parts: list[tuple[int, str]]
     ) -> None:
         """스테이징된 파트를 병합해 오브젝트를 확정한다. parts=[(part_number, etag), ...]."""
-        from minio.datatypes import Part
-
         self._client._complete_multipart_upload(
             self.bucket,
             key,
@@ -199,7 +200,10 @@ class StorageService:
         errors = self._client.remove_objects(
             self.bucket, (DeleteObject(k) for k in keys)
         )
-        return [err.object_name for err in errors]
+        # DeleteError 의 키 필드는 `name` 이다(`object_name` 이 아니다 — minio.deleteobjects).
+        # 삭제가 하나라도 실패하면 여기서 AttributeError 가 나던 자리였고, purge_tree 는 이
+        # 호출을 감싸지 않아 DB 커밋이 끝난 뒤 500 으로 터졌다. name 은 Optional 이라 걸러 낸다.
+        return [err.name for err in errors if err.name]
 
     # --- 비동기 래퍼 (blocking SDK 를 스레드로) -----------------------------
 
@@ -218,7 +222,7 @@ class StorageService:
     async def get_head_bytes_async(self, key: str, length: int) -> bytes:
         return await asyncio.to_thread(self.get_head_bytes, key, length)
 
-    async def stat_async(self, key: str):
+    async def stat_async(self, key: str) -> Object:
         return await asyncio.to_thread(self.stat, key)
 
     async def presign_get_async(self, key: str, ttl: int = PRESIGN_TTL_SECONDS) -> str:

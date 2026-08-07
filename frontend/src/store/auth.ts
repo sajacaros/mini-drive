@@ -49,7 +49,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (get().initialized) return;
 
     // 셋업 여부 판정 (무인증). 네트워크 오류 시엔 셋업 불필요로 간주해 앱을 막지 않는다.
-    let setupRequired = false;
+    let setupRequired: boolean;
     try {
       setupRequired = (await getSetupStatus()).setup_required;
     } catch {

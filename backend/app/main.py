@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -22,7 +23,7 @@ _log = get_logger("app.lifecycle")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 첫 admin 은 셋업 위저드(POST /api/setup)로 생성한다 — 기동 시 시드하지 않는다 (PRD 3.6.2).
     _log.info("startup_complete", app=settings.app_name, environment=settings.environment)
     yield
