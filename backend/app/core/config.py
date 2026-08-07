@@ -1,7 +1,19 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 개발 편의를 위한 placeholder. 운영에 이 값이 남아 있으면 기동을 거부한다
+# (Settings._forbid_insecure_secrets).
+PLACEHOLDER_SECRET = "change-me-in-production"
+
+# HS256 서명키 최소 길이. RFC 7518 3.2 가 해시 출력 길이(32바이트) 이상을 요구한다.
+MIN_JWT_SECRET_BYTES = 32
+
+
+class InsecureSecretError(RuntimeError):
+    """운영 환경에 개발용 기본 비밀키가 남아 있을 때 기동을 막는다."""
 
 
 class Settings(BaseSettings):
@@ -131,6 +143,46 @@ class Settings(BaseSettings):
     chat_max_tool_iterations: int = Field(default=6, ge=1, le=20)
     # 에이전트에 넘길 최근 대화 턴 수(1턴 = 질문+답변). 맥락과 프롬프트 크기의 절충이다.
     chat_history_turns: int = Field(default=8, ge=0, le=50)
+
+    @model_validator(mode="after")
+    def _forbid_insecure_secrets(self) -> Self:
+        """운영(`ENVIRONMENT=production`)에서 개발용 비밀키를 쓰면 기동을 거부한다.
+
+        기본값이 **동작하는 값**이라는 게 문제였다 — `JWT_SECRET` 을 빠뜨린 배포가 조용히 뜨고,
+        그 순간 서명키가 공개 저장소에 적힌 문자열이라 누구나 access 토큰을 위조할 수 있다.
+        가용성보다 이쪽이 위험하므로 fail-open 하지 않는다(rate limit 과 반대 판단이다 —
+        그건 남용 완화 장치이고 이건 인가의 뿌리다).
+
+        길이 하한을 함께 보는 이유는 placeholder 만 피한 짧은 키도 같은 문제를 남기기 때문이다.
+        HS256 은 키를 블록 크기로 패딩하므로 32바이트 미만은 엔트로피가 그만큼 모자란다.
+        개발 환경은 그대로 둔다 — 여기서 막으면 clone 후 곧바로 뜨지 않는다.
+        """
+        if self.environment.strip().lower() != "production":
+            return self
+
+        insecure = [
+            name
+            for name, value in (
+                ("JWT_SECRET", self.jwt_secret),
+                ("MINIO_SECRET_KEY", self.minio_secret_key),
+                ("DATABASE_URL", self.database_url),
+            )
+            if PLACEHOLDER_SECRET in value
+        ]
+        if insecure:
+            raise InsecureSecretError(
+                "운영 환경에 개발용 기본 비밀키가 남아 있습니다: "
+                + ", ".join(insecure)
+                + ". 배포 전에 각각 무작위 값으로 교체하십시오."
+            )
+
+        if len(self.jwt_secret.encode()) < MIN_JWT_SECRET_BYTES:
+            raise InsecureSecretError(
+                f"JWT_SECRET 이 너무 짧습니다({len(self.jwt_secret.encode())}바이트). "
+                f"{MIN_JWT_SECRET_BYTES}바이트 이상이어야 합니다 "
+                "(예: `python -c \"import secrets; print(secrets.token_urlsafe(32))\"`)."
+            )
+        return self
 
 
 @lru_cache
