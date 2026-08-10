@@ -6,7 +6,9 @@
     물질화(materialize)한다. 자정이 지나 새 날짜를 열면 루틴 항목이 자동으로 생겨 보인다.
   - TodoItem 은 특정 날짜(todo_date)에 속한 할 일 한 건이다. routine_id 가 있으면 루틴에서
     파생된 것, NULL 이면 그날 직접 추가한 임시 항목이다.
-  - (user_id, todo_date, routine_id) 부분 유니크 인덱스로 같은 루틴이 같은 날 중복
+  - 날짜는 둘로 갈라져 있다 — todo_date 는 "지금 보이는 날"(옮기면 바뀐다, 조회·집계 기준),
+    origin_date 는 "원래 속했던 날"(옮겨도 그대로, 루틴 물질화 판정 기준)이다.
+  - (user_id, origin_date, routine_id) 부분 유니크 인덱스로 같은 루틴이 같은 날 중복
     물질화되는 것을 막는다(routine_id IS NOT NULL 인 행만 대상).
   - start_time 은 컬럼 하나로 '종일'과 '시각'을 함께 말한다 — NULL 이 곧 종일이다. 별도
     is_all_day 불린은 (NULL, false) 같은 모순 상태를 만들 수 있어 두지 않는다.
@@ -99,6 +101,9 @@ class TodoItem(Base):
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     todo_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # 원래 속했던 날짜 — 만들어질 때 todo_date 와 같고, 다른 날로 옮겨도 따라가지 않는다.
+    # 루틴 파생 항목이 자기 원래 날짜 자리를 계속 점유하게 해 재물질화를 막는 장치다.
+    origin_date: Mapped[date] = mapped_column(Date, nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     # 'pending' | 'done' | 'failed' (models.enums.TodoStatus).
     status: Mapped[str] = mapped_column(
@@ -130,10 +135,11 @@ class TodoItem(Base):
 
     __table_args__ = (
         # 같은 루틴이 같은 날 중복 물질화되는 것 방지 — 임시 항목(routine_id NULL)은 제외.
+        # 기준은 origin_date 다. todo_date 로 두면 오늘치를 내일로 옮긴 순간 내일치와 부딪힌다.
         Index(
             "uq_todo_items_routine_day",
             "user_id",
-            "todo_date",
+            "origin_date",
             "routine_id",
             unique=True,
             postgresql_where=text("routine_id IS NOT NULL"),
@@ -150,7 +156,8 @@ class TodoItem(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover - 디버깅 편의
+        moved = "" if self.origin_date == self.todo_date else f" from={self.origin_date}"
         return (
-            f"<TodoItem id={self.id} date={self.todo_date} "
+            f"<TodoItem id={self.id} date={self.todo_date}{moved} "
             f"status={self.status} title={self.title!r}>"
         )

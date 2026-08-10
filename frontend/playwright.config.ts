@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 /**
  * E2E 통합 테스트 (Phase 8 드라이브 UX 검증).
- * 대상: docker compose 로 기동한 mini-drive 전체 스택 (nginx 게이트웨이 :80).
+ * 대상: docker compose 로 기동한 mini-drive 전체 스택 (nginx 게이트웨이 :7400).
  * Playwright test agents(planner/generator/healer)가 이 설정으로 seed 프로젝트를 찾는다.
  */
 export default defineConfig({
@@ -23,7 +23,8 @@ export default defineConfig({
   timeout: 60_000,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? "http://localhost",
+    // 로컬 게이트웨이 기본 포트(GATEWAY_HTTP_PORT=7400). 다른 포트로 띄웠으면 E2E_BASE_URL 로 덮는다.
+    baseURL: process.env.E2E_BASE_URL ?? "http://localhost:7400",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },

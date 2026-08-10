@@ -173,12 +173,14 @@ Solar-Open2-250B 가 다음 한 수를 고른다  ◀─────────
 ## 빠른 시작
 
 ```bash
-cp .env.example .env          # 시크릿을 실제 값으로 교체
+cp .env.example .env               # 시크릿을 실제 값으로 교체
 docker compose up -d --build
-curl http://localhost/health  # {"status":"ok","database":"ok","minio":"ok","redis":"ok"}
+curl http://localhost:7400/health  # {"status":"ok","database":"ok","minio":"ok","redis":"ok"}
 ```
 
-- 웹 UI <http://localhost/> · API 문서 <http://localhost/api/docs>
+- 웹 UI <http://localhost:7400/> · API 문서 <http://localhost:7400/api/docs>
+- 게이트웨이 포트는 `.env` 의 `GATEWAY_HTTP_PORT` (로컬 기본 7400). 80 으로 쓰려면 그 값을 바꾸고
+  `docker compose up -d nginx` 로 재생성하세요 — e2e 는 `E2E_BASE_URL` 로 같은 주소를 알려줘야 합니다.
 - 종료: `docker compose down` (볼륨까지: `down -v`)
 
 빈 DB 로 처음 기동하면 `/setup` 셋업 위저드로 유도됩니다. 첫 관리자 계정, 초기 가입 코드, 신규
