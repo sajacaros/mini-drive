@@ -24,6 +24,7 @@ from app.schemas.todos import (
     RoutineUpdateRequest,
     TodoCreateRequest,
     TodoDayResponse,
+    TodoDuplicateRequest,
     TodoResponse,
     TodoUpdateRequest,
     days_to_list,
@@ -57,6 +58,7 @@ def _todo_response(view: TodoItemView) -> TodoResponse:
     return TodoResponse(
         id=item.id,
         date=item.todo_date,
+        origin_date=item.origin_date,
         title=item.title,
         status=TodoStatus(item.status),
         routine_id=item.routine_id,
@@ -251,10 +253,27 @@ async def update_todo(
             status=payload.status,
             start_time=payload.start_time,
             sort_order=payload.sort_order,
+            # date 는 "다른 날로 옮기기" — 안 보내면 그대로다.
+            todo_date=payload.date,
             # start_time 은 null 자체가 '종일로 지움'이라 값만으로는 미변경과 구분되지
             # 않는다 — 요청 본문에 필드가 실제로 실려 왔는지로 가른다.
             set_start_time="start_time" in payload.model_fields_set,
         )
+    except TodoServiceError as exc:
+        raise _http_error(exc) from exc
+    return _todo_response(view)
+
+
+@router.post("/{todo_id}/duplicate", response_model=TodoResponse, status_code=201)
+async def duplicate_todo(
+    todo_id: int,
+    payload: TodoDuplicateRequest,
+    user: CurrentUser,
+    session: DbSession,
+) -> TodoResponse:
+    """투두 복제. date 를 주면 그 날짜에, 없으면 원본과 같은 날에 사본을 만든다."""
+    try:
+        view = await todos_service.duplicate_todo(session, user.id, todo_id, payload.date)
     except TodoServiceError as exc:
         raise _http_error(exc) from exc
     return _todo_response(view)

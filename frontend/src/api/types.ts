@@ -593,6 +593,8 @@ export interface RoutineUpdateRequest {
 export interface TodoItem {
   id: number;
   date: string;
+  /** 원래 속했던 날짜. date 와 다르면 다른 날에서 옮겨 온 항목이다. */
+  origin_date: string;
   title: string;
   status: TodoStatus;
   routine_id: number | null;

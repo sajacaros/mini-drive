@@ -39,10 +39,13 @@ export async function createTodo(
 /**
  * start_time 은 세 갈래다 — 키를 아예 빼면 그대로, null 이면 종일로 지움, "HH:MM" 이면 그 시각.
  * (undefined 를 넣어도 axios 가 JSON 직렬화에서 키를 빼므로 '그대로'와 같다.)
+ *
+ * date 는 "다른 날로 옮기기"다 — 안 보내면 그대로 있는다.
  */
 export async function updateTodo(
   id: number,
   payload: {
+    date?: string;
     title?: string;
     status?: TodoStatus;
     start_time?: string | null;
@@ -50,6 +53,14 @@ export async function updateTodo(
   },
 ): Promise<TodoItem> {
   const { data } = await apiClient.patch<TodoItem>(`/todos/${id}`, payload);
+  return data;
+}
+
+/** 사본을 만든다. date 를 생략하면 원본과 같은 날. 사본은 언제나 루틴 링크가 없는 일반 항목이다. */
+export async function duplicateTodo(id: number, date?: string): Promise<TodoItem> {
+  const { data } = await apiClient.post<TodoItem>(`/todos/${id}/duplicate`, {
+    date: date ?? null,
+  });
   return data;
 }
 

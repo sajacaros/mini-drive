@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.enums import RoutineFrequency, TodoStatus
 
+# 'date' 라는 필드 이름은 같은 클래스 안에서 datetime.date 를 가린다 — 기본값을 주면 클래스
+# 속성이 되어 어노테이션 평가 때 타입 대신 그 값이 잡히고(pydantic 이 TypeError 로 죽는다),
+# 기본값이 없어도 mypy 는 클래스 스코프의 이름을 먼저 본다. date 필드 자신과 그 뒤에 오는
+# 날짜 필드는 이 별칭으로 쓴다.
+DateField = date
+
 
 def validate_start_time(value: time | None) -> time | None:
     """시작 시각은 10분 단위 정각만 받는다(None = 종일).
@@ -112,12 +118,16 @@ class TodoCreateRequest(BaseModel):
 
 
 class TodoUpdateRequest(BaseModel):
-    """투두 부분 수정 (제목/상태/시작 시각/정렬). 체크 순환: pending → done → failed → pending.
+    """투두 부분 수정 (날짜/제목/상태/시작 시각/정렬). 체크 순환: pending → done → failed → pending.
+
+    date 를 지금과 다른 날로 주면 그 날짜로 옮긴다. start_time 과 달리 null 이 '값'이 아니라
+    그냥 미변경이므로 세 갈래를 가를 필요가 없다.
 
     start_time 은 "안 보냄 = 그대로", "null = 종일로 지움", "값 = 그 시각" 세 갈래다. 앞의 둘이
     같은 None 으로 도착하므로 라우터가 model_fields_set 으로 구분한다.
     """
 
+    date: DateField | None = None
     title: str | None = Field(default=None, min_length=1, max_length=500)
     status: TodoStatus | None = None
     start_time: time | None = None
@@ -129,9 +139,17 @@ class TodoUpdateRequest(BaseModel):
         return validate_start_time(v)
 
 
+class TodoDuplicateRequest(BaseModel):
+    """투두 복제. date 를 생략하면 원본과 같은 날에 사본을 만든다."""
+
+    date: DateField | None = None
+
+
 class TodoResponse(BaseModel):
     id: int
     date: date
+    # 원래 속했던 날짜. date 와 다르면 다른 날에서 옮겨 온 항목이다.
+    origin_date: DateField
     title: str
     status: TodoStatus
     routine_id: int | None = None

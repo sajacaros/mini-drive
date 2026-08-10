@@ -8,16 +8,21 @@
  * 순서: 종일(start_time = null)이 맨 위, 그 아래로 시작 시각순이다. 루틴은 언제나 종일이라
  * 항상 위에 모인다. 시각이 있는 항목은 시각이 순서를 결정하므로 드래그 핸들을 내리고, 종일
  * 항목끼리만 드래그로 순서를 잡는다 — 그래야 놓은 자리에서 도로 튕기는 일이 없다.
+ *
+ * 옮기기·복제는 루틴 항목에도 연다(삭제·시각 편집과 달리 루틴의 기록을 흐트러뜨리지 않는다).
+ * 루틴 항목을 미뤄도 원래 날짜의 그날치는 서버가 origin_date 로 자리를 잡아 두어 다시 생기지
+ * 않고, 옮겨 간 날에는 그날치와 나란히 두 건으로 보인다 — 서로 다른 날의 몫이라 별개다.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { extractErrorMessage } from "@/api/client";
-import { createTodo, deleteTodo, getDay, updateTodo } from "@/api/todos";
+import { createTodo, deleteTodo, duplicateTodo, getDay, updateTodo } from "@/api/todos";
 import type { TodoDayResponse, TodoItem, TodoStatus } from "@/api/types";
 import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
+import { TodoDateModal, type TodoDateMode } from "@/components/TodoDateModal";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui";
 import {
   CalendarIcon,
@@ -26,7 +31,9 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ClockIcon,
+  CopyIcon,
   GripIcon,
+  MoveIcon,
   PlusIcon,
   RepeatIcon,
   TrashIcon,
@@ -75,6 +82,10 @@ export function TodoPage() {
   const [newTime, setNewTime] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [draggingId, setDraggingId] = useState<number | null>(null);
+  /** 날짜 선택 모달의 대상과 용도. null 이면 닫힌 상태. */
+  const [dateTarget, setDateTarget] = useState<
+    { item: TodoItem; mode: TodoDateMode } | null
+  >(null);
 
   const load = useCallback(async (d: string) => {
     setLoading(true);
@@ -164,6 +175,37 @@ export function TodoPage() {
     } catch (err) {
       setDayData(prev);
       toast.error(extractErrorMessage(err, "시각 변경에 실패했습니다."));
+    }
+  };
+
+  /** 다른 날짜로 옮긴다. 성공하면 이 날 목록에서 사라진다(그 날짜를 열면 거기 있다). */
+  const move = async (item: TodoItem, to: string) => {
+    const prev = day;
+    setDayData((d) =>
+      d ? recount({ ...d, items: d.items.filter((it) => it.id !== item.id) }) : d,
+    );
+    try {
+      await updateTodo(item.id, { date: to });
+      toast.success(`${formatDayLabel(to)}로 옮겼습니다.`);
+    } catch (err) {
+      setDayData(prev);
+      toast.error(extractErrorMessage(err, "옮기지 못했습니다."));
+    }
+  };
+
+  /** 사본을 만든다. 대상이 지금 보고 있는 날이면 목록에 끼워 넣고, 아니면 알림만 남긴다. */
+  const duplicate = async (item: TodoItem, to: string) => {
+    try {
+      const copy = await duplicateTodo(item.id, to);
+      if (to === date) {
+        setDayData((d) =>
+          d ? recount({ ...d, items: sortItems([...d.items, copy]) }) : d,
+        );
+      } else {
+        toast.success(`${formatDayLabel(to)}에 복제했습니다.`);
+      }
+    } catch (err) {
+      toast.error(extractErrorMessage(err, "복제에 실패했습니다."));
     }
   };
 
@@ -404,6 +446,8 @@ export function TodoPage() {
                       ? (next) => void setStartTime(item, next)
                       : undefined
                   }
+                  onMove={() => setDateTarget({ item, mode: "move" })}
+                  onDuplicate={() => setDateTarget({ item, mode: "duplicate" })}
                   onDelete={item.routine_id === null ? () => void remove(item) : undefined}
                 />
               ))}
@@ -411,6 +455,18 @@ export function TodoPage() {
           )}
         </div>
       </div>
+
+      <TodoDateModal
+        item={dateTarget?.item ?? null}
+        mode={dateTarget?.mode ?? "move"}
+        onClose={() => setDateTarget(null)}
+        onSubmit={async (to) => {
+          if (!dateTarget) return;
+          const { item, mode } = dateTarget;
+          setDateTarget(null);
+          await (mode === "move" ? move(item, to) : duplicate(item, to));
+        }}
+      />
     </div>
   );
 }
@@ -503,6 +559,8 @@ function TodoRow({
   onDragStart,
   onCycleStatus,
   onSetStartTime,
+  onMove,
+  onDuplicate,
   onDelete,
 }: {
   item: TodoItem;
@@ -511,12 +569,16 @@ function TodoRow({
   onCycleStatus: () => void;
   /** 없으면 시각 고정(루틴 파생) — 종일로 남는다. */
   onSetStartTime?: (next: string | null) => void;
+  onMove: () => void;
+  onDuplicate: () => void;
   onDelete?: () => void;
 }) {
   const done = item.status === "done";
   const failed = item.status === "failed";
   const allDay = item.start_time === null;
   const timeLabel = formatTimeLabel(item.start_time);
+  // 원래 날짜가 지금 보고 있는 날과 다르면 옮겨 온 항목이다.
+  const movedFrom = item.origin_date !== item.date ? formatDayLabel(item.origin_date) : null;
   const [editingTime, setEditingTime] = useState(false);
 
   return (
@@ -590,12 +652,22 @@ function TodoRow({
         >
           {item.title}
         </div>
-        {item.routine_id !== null && (
-          <span className="mt-0.5 inline-flex items-center gap-1 text-xs text-accent">
-            <RepeatIcon width={11} height={11} />
-            루틴
-          </span>
-        )}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          {item.routine_id !== null && (
+            <span className="inline-flex items-center gap-1 text-xs text-accent">
+              <RepeatIcon width={11} height={11} />
+              루틴
+            </span>
+          )}
+          {/* 다른 날에서 옮겨 온 항목 — 특히 같은 루틴이 하루에 두 건 보일 때 무엇이 미뤄온
+              것인지 이 배지로만 구분된다. */}
+          {movedFrom && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted">
+              <MoveIcon width={11} height={11} />
+              {movedFrom}에서 옮김
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 시각 편집 — 열면 시/분 선택이 그 자리에 뜨고, 고르는 즉시 저장되며 목록이 다시 정렬된다. */}
@@ -626,6 +698,25 @@ function TodoRow({
             <ClockIcon width={15} height={15} />
           </button>
         ))}
+
+      {/* 옮기기·복제는 루틴 항목에도 연다 — 둘 다 루틴의 기록을 흐트러뜨리지 않는다. */}
+      <button
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:text-[color:var(--accent)]"
+        title="다른 날짜로 옮기기"
+        aria-label="다른 날짜로 옮기기"
+        onClick={onMove}
+      >
+        <MoveIcon width={15} height={15} />
+      </button>
+
+      <button
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:text-[color:var(--accent)]"
+        title="복제"
+        aria-label="복제"
+        onClick={onDuplicate}
+      >
+        <CopyIcon width={15} height={15} />
+      </button>
 
       {onDelete && (
         <button

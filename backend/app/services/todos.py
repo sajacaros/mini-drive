@@ -12,6 +12,12 @@
 "오늘"의 기준 시각대는 Asia/Seoul(KST)로 고정한다 — 국내용 서비스이며 자정 경계가 사용자
 체감과 일치해야 하기 때문이다.
 
+할 일은 다른 날짜로 옮기거나(update_todo 의 todo_date) 복제할 수 있다(duplicate_todo). 옮겨도
+origin_date 는 따라가지 않으므로, 루틴 파생 항목을 미뤄도 원래 날짜에 그 루틴이 다시 생기지
+않고 대상 날짜에서는 그날치와 나란히 두 건으로 보인다. 복제본은 언제나 루틴 링크를 끊은 일반
+항목이다 — 링크를 물려받으면 같은 (origin_date, routine_id) 가 둘이 되어 유니크 인덱스와
+부딪힌다.
+
 하루치 정렬은 start_time NULLS FIRST → sort_order → id 다. start_time 이 NULL 인 항목이
 '종일'이고, 루틴 파생 항목은 (지금은) 언제나 종일이라 목록 맨 위에 모인다. 종일 항목끼리는
 사용자가 드래그로 잡은 sort_order 를 그대로 존중하고, 시각이 있는 항목은 시각이 순서를
@@ -192,12 +198,14 @@ async def ensure_day_materialized(
     if not active:
         return
 
+    # 판정 기준은 origin_date 다 — 그날 만들어진 항목이 다른 날로 옮겨 갔더라도 그 루틴의
+    # 그날치는 이미 존재하므로 다시 만들지 않는다(미룬 일이 도로 살아나지 않는다).
     existing_routine_ids = set(
         (
             await session.execute(
                 select(TodoItem.routine_id).where(
                     TodoItem.user_id == user_id,
-                    TodoItem.todo_date == day,
+                    TodoItem.origin_date == day,
                     TodoItem.routine_id.is_not(None),
                 )
             )
@@ -214,6 +222,7 @@ async def ensure_day_materialized(
             TodoItem(
                 user_id=user_id,
                 todo_date=day,
+                origin_date=day,
                 title=routine.title,
                 status=TodoStatus.PENDING.value,
                 routine_id=routine.id,
@@ -267,14 +276,8 @@ async def get_day(
     return [TodoItemView(item=item, routine_title=title) for item, title in rows]
 
 
-async def create_todo(
-    session: AsyncSession,
-    user_id: int,
-    day: date,
-    title: str,
-    start_time: time | None = None,
-) -> TodoItemView:
-    """그날의 임시 투두(루틴 아님) 추가. start_time 이 None 이면 종일. 정렬은 기존 최대 + 1."""
+async def _next_sort_order(session: AsyncSession, user_id: int, day: date) -> int:
+    """그날 목록 맨 뒤에 붙일 정렬값 — 기존 최대 + 1. 추가/이동/복제가 함께 쓴다."""
     max_order = (
         await session.execute(
             select(TodoItem.sort_order)
@@ -283,14 +286,26 @@ async def create_todo(
             .limit(1)
         )
     ).scalar_one_or_none()
+    return (max_order or 0) + 1
+
+
+async def create_todo(
+    session: AsyncSession,
+    user_id: int,
+    day: date,
+    title: str,
+    start_time: time | None = None,
+) -> TodoItemView:
+    """그날의 임시 투두(루틴 아님) 추가. start_time 이 None 이면 종일. 정렬은 기존 최대 + 1."""
     item = TodoItem(
         user_id=user_id,
         todo_date=day,
+        origin_date=day,
         title=title.strip(),
         status=TodoStatus.PENDING.value,
         routine_id=None,
         start_time=start_time,
-        sort_order=(max_order or 0) + 1,
+        sort_order=await _next_sort_order(session, user_id, day),
     )
     session.add(item)
     await session.commit()
@@ -316,6 +331,7 @@ async def update_todo(
     status: TodoStatus | None,
     start_time: time | None,
     sort_order: int | None,
+    todo_date: date | None = None,
     set_start_time: bool = False,
 ) -> TodoItemView:
     """투두 부분 수정.
@@ -323,6 +339,10 @@ async def update_todo(
     start_time 만 None 이 '값'(= 종일)이기도 해서 다른 필드처럼 "None 이면 미변경"으로 볼 수
     없다. set_start_time=True 일 때만 start_time 을 반영한다(라우터가 요청에 필드가 실제로
     들어왔는지 보고 세운다).
+
+    todo_date 를 지금과 다른 날로 주면 '옮기기'다 — origin_date 는 그대로 두어 원래 날짜 자리를
+    계속 점유하게 하고(루틴 재물질화 방지), 정렬값은 대상 날짜의 맨 뒤로 다시 잡는다. 옮긴 뒤의
+    sort_order 를 함께 지정했다면 그쪽을 존중한다.
     """
     item = await _get_owned_todo(session, user_id, todo_id)
 
@@ -334,6 +354,10 @@ async def update_todo(
         item.completed_at = datetime.now(UTC) if status == TodoStatus.DONE else None
     if set_start_time:
         item.start_time = start_time
+    if todo_date is not None and todo_date != item.todo_date:
+        item.todo_date = todo_date
+        if sort_order is None:
+            item.sort_order = await _next_sort_order(session, user_id, todo_date)
     if sort_order is not None:
         item.sort_order = sort_order
 
@@ -345,6 +369,37 @@ async def update_todo(
         routine = await session.get(Routine, item.routine_id)
         routine_title = routine.title if routine else None
     return TodoItemView(item=item, routine_title=routine_title)
+
+
+async def duplicate_todo(
+    session: AsyncSession,
+    user_id: int,
+    todo_id: int,
+    target_date: date | None = None,
+) -> TodoItemView:
+    """투두를 같은 날 또는 다른 날로 복제한다(target_date 미지정 시 원본과 같은 날).
+
+    복사되는 것은 제목과 시작 시각뿐이다 — 사본은 아직 하지 않은 일이므로 상태는 pending 이고
+    완료 시각은 비운다. 루틴 링크도 끊는다. 사본이 루틴 링크를 물려받으면 같은
+    (origin_date, routine_id) 가 둘이 되어 유니크 인덱스와 부딪히고, 무엇보다 사본은 루틴이
+    만든 그날치가 아니라 사용자가 손으로 늘린 별개의 일이다.
+    """
+    source = await _get_owned_todo(session, user_id, todo_id)
+    day = target_date or source.todo_date
+    item = TodoItem(
+        user_id=user_id,
+        todo_date=day,
+        origin_date=day,
+        title=source.title,
+        status=TodoStatus.PENDING.value,
+        routine_id=None,
+        start_time=source.start_time,
+        sort_order=await _next_sort_order(session, user_id, day),
+    )
+    session.add(item)
+    await session.commit()
+    await session.refresh(item)
+    return TodoItemView(item=item, routine_title=None)
 
 
 async def delete_todo(session: AsyncSession, user_id: int, todo_id: int) -> None:
