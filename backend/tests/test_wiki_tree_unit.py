@@ -2,18 +2,20 @@
 
 트리 구조는 전부 결정적 파싱이라 LLM 없이 고정할 수 있다. 요약만 LLM 을 쓴다.
 검증 축: 헤더 추출(코드펜스 인식) / level 중첩 / 구간 경계(end_line) / 본문 슬라이싱 /
-헤더 없는 문서 / 머리말 누락 방지.
+헤더 없는 문서 / 머리말 누락 방지 / **요약 캐시 열쇠**(text_hash).
 """
 
 from __future__ import annotations
 
 from app.services.wiki_tree import (
     build_tree,
+    content_hash,
     extract_headings,
     flatten,
     node_text,
     own_text,
     parse,
+    summary_cache,
     to_dict,
 )
 
@@ -139,3 +141,47 @@ class TestEdgeCases:
         heads, lines = extract_headings("## 절\n\n내용\n")
         roots = build_tree(heads, len(lines))
         assert len(roots) == 1 and roots[0].title == "절"
+
+
+class TestSummaryCache:
+    """재색인 비용의 거의 전부가 노드별 요약 LLM 호출이다. 안 바뀐 절을 다시 태우지 않는
+    유일한 근거가 `text_hash` 라, 그 열쇠가 언제 같고 언제 달라지는지를 고정한다."""
+
+    def test_hash_is_stable_for_identical_input(self) -> None:
+        assert content_hash("제목", "본문") == content_hash("제목", "본문")
+
+    def test_hash_changes_when_body_changes(self) -> None:
+        assert content_hash("제목", "본문 A") != content_hash("제목", "본문 B")
+
+    def test_hash_changes_when_title_changes(self) -> None:
+        # 요약 프롬프트가 제목을 받으므로, 제목만 고친 절이 옛 제목 전제의 요약을 물려받으면
+        # 안 된다.
+        assert content_hash("옛 제목", "본문") != content_hash("새 제목", "본문")
+
+    def test_parse_assigns_hashes_to_every_node(self) -> None:
+        roots, _ = parse(DOC, doc_name="doc")
+        assert all(n.text_hash for n in flatten(roots))
+
+    def test_hash_survives_node_id_shift(self) -> None:
+        # 문서 앞에 절이 하나 끼면 node_id 는 전부 밀린다(순차 카운터). 내용이 그대로인 절의
+        # 요약까지 다시 태울 이유는 없으므로 해시는 그대로여야 한다.
+        before, _ = parse("# 가\n\n하나.\n", doc_name="doc")
+        after, _ = parse("# 새 절\n\n새 내용.\n\n# 가\n\n하나.\n", doc_name="doc")
+        moved = next(n for n in flatten(after) if n.title == "가")
+        assert moved.node_id != before[0].node_id
+        assert moved.text_hash == before[0].text_hash
+
+    def test_cache_round_trip_through_serialization(self) -> None:
+        roots, lines = parse(DOC, doc_name="doc")
+        roots[0].summary = "요약문"
+        cache = summary_cache(to_dict(roots, doc_name="doc", line_count=len(lines)))
+        assert cache[roots[0].text_hash] == "요약문"
+
+    def test_cache_ignores_malformed_trees(self) -> None:
+        # JSONB 라 스키마 보증이 없다 — 캐시가 비면 전부 다시 요약할 뿐 결과는 같다.
+        assert summary_cache(None) == {}
+        assert summary_cache({"structure": "이상함"}) == {}
+        assert summary_cache({"structure": [{"summary": "열쇠 없음"}]}) == {}
+
+    def test_cache_skips_nodes_without_summary(self) -> None:
+        assert summary_cache({"structure": [{"text_hash": "abc"}]}) == {}

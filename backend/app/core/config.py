@@ -111,6 +111,13 @@ class Settings(BaseSettings):
     wiki_max_input_bytes: int = Field(default=2 * 1024 * 1024, ge=1)
     # 위키를 끈 뒤 트리를 실제로 지우기까지의 유예(일). 0 이면 즉시 삭제.
     wiki_purge_grace_days: int = Field(default=30, ge=0)
+    # 정합 스윕(wiki_indexer.reconcile)이 `failed` 문서를 다시 태우는 정책.
+    # 상한 5회는 "일시 장애면 그 안에 붙고, 영구 실패면 5일이면 사람이 알아챈다"는 값이다.
+    # 0 으로 두면 자동 재시도를 끄고 소유자의 재토글에만 맡긴다.
+    wiki_reconcile_max_attempts: int = Field(default=5, ge=0)
+    # 재시도 최소 간격(시간). 스윕은 보통 하루 1회지만 손으로도 돌릴 수 있어(`reconcile-wiki`),
+    # 간격이 없으면 몇 번 돌리는 것만으로 시도 횟수가 소진된다.
+    wiki_reconcile_retry_hours: int = Field(default=6, ge=0)
     # 노드 선택 프롬프트에 넣을 축약 트리의 문자 예산 — 모델 컨텍스트(131,072 토큰)에서
     # 역산한 하드 캡이다. 이게 없으면 문서가 늘었을 때 모든 질의가 400 으로 죽는다
     # (실측: 467건을 전부 넣으면 932,753자로 컨텍스트의 7배였다).
