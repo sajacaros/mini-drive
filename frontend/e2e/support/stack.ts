@@ -66,7 +66,8 @@ function restartBackend(value: string): void {
 }
 
 function waitHealthy(): void {
-  const base = process.env.E2E_BASE_URL ?? "http://localhost";
+  // playwright.config.ts 의 baseURL 기본값과 같아야 한다(로컬 게이트웨이 7400).
+  const base = process.env.E2E_BASE_URL ?? "http://localhost:7400";
   const deadline = Date.now() + 90_000;
   let last = "";
   while (Date.now() < deadline) {
