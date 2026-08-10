@@ -6,6 +6,8 @@
   영구 삭제한다. `--loop` 은 `purger` 사이드카가 쓰는 모드다.
 - `python -m app.cli index-wiki [--once|--loop]` — 위키 인덱싱 큐를 처리한다.
   `--loop` 은 `wiki-indexer` 사이드카가 쓰는 모드다 (spec/wiki-index.md).
+- `python -m app.cli reconcile-wiki` — 색인 상태를 유효 상태에 맞춘다. `purger` 회차와
+  인덱서 기동 때 자동으로 도는 것과 같은 스윕이고, 이 서브커맨드는 손으로 확인할 때 쓴다.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import argparse
 import asyncio
 import getpass
 import sys
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 import structlog
@@ -85,6 +88,45 @@ def _report(result: trash_service.PurgeResult) -> None:
 async def _purge_once(*, dry_run: bool) -> trash_service.PurgeResult:
     async with SessionFactory() as session:
         return await trash_service.purge_expired(session, get_storage(), dry_run=dry_run)
+
+
+async def _reconcile_wiki(*, dry_run: bool = False) -> wiki_indexer.ReconcileResult:
+    """색인 상태를 유효 상태에 맞춘다 (spec/wiki-index.md 「정합 스윕」).
+
+    휴지통 정리와 같은 회차에 얹는 이유는 `_purge_wiki_trees` 와 같다 — 하루 1회면 충분하고
+    사이드카를 새로 띄울 이유가 없다. 스윕 자체는 큐에 넣기만 하므로 이 회차가 무거워지지
+    않는다(색인은 wiki-indexer 가 자기 속도로 집어 간다).
+
+    정리(purge)보다 **뒤에** 돈다. 유예가 지난 행을 먼저 지우고 나면 스윕이 볼 대상이 줄고,
+    반대 순서로는 스윕이 방금 손댄 행을 정리가 곧바로 지우게 된다.
+    """
+    if not settings.wiki_enabled:
+        return wiki_indexer.ReconcileResult(dry_run=dry_run)
+    async with SessionFactory() as session:
+        return await wiki_indexer.reconcile(session, dry_run=dry_run)
+
+
+async def _reconcile_wiki_cli(*, dry_run: bool) -> int:
+    """`reconcile-wiki` — 손으로 스윕을 돌리고 결과를 사람이 읽을 형태로 찍는다."""
+    if not settings.wiki_enabled:
+        print("[reconcile-wiki] 위키 기능이 비활성화되어 있습니다.", file=sys.stderr)
+        return 1
+    drift = await _reconcile_wiki(dry_run=dry_run)
+    tag = "[reconcile-wiki]" + (" (dry-run)" if drift.dry_run else "")
+    print(
+        f"{tag} 대상 {drift.candidates}건 — "
+        f"행 없음 {drift.missing}, 부활 {drift.revived}, 낡음 {drift.outdated}, "
+        f"큐 유실 {drift.stuck}, 재시도 {drift.retried}(보류 {drift.exhausted}), "
+        f"내림 {drift.disabled} → 큐 투입 {drift.enqueued}건"
+        + (" (아무 것도 쓰지 않았습니다)" if drift.dry_run else "")
+    )
+    if drift.disable_skipped:
+        print(
+            f"[reconcile-wiki] 경고: {drift.disable_skipped}건을 내려야 하지만 한 회차 상한을 "
+            "넘어 보류했습니다. 유효 상태 도출을 확인하세요.",
+            file=sys.stderr,
+        )
+    return 0
 
 
 async def _purge_wiki_trees() -> int:
@@ -163,6 +205,14 @@ async def _purge_trash(*, dry_run: bool, loop: bool) -> int:
         except Exception:  # noqa: BLE001 - 위키 정리 실패가 휴지통 회차 보고를 막지 않는다
             log.exception("wiki_tree_purge_failed")
             wiki_trees = 0
+        try:
+            drift = await _reconcile_wiki()
+        except Exception:  # noqa: BLE001 - 스윕 실패가 휴지통 회차 보고를 막지 않는다
+            log.exception("wiki_reconcile_failed")
+        else:
+            # 어긋난 것이 없으면 조용히 지나간다 — 매일 0 만 찍히는 줄은 곧 안 읽히게 된다.
+            if drift.enqueued or drift.disabled or drift.disable_skipped:
+                log.info("wiki_reconcile_done", **asdict(drift))
         log.info(
             "trash_purge_done",
             wiki_trees_purged=wiki_trees,
@@ -200,13 +250,17 @@ async def _index_wiki(*, loop: bool, limit: int) -> int:
     )
 
     # 기동 시 한 번 — 큐가 유실된 채로 남아 있던 작업을 회수한다(Redis flush·크래시 복구).
+    #
+    # 같은 스윕을 purger 가 하루 1회 돌리는데도 여기서 또 부르는 이유는 시각이다. Redis 가
+    # 정오에 비면 다음 정기 회차(새벽)까지 반나절을 놓친 채로 도는데, 그 사이 올라온 문서는
+    # 카탈로그에 pending 으로만 앉아 있다. 워커 재기동은 그 사고의 가장 흔한 직후 시점이다.
     async with SessionFactory() as session:
         try:
-            recovered = await wiki_indexer.requeue_orphans(session)
-            if recovered:
-                log.info("wiki_orphans_requeued", count=recovered)
+            drift = await wiki_indexer.reconcile(session)
+            if drift.enqueued or drift.disabled:
+                log.info("wiki_reconcile_done", **asdict(drift))
         except Exception:  # noqa: BLE001 - 회수 실패가 기동을 막지 않는다
-            log.exception("wiki_orphan_requeue_failed")
+            log.exception("wiki_reconcile_failed")
 
     storage = get_storage()
     while True:
@@ -267,6 +321,16 @@ def main(argv: list[str] | None = None) -> int:
         "--limit", type=int, default=5, help="한 회차에 처리할 최대 문서 수"
     )
 
+    p_reconcile = sub.add_parser(
+        "reconcile-wiki",
+        help="색인 상태를 유효 상태에 맞춘다 (purger 가 하루 1회 자동 실행 — 수동 확인용)",
+    )
+    p_reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="아무것도 바꾸지 않고 이번 회차가 건드릴 대상 건수만 출력",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "create-admin":
         password = args.password or getpass.getpass("admin 비밀번호: ")
@@ -278,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_purge_trash(dry_run=args.dry_run, loop=args.loop))
     if args.command == "index-wiki":
         return asyncio.run(_index_wiki(loop=args.loop, limit=args.limit))
+    if args.command == "reconcile-wiki":
+        return asyncio.run(_reconcile_wiki_cli(dry_run=args.dry_run))
     return 1
 
 

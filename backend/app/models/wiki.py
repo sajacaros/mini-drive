@@ -51,6 +51,14 @@ class WikiDocument(Base):
     indexed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 연속 실패 횟수와 마지막 시도 시각. 정합 스윕이 `failed` 를 다시 큐에 넣을 때 백오프를
+    # 거는 근거다 — 없으면 영구 실패가 확정된 문서를 매일 다시 굽는다(GPU 낭비).
+    # 성공하면 attempts 는 0 으로 돌아간다. 새 버전이 올라오면 입력이 바뀐 것이므로
+    # 스윕이 시도 횟수와 무관하게 다시 태운다(wiki_indexer.reconcile).
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

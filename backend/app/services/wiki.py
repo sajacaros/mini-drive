@@ -89,22 +89,39 @@ class IndexableVerdict:
     reason: str | None = None
 
 
-def indexable(file: File) -> IndexableVerdict:
-    """이 파일이 인덱싱 대상인가. 폴더는 대상이 아니다(하위 파일이 대상이다)."""
+def indexable_row(
+    *, name: str, size: int, is_folder: bool = False, is_deleted: bool = False
+) -> IndexableVerdict:
+    """`indexable` 의 값 기반 판정. ORM 객체 없이 SQL 행에서 바로 부를 수 있다.
+
+    정합 스윕(`wiki_indexer.reconcile`)이 수백 건을 훑을 때 파일마다 `session.get(File, ...)`
+    을 돌리지 않기 위한 것이고, 판정 규칙을 두 벌로 만들지 않는 것이 목적이다 — 스윕과 토글이
+    "인덱싱 대상인가"에서 갈리면 스윕이 매일 되돌리는 문서가 생긴다.
+    """
     settings = get_settings()
-    if file.is_folder:
+    if is_folder:
         return IndexableVerdict(False, "폴더 자체는 인덱싱 대상이 아닙니다.")
-    if file.is_deleted:
+    if is_deleted:
         return IndexableVerdict(False, "휴지통에 있는 항목은 인덱싱할 수 없습니다.")
-    ext = posixpath.splitext(file.name.lower())[1]
+    ext = posixpath.splitext(name.lower())[1]
     if ext not in INDEXABLE_EXTENSIONS:
         return IndexableVerdict(
             False, "지원하지 않는 형식입니다 (현재 Markdown·HTML 만)."
         )
-    if file.size > settings.wiki_max_input_bytes:
+    if size > settings.wiki_max_input_bytes:
         limit_mb = settings.wiki_max_input_bytes / (1024 * 1024)
         return IndexableVerdict(False, f"파일이 너무 큽니다 (상한 {limit_mb:.0f}MB).")
     return IndexableVerdict(True)
+
+
+def indexable(file: File) -> IndexableVerdict:
+    """이 파일이 인덱싱 대상인가. 폴더는 대상이 아니다(하위 파일이 대상이다)."""
+    return indexable_row(
+        name=file.name,
+        size=file.size,
+        is_folder=file.is_folder,
+        is_deleted=file.is_deleted,
+    )
 
 
 # 대상 파일에서 루트까지 올라가며 wiki_enabled 명시값(NOT NULL)만 모은다. depth 0 = 자기 자신.
@@ -145,6 +162,58 @@ async def resolve_wiki_state(session: AsyncSession, file_id: int) -> WikiState:
         explicit=row.depth == 0,
         source_file_id=row.file_id,
     )
+
+
+# 위키가 **유효하게 켜져 있는** 파일 전체. `resolve_wiki_state` 를 파일마다 부르는 대신
+# 켜진 서브트리에서 아래로 전파한다. 판정 규칙은 같다("가장 가까운 명시값이 이긴다") —
+# 명시 TRUE 가 시작점이고, 상속 중(NULL)인 하위로만 번지며, 명시 FALSE 에서 끊긴다(소유자
+# 탈출구). 끊긴 아래에 다시 명시 TRUE 가 있으면 그건 자기 자신이 시작점이라 함께 잡힌다.
+#
+# 방향이 반대인 것이 요점이다. 조상 방향 질의는 파일 수에 비례하지만(전체 파일 × 재귀),
+# 이 질의는 **켜진 범위**에 비례한다 — 정합 스윕이 하루 1회 전수를 훑어야 하는 이유로 그
+# 차이가 그대로 회차 비용이 된다.
+_ENABLED_FILES_SQL = text(
+    """
+    WITH RECURSIVE enabled AS (
+        SELECT id, is_folder, name, size, current_version
+        FROM files
+        WHERE wiki_enabled IS TRUE AND is_deleted = FALSE
+        UNION ALL
+        SELECT c.id, c.is_folder, c.name, c.size, c.current_version
+        FROM files c JOIN enabled e ON c.parent_folder_id = e.id
+        WHERE c.wiki_enabled IS NULL AND c.is_deleted = FALSE AND e.is_folder = TRUE
+    )
+    SELECT id, name, size, current_version FROM enabled WHERE is_folder = FALSE
+    """
+)
+
+
+@dataclass(frozen=True)
+class EnabledFile:
+    """유효 ON 인 파일 한 건 — 정합 판정에 필요한 최소 열만."""
+
+    file_id: int
+    name: str
+    size: int
+    current_version: int
+
+
+async def enabled_file_rows(session: AsyncSession) -> list[EnabledFile]:
+    """위키가 유효하게 켜져 있는 살아있는 파일 전체 (폴더 제외).
+
+    **인덱싱 대상 판정(`indexable_row`)은 하지 않는다** — 켜진 폴더 안의 PDF 도 여기 나온다.
+    거르는 일은 호출자가 한다(스윕은 "대상이 아닌데 색인돼 있는" 경우도 알아야 한다).
+    """
+    rows = (await session.execute(_ENABLED_FILES_SQL)).all()
+    return [
+        EnabledFile(
+            file_id=r.id,
+            name=r.name,
+            size=r.size,
+            current_version=r.current_version,
+        )
+        for r in rows
+    ]
 
 
 # 폴더 하위(자기 자신 제외)의 살아있는 파일을 확장자별로 센다. 폴더 토글 확인 문구용 —
@@ -352,9 +421,13 @@ async def mark_pending(session: AsyncSession, file_ids: list[int]) -> None:
     ① 상태가 비어 있는 구간이 없어져 UI 가 "켰는데 아무 표시도 없는" 상태를 겪지 않는다.
     ② **Redis 큐가 유실돼도 복구할 수 있다.** 큐는 flush·재시작으로 사라질 수 있는데, 그때
        켜져 있으면서 인덱싱 안 된 파일이 어디에도 안 남으면 영영 처리되지 않는다. Postgres 에
-       pending 행이 있으면 워커가 고아를 찾아 다시 넣는다(wiki_indexer.requeue_orphans).
+       pending 행이 있으면 정합 스윕이 그것을 찾아 다시 넣는다(wiki_indexer.reconcile).
 
     이미 최신(ready + 같은 버전)인 것은 건드리지 않는다 — 멱등.
+
+    **재시도 카운터를 0 으로 되돌린다.** 이 함수를 부르는 경로가 토글·이동·업로드, 즉 사람이
+    "이걸 색인해라"라고 다시 말한 시점이다. 스윕의 재시도 상한(`reconcile`)에 걸려 멈춘
+    문서를 사람이 다시 밀어 넣는 탈출구가 여기다.
     """
     from app.models import WikiDocument
 
@@ -382,6 +455,7 @@ async def mark_pending(session: AsyncSession, file_ids: list[int]) -> None:
             )
             continue
         doc, file = entry
+        doc.attempts = 0
         if doc.version == file.current_version and doc.tree is not None:
             # 껐다 켠 경우 — 트리가 그대로라 재색인이 필요 없다. 비용 0 으로 복구한다.
             if doc.status in (WikiStatus.READY, WikiStatus.DISABLED):
@@ -644,6 +718,13 @@ async def purge_disabled_trees(session: AsyncSession) -> TreePurgeResult:
 
     파일이 영구 삭제되는 경우는 여기서 다루지 않는다 — wiki_documents.file_id 의
     ON DELETE CASCADE 가 함께 지운다.
+
+    **유효하게 켜져 있는 파일은 제외한다.** 조건의 `wiki_enabled IS NOT TRUE` 는 그 파일의
+    명시값만 보는데, 명시값이 NULL(상속)이면서 켜진 폴더 아래 있는 파일은 유효 ON 이다.
+    그런 파일에도 `wiki_disabled_at` 이 남아 있을 수 있다 — 켰다 껐다 다시 '상속으로
+    되돌리기'(`enabled=null`)를 하면 `set_wiki` 가 명시값만 지우고 끈 시각은 남기기 때문이다.
+    빼지 않으면 유예가 지난 뒤 멀쩡히 켜진 문서의 트리를 지우게 되고, 정합 스윕이 그것을
+    "행 없음"으로 보고 다시 색인해 **매일 정리와 재색인이 번갈아 도는 루프**가 된다.
     """
     from app.models import WikiDocument
 
@@ -665,7 +746,10 @@ async def purge_disabled_trees(session: AsyncSession) -> TreePurgeResult:
     if not rows:
         return TreePurgeResult()
 
-    doc_ids = [r[0] for r in rows]
+    still_on = {row.file_id for row in await enabled_file_rows(session)}
+    doc_ids = [doc_id for doc_id, file_id in rows if file_id not in still_on]
+    if not doc_ids:
+        return TreePurgeResult()
     await session.execute(delete(WikiDocument).where(WikiDocument.id.in_(doc_ids)))
     await session.commit()
     return TreePurgeResult(deleted=len(doc_ids))
