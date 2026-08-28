@@ -99,7 +99,7 @@ export function WikiCatalogPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <h1 className="text-lg font-semibold">문서 카탈로그</h1>
           <p className="mt-0.5 text-sm text-muted">
@@ -117,7 +117,7 @@ export function WikiCatalogPage() {
         />
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -142,7 +142,7 @@ export function WikiCatalogPage() {
           )
         ) : (
           <>
-            <div className="card overflow-x-auto">
+            <div className="card table-scroll">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-token text-left text-xs text-muted">

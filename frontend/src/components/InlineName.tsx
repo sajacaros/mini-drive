@@ -46,7 +46,7 @@ export function InlineNameInput({ file, onSubmit, onCancel, className }: InlineN
       ref={ref}
       defaultValue={file.name}
       aria-label="이름"
-      className={`input px-1.5 py-0.5 ${className ?? ""}`}
+      className={`input px-1.5 py-1.5 ${className ?? ""}`}
       // 행의 선택/열기 판정에서 빠지고, 드래그로 글자를 긁어도 행이 끌려가지 않게 한다.
       {...ROW_ACTION_PROPS}
       draggable={false}

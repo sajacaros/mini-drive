@@ -111,7 +111,7 @@ export function WikiCatalogDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex h-full flex-col p-6">
+      <div className="flex h-full flex-col p-4 md:p-6">
         <LoadingState />
       </div>
     );
@@ -119,7 +119,7 @@ export function WikiCatalogDetailPage() {
 
   if (error || !catalog) {
     return (
-      <div className="flex h-full flex-col p-6">
+      <div className="flex h-full flex-col p-4 md:p-6">
         <ErrorState
           message={error ?? "문서를 찾을 수 없습니다."}
           onRetry={Number.isNaN(docId) ? undefined : () => void load()}
@@ -135,7 +135,7 @@ export function WikiCatalogDetailPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <nav className="mb-1 flex items-center gap-1 text-sm text-muted">
             <button
@@ -149,7 +149,7 @@ export function WikiCatalogDetailPage() {
               {catalog.name}
             </span>
           </nav>
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="truncate text-lg font-semibold">{catalog.name}</h1>
@@ -174,7 +174,7 @@ export function WikiCatalogDetailPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {catalog.nodes.length === 0 ? (
           <EmptyState
             icon={<BookIcon width={40} height={40} />}

@@ -139,7 +139,7 @@ export function GroupDetailPage() {
 
   if (error || !group) {
     return (
-      <div className="flex h-full flex-col p-6">
+      <div className="flex h-full flex-col p-4 md:p-6">
         <ErrorState message={error ?? "그룹을 찾을 수 없습니다."} onRetry={load} />
       </div>
     );
@@ -148,7 +148,7 @@ export function GroupDetailPage() {
   return (
     <div className="flex h-full flex-col">
       {/* 헤더: breadcrumb + 그룹명 */}
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
         <nav className="mb-1 flex items-center gap-1 text-sm text-muted">
           <button className="hover:text-[color:var(--text-primary)]" onClick={() => navigate("/groups")}>
@@ -157,7 +157,7 @@ export function GroupDetailPage() {
           <ChevronRight width={14} height={14} />
           <span className="truncate font-medium text-[color:var(--text-primary)]">{group.name}</span>
         </nav>
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="truncate text-lg font-semibold">{group.name}</h1>
@@ -181,7 +181,7 @@ export function GroupDetailPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold">멤버 {group.member_count}명</h2>
           {canManageMembers && (
@@ -192,7 +192,7 @@ export function GroupDetailPage() {
           )}
         </div>
 
-        <div className="card overflow-x-auto">
+        <div className="card table-scroll">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-token text-left text-xs text-muted">

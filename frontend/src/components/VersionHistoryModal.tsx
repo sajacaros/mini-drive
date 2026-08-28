@@ -111,7 +111,7 @@ export function VersionHistoryModal({
         ) : items.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted">버전 기록이 없습니다.</p>
         ) : (
-          <ul className="flex max-h-[60vh] flex-col gap-2 overflow-auto">
+          <ul className="flex flex-col gap-2">
             {items.map((v) => (
               <li
                 key={v.version}

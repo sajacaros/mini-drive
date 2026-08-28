@@ -63,7 +63,7 @@ export function TodoMonthPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -95,7 +95,7 @@ export function TodoMonthPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto w-full max-w-3xl">
           {/* 달 네비게이션 */}
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -177,8 +177,8 @@ function MonthGrid({
   const lead = isoWeekday(parseDateStr(report.range_start));
 
   return (
-    <div className="card p-4">
-      <div className="grid grid-cols-7 gap-1.5">
+    <div className="card p-2 md:p-4">
+      <div className="grid grid-cols-7 gap-1 md:gap-1.5">
         {WEEKDAY_LABELS.map((w) => (
           <div key={w} className="pb-1 text-center text-xs font-semibold text-muted">
             {w}

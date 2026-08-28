@@ -72,7 +72,7 @@ export function TodoReportsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -106,7 +106,7 @@ export function TodoReportsPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto w-full max-w-3xl">
           {/* 기간 네비게이션 */}
           <div className="mb-5 flex items-center justify-center gap-4">
@@ -227,7 +227,13 @@ function DailyChart({ report, compact }: { report: TodoReport; compact: boolean 
   const maxTotal = Math.max(1, ...report.daily.map((d) => d.total));
   return (
     <div className="card p-4">
-      <div className="flex items-end gap-1" style={{ height: 120 }}>
+      {/*
+        월간(31칸)은 390px 화면에서 막대 하나가 6px 까지 눌려 읽을 수 없었다. 접거나 솎아내는
+        대신 최소 폭을 주고 상자 안에서 옆으로 밀리게 한다 — 막대 차트는 이웃과 견주는
+        물건이라, 일부를 지우면 견줄 대상이 사라진다.
+      */}
+      <div className="-mx-1 overflow-x-auto px-1">
+        <div className="flex min-w-full items-end gap-1" style={{ height: 120 }}>
         {report.daily.map((d) => {
           const total = d.total;
           const h = (total / maxTotal) * 100;
@@ -236,7 +242,7 @@ function DailyChart({ report, compact }: { report: TodoReport; compact: boolean 
           return (
             <div
               key={d.date}
-              className="flex flex-1 flex-col items-center justify-end gap-1"
+              className="flex min-w-[9px] flex-1 flex-col items-center justify-end gap-1"
               title={`${d.date} — 완료 ${d.done}, 실패 ${d.failed}, 빈칸 ${d.pending}`}
             >
               <div
@@ -254,6 +260,7 @@ function DailyChart({ report, compact }: { report: TodoReport; compact: boolean 
             </div>
           );
         })}
+        </div>
       </div>
       {compact && (
         <div className="mt-1.5 flex justify-between text-[10px] text-muted">

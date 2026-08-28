@@ -60,7 +60,7 @@ export function Toaster() {
   const remove = useToastStore((s) => s.remove);
 
   return (
-    <div className="pointer-events-none fixed right-4 top-4 z-50 flex w-full max-w-sm flex-col gap-2">
+    <div className="pointer-events-none fixed left-4 right-4 top-4 z-50 ml-auto flex max-w-sm flex-col gap-2">
       {toasts.map((t) => (
         <ToastCard key={t.id} item={t} onClose={() => remove(t.id)} />
       ))}

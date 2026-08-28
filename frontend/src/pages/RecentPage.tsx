@@ -68,7 +68,7 @@ export function RecentPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
           <span className="text-accent">
@@ -80,7 +80,7 @@ export function RecentPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error ? (

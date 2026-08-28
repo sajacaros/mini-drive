@@ -137,10 +137,10 @@ export function AdminUsersPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 pt-4">
+      <div className="border-b border-token px-4 pt-3 md:px-6 md:pt-4">
         <PageHeader align="start">
           <h1 className="text-lg font-semibold">사용자 관리</h1>
-          <div className="mt-3 flex gap-1">
+          <div className="tab-scroller mt-3 gap-1">
             <FilterTab active={filter === "all"} onClick={() => switchFilter("all")}>
               전체
             </FilterTab>
@@ -154,7 +154,7 @@ export function AdminUsersPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -162,7 +162,7 @@ export function AdminUsersPage() {
         ) : users.length === 0 ? (
           <EmptyState title="사용자가 없습니다" />
         ) : (
-          <div className="card overflow-x-auto">
+          <div className="card table-scroll">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

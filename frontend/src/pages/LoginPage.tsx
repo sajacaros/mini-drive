@@ -93,7 +93,7 @@ export function AuthShell({
   subtitle: string;
 }) {
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-[100dvh] items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-2">
           <span className="text-accent">
@@ -102,7 +102,7 @@ export function AuthShell({
           <h1 className="text-xl font-semibold">Flex Drive</h1>
           <p className="text-sm text-muted">{subtitle}</p>
         </div>
-        <div className="card p-6">{children}</div>
+        <div className="card p-5 md:p-6">{children}</div>
       </div>
     </div>
   );

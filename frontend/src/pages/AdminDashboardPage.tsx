@@ -32,14 +32,14 @@ export function AdminDashboardPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <h1 className="text-lg font-semibold">대시보드</h1>
           <p className="mt-0.5 text-sm text-muted">인스턴스 사용 현황 (메타데이터 집계)</p>
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error || !stats ? (
@@ -73,7 +73,7 @@ export function AdminDashboardPage() {
               {stats.top_users.length === 0 ? (
                 <p className="text-sm text-muted">데이터가 없습니다.</p>
               ) : (
-                <div className="card overflow-x-auto">
+                <div className="card table-scroll">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-token text-left text-xs text-muted">

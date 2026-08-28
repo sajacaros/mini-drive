@@ -35,6 +35,8 @@ export function AdminAuditPage() {
   const [targetType, setTargetType] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  /** 좁은 화면에서 필터를 펼쳤는지. 데스크톱은 md: 로 항상 펼쳐 둔다. */
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -72,13 +74,32 @@ export function AdminAuditPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const activeFilterCount = [action, targetType, from, to].filter(Boolean).length;
+
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
-        <h1 className="text-lg font-semibold">감사 로그</h1>
-        <div className="mt-3 flex flex-wrap items-end gap-3">
-          <div>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-lg font-semibold">감사 로그</h1>
+          {/*
+            네 개의 필드(선택 2 + datetime-local 2)는 휴대폰에서 각자 한 줄을 차지해 헤더가
+            다섯 줄이 됐다. datetime-local 은 모바일에서 고유 폭이 특히 넓다. 그래서 좁은
+            화면에서는 접어 두고 필요할 때만 펼친다 — 감사 로그는 대개 그냥 훑어보러 온다.
+          */}
+          <button
+            className="btn btn-secondary md:hidden"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((v) => !v)}
+          >
+            필터
+            {activeFilterCount > 0 && ` (${activeFilterCount})`}
+          </button>
+        </div>
+        <div
+          className={`mt-3 flex-wrap items-end gap-3 md:flex ${filtersOpen ? "flex" : "hidden"}`}
+        >
+          <div className="min-w-0 flex-1 sm:flex-none">
             <label className="mb-1 block text-xs text-muted">액션</label>
             <select
               className="input py-1.5"
@@ -93,7 +114,7 @@ export function AdminAuditPage() {
               ))}
             </select>
           </div>
-          <div>
+          <div className="min-w-0 flex-1 sm:flex-none">
             <label className="mb-1 block text-xs text-muted">대상 유형</label>
             <select
               className="input py-1.5"
@@ -108,7 +129,7 @@ export function AdminAuditPage() {
               ))}
             </select>
           </div>
-          <div>
+          <div className="min-w-0 flex-1 sm:flex-none">
             <label className="mb-1 block text-xs text-muted">시작</label>
             <input
               type="datetime-local"
@@ -117,7 +138,7 @@ export function AdminAuditPage() {
               onChange={(e) => onFilterChange(setFrom)(e.target.value)}
             />
           </div>
-          <div>
+          <div className="min-w-0 flex-1 sm:flex-none">
             <label className="mb-1 block text-xs text-muted">종료</label>
             <input
               type="datetime-local"
@@ -144,7 +165,7 @@ export function AdminAuditPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -152,7 +173,7 @@ export function AdminAuditPage() {
         ) : logs.length === 0 ? (
           <EmptyState title="감사 로그가 없습니다" />
         ) : (
-          <div className="card overflow-x-auto">
+          <div className="card table-scroll">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">

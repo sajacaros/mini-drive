@@ -157,7 +157,7 @@ export function RoutinesPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -179,7 +179,7 @@ export function RoutinesPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto w-full max-w-2xl">
           {loading ? (
             <LoadingState />
@@ -294,7 +294,7 @@ export function RoutinesPage() {
 
             <div>
               <label className="mb-1.5 block text-sm font-medium">주기</label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <FreqButton
                   active={edit.frequency === "daily"}
                   label="매일"
@@ -391,7 +391,7 @@ function FreqButton({
   return (
     <button
       type="button"
-      className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border py-2 text-sm font-medium transition-colors"
+      className="flex min-w-24 flex-1 items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-sm font-medium transition-colors"
       style={{
         borderColor: active ? "var(--accent)" : "var(--border-color)",
         background: active ? "color-mix(in srgb, var(--accent) 12%, transparent)" : "transparent",

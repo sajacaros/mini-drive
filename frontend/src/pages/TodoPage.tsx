@@ -20,6 +20,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { extractErrorMessage } from "@/api/client";
 import { createTodo, deleteTodo, duplicateTodo, getDay, updateTodo } from "@/api/todos";
 import type { TodoDayResponse, TodoItem, TodoStatus } from "@/api/types";
+import { ActionSheet } from "@/components/ActionSheet";
 import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/components/Toast";
 import { TodoDateModal, type TodoDateMode } from "@/components/TodoDateModal";
@@ -33,6 +34,7 @@ import {
   ClockIcon,
   CopyIcon,
   GripIcon,
+  MoreIcon,
   MoveIcon,
   PlusIcon,
   RepeatIcon,
@@ -302,7 +304,7 @@ export function TodoPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -343,7 +345,7 @@ export function TodoPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto w-full max-w-2xl">
           {/* 날짜 네비게이션 */}
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -580,11 +582,13 @@ function TodoRow({
   // 원래 날짜가 지금 보고 있는 날과 다르면 옮겨 온 항목이다.
   const movedFrom = item.origin_date !== item.date ? formatDayLabel(item.origin_date) : null;
   const [editingTime, setEditingTime] = useState(false);
+  /** 좁은 화면에서 ⋯ 로 여는 작업 시트(옮기기·복제·삭제). */
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   return (
     <li
       data-todo-id={item.id}
-      className={`card flex items-center gap-2.5 px-3 py-2.5 transition-opacity ${
+      className={`card flex flex-wrap items-center gap-x-1.5 gap-y-2 px-3 py-2.5 transition-opacity sm:gap-x-2.5 ${
         dragging ? "opacity-40" : ""
       }`}
     >
@@ -593,7 +597,7 @@ function TodoRow({
           유지한다. */}
       {allDay ? (
         <span
-          className="shrink-0 cursor-grab touch-none text-muted active:cursor-grabbing"
+          className="shrink-0 cursor-grab touch-none p-1.5 text-muted active:cursor-grabbing"
           title="드래그하여 순서 변경"
           aria-label="순서 변경 핸들"
           onPointerDown={(e) => {
@@ -604,7 +608,7 @@ function TodoRow({
           <GripIcon width={16} height={16} />
         </span>
       ) : (
-        <span className="w-4 shrink-0" aria-hidden />
+        <span className="w-6 shrink-0 sm:w-4" aria-hidden />
       )}
 
       {/* 상태 체크 — 누를 때마다 빈칸 → 완료(v) → 실패(x) → 빈칸 으로 돈다.
@@ -612,7 +616,7 @@ function TodoRow({
           부족하다(카드 위 1.4:1). 컨트롤 경계에 요구되는 3:1 을 넘기려면 --text-secondary 를
           써야 한다 (4테마 최저 3.07:1). */}
       <button
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition-colors"
         style={{
           borderColor: done
             ? "var(--success)"
@@ -640,7 +644,12 @@ function TodoRow({
         </span>
       )}
 
-      <div className="min-w-0 flex-1">
+      {/*
+        basis 를 주는 이유: flex-1 은 기준 폭이 0 이라 줄바꿈을 유발하지 못하고, 자리가
+        모자라면 제목만 조용히 짜부라진다(실측 32px). 기준 폭을 세워 두면 모자랄 때
+        뒤쪽 컨트롤이 아랫줄로 내려가고 제목은 읽을 수 있는 폭을 지킨다.
+      */}
+      <div className="min-w-0 flex-1 basis-32">
         <div
           className={`truncate text-sm ${
             done
@@ -673,7 +682,7 @@ function TodoRow({
       {/* 시각 편집 — 열면 시/분 선택이 그 자리에 뜨고, 고르는 즉시 저장되며 목록이 다시 정렬된다. */}
       {onSetStartTime &&
         (editingTime ? (
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex flex-1 basis-48 items-center gap-1.5 sm:basis-auto">
             <TimeSelect
               value={item.start_time}
               onChange={(next) => onSetStartTime(next)}
@@ -688,7 +697,7 @@ function TodoRow({
           </div>
         ) : (
           <button
-            className="flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-muted transition-colors hover:text-[color:var(--accent)]"
+            className="icon-btn h-8 shrink-0 gap-1 px-1.5 text-muted hover:text-[color:var(--accent)] sm:h-7"
             title={allDay ? "시작 시각 정하기" : `시작 시각 ${timeLabel} — 누르면 변경`}
             aria-label={
               allDay ? "시작 시각 정하기 (종일)" : `시작 시각 ${timeLabel} 변경`
@@ -699,35 +708,77 @@ function TodoRow({
           </button>
         ))}
 
-      {/* 옮기기·복제는 루틴 항목에도 연다 — 둘 다 루틴의 기록을 흐트러뜨리지 않는다. */}
-      <button
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:text-[color:var(--accent)]"
-        title="다른 날짜로 옮기기"
-        aria-label="다른 날짜로 옮기기"
-        onClick={onMove}
-      >
-        <MoveIcon width={15} height={15} />
-      </button>
-
-      <button
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:text-[color:var(--accent)]"
-        title="복제"
-        aria-label="복제"
-        onClick={onDuplicate}
-      >
-        <CopyIcon width={15} height={15} />
-      </button>
-
-      {onDelete && (
+      {/*
+        옮기기·복제·삭제는 루틴 항목에도 연다 — 셋 다 루틴의 기록을 흐트러뜨리지 않는다.
+        넓은 화면은 셋을 펼치고, 좁은 화면에서는 ⋯ 하나로 접는다. 한 줄에 컨트롤 여섯 개를
+        손가락 크기로 늘어놓을 자리가 없어서, 억지로 늘리면 정작 제목이 사라진다.
+      */}
+      <div className="hidden shrink-0 items-center gap-1 sm:flex">
         <button
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:text-[color:var(--danger)]"
-          title="삭제"
-          aria-label="삭제"
-          onClick={onDelete}
+          className="icon-btn h-7 w-7 shrink-0 text-muted hover:text-[color:var(--accent)]"
+          title="다른 날짜로 옮기기"
+          aria-label="다른 날짜로 옮기기"
+          onClick={onMove}
         >
-          <TrashIcon width={15} height={15} />
+          <MoveIcon width={15} height={15} />
         </button>
-      )}
+        <button
+          className="icon-btn h-7 w-7 shrink-0 text-muted hover:text-[color:var(--accent)]"
+          title="복제"
+          aria-label="복제"
+          onClick={onDuplicate}
+        >
+          <CopyIcon width={15} height={15} />
+        </button>
+        {onDelete && (
+          <button
+            className="icon-btn h-7 w-7 shrink-0 text-muted hover:text-[color:var(--danger)]"
+            title="삭제"
+            aria-label="삭제"
+            onClick={onDelete}
+          >
+            <TrashIcon width={15} height={15} />
+          </button>
+        )}
+      </div>
+      <button
+        className="icon-btn shrink-0 p-1.5 text-muted sm:hidden"
+        aria-label={`${item.title} 작업 더 보기`}
+        onClick={() => setSheetOpen(true)}
+      >
+        <MoreIcon width={18} height={18} />
+      </button>
+
+      <ActionSheet
+        open={sheetOpen}
+        title={item.title}
+        actions={[
+          {
+            key: "move",
+            label: "다른 날짜로 옮기기",
+            icon: <MoveIcon width={16} height={16} />,
+            onClick: onMove,
+          },
+          {
+            key: "duplicate",
+            label: "복제",
+            icon: <CopyIcon width={16} height={16} />,
+            onClick: onDuplicate,
+          },
+          ...(onDelete
+            ? [
+                {
+                  key: "delete",
+                  label: "삭제",
+                  icon: <TrashIcon width={16} height={16} />,
+                  onClick: onDelete,
+                  danger: true,
+                },
+              ]
+            : []),
+        ]}
+        onClose={() => setSheetOpen(false)}
+      />
     </li>
   );
 }

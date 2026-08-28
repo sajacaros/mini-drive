@@ -70,10 +70,10 @@ function AvatarSection() {
   };
 
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-wrap items-center gap-4">
       <Avatar avatarUrl={user?.avatar_url ?? null} name={label} size={72} />
       <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             className="btn btn-secondary"

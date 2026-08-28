@@ -33,11 +33,38 @@ export default defineConfig({
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "chromium",
-      testIgnore: /auth\.setup\.ts/,
+      // 모바일 전용 스펙은 아래 mobile 프로젝트가 자기 뷰포트로 따로 돌린다.
+      testIgnore: [/auth\.setup\.ts/, /e2e\/mobile\//],
       dependencies: ["setup"],
       use: {
         ...devices["Desktop Chrome"],
         // setup 이 저장한 인증 상태(localStorage 토큰 포함)를 모든 테스트가 재사용.
+        storageState: "e2e/.auth/admin.json",
+      },
+    },
+    /*
+      휴대폰 뷰포트(390×844, 터치). 데스크톱에서는 멀쩡한데 휴대폰에서만 깨지는 것들 —
+      hover 로만 나타나는 액션, 화면 밖으로 밀리는 표 — 을 잡는다. 데스크톱 크로미움으로는
+      hover 가 늘 있으므로 그 회귀를 영영 볼 수 없다.
+    */
+    {
+      name: "mobile",
+      testMatch: /e2e\/mobile\/.*\.spec\.ts/,
+      dependencies: ["setup"],
+      use: {
+        ...devices["iPhone 13"],
+        /*
+          기기 서술자는 iPhone 13 것을 쓰되(390×844, 터치, 모바일 UA) 엔진은 크로미움으로
+          고정한다. iPhone 13 의 기본 엔진은 webkit 인데, webkit 은 리눅스에서 별도 시스템
+          라이브러리를 요구해(`npx playwright install --with-deps webkit`, sudo 필요) 개발
+          기기마다 되고 안 되고가 갈린다. 여기서 잡으려는 것은 렌더링 엔진 차이가 아니라
+          **폭과 입력 방식**이라 크로미움으로도 충분하다 — hover 없는 환경(pointer: coarse)이
+          그대로 재현된다.
+
+          다만 blob iframe 안의 PDF 처럼 엔진이 실제로 갈리는 것은 여기서 못 잡는다.
+          그래서 PDF 는 "렌더된다"가 아니라 "폴백 동선이 있다"만 검사한다.
+        */
+        browserName: "chromium",
         storageState: "e2e/.auth/admin.json",
       },
     },
