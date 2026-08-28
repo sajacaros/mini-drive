@@ -14,6 +14,12 @@
   - 그 외(zip, office 바이너리, mp4 아닌 video/audio 등) → 미지원. 라우트가 415 로 응답하며
     프론트는 다운로드로 폴백한다.
 
+판정은 저장된 MIME 을 먼저 믿되, 그것이 **일반형**(application/octet-stream 등)일 때는
+파일명 확장자로 되짚는다. 업로드는 브라우저가 준 Content-Type 을 그대로 저장하는데(files.py
+upload_file), 브라우저·OS 에 확장자 매핑이 없으면 .md 든 .csv 든 전부 octet-stream 으로
+올라온다 — 그대로 두면 텍스트 파일이 "미리보기 미지원"으로 떨어진다. 저장된 MIME 을 고치는
+대신 판정만 되짚는 이유는, 이미 올라간 파일까지 재업로드 없이 함께 고쳐지기 때문이다.
+
 접근 검증(파일 소유/그룹 권한, 공유 유효성)은 각 호출자(파일 라우트/공유 라우트)가 담당하고,
 이 모듈은 검증이 끝난 File 로 "무엇을 어떻게 렌더할지"만 계획한다.
 """
@@ -21,6 +27,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Literal
 
 from app.models import File
@@ -49,25 +56,88 @@ _TEXT_LIKE_MIMES = {
 # 인라인 재생을 지원하는 영상 MIME. 브라우저 호환이 사실상 보장되는 mp4 하나만 연다.
 VIDEO_MIMES = {"video/mp4"}
 
+# "형식을 모르겠다"는 뜻의 MIME. 이때만 확장자로 되짚는다 — 브라우저가 형식을 제대로
+# 알려줬다면 그쪽이 파일명보다 믿을 만하다(확장자는 언제든 틀리게 붙일 수 있다).
+_GENERIC_MIMES = {
+    "application/octet-stream",
+    "binary/octet-stream",
+    "application/x-download",
+    "unknown/unknown",
+}
+
 PreviewKind = Literal["image", "pdf", "text", "video", "unsupported"]
 
+# 텍스트 미리보기의 하위 종류 — 프런트가 서식 렌더러를 붙일지 정하는 데 쓴다.
+TextKind = Literal["markdown", "plain"]
 
-def classify(mime_type: str | None) -> PreviewKind:
-    """MIME 으로 미리보기 종류를 판정한다."""
-    if not mime_type:
+# 확장자 → 미리보기 종류. 사내에서 실제로 오가는 것들만 담는다.
+_EXT_KINDS: dict[str, PreviewKind] = {
+    # 문서·설정·로그·소스 — 전부 앞부분을 그대로 읽어 보여준다.
+    **{
+        ext: "text"
+        for ext in (
+            "md", "markdown", "txt", "text", "log", "csv", "tsv", "json", "jsonl", "ndjson",
+            "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "properties", "xml", "sql",
+            "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "sh", "bash", "zsh", "ps1", "bat",
+            "css", "scss", "less", "html", "htm", "rs", "go", "java", "kt", "c", "h", "cpp",
+            "hpp", "cs", "rb", "php", "swift", "r", "lua", "pl", "dockerfile", "gitignore",
+            "srt", "vtt", "diff", "patch",
+        )
+    },
+    "pdf": "pdf",
+    **{ext: "image" for ext in ("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "ico")},
+    # svg 는 텍스트지만 스크립트 위험이 있어 렌더 대신 원문으로 — MIME 경로와 같은 규칙이다.
+    "svg": "text",
+    "mp4": "video",
+}
+
+# 서식대로 그려 주는 텍스트 확장자. 나머지 텍스트는 원문 그대로 보여준다.
+_MARKDOWN_EXTS = {"md", "markdown", "mdown", "mkd"}
+
+
+def _extension(filename: str | None) -> str:
+    """파일명에서 소문자 확장자만 뽑는다(점 없음). 확장자가 없으면 빈 문자열."""
+    if not filename:
+        return ""
+    return PurePosixPath(filename).suffix.lstrip(".").lower()
+
+
+def classify(mime_type: str | None, filename: str | None = None) -> PreviewKind:
+    """MIME 으로 미리보기 종류를 판정하고, 판정이 안 되면 확장자로 되짚는다.
+
+    확장자는 **보조 수단**이다. 쓸 만한 MIME 이 있으면 그쪽을 따르고, MIME 이 없거나
+    "형식 모름"(application/octet-stream 등)일 때만 파일명을 본다.
+    """
+    mime = (mime_type or "").split(";", 1)[0].strip().lower()
+
+    if mime and mime not in _GENERIC_MIMES:
+        if mime == "image/svg+xml":
+            return "text"
+        if mime.startswith("image/"):
+            return "image"
+        if mime == "application/pdf":
+            return "pdf"
+        if mime in VIDEO_MIMES:
+            return "video"
+        if mime.startswith("text/") or mime in _TEXT_LIKE_MIMES:
+            return "text"
+        # 알려진 MIME 인데 지원 목록에 없다 — 확장자로 뒤집지 않는다(zip·office 등).
         return "unsupported"
-    mime = mime_type.split(";", 1)[0].strip().lower()
-    if mime == "image/svg+xml":
-        return "text"
-    if mime.startswith("image/"):
-        return "image"
-    if mime == "application/pdf":
-        return "pdf"
-    if mime in VIDEO_MIMES:
-        return "video"
-    if mime.startswith("text/") or mime in _TEXT_LIKE_MIMES:
-        return "text"
-    return "unsupported"
+
+    return _EXT_KINDS.get(_extension(filename), "unsupported")
+
+
+def text_kind(mime_type: str | None, filename: str | None = None) -> TextKind:
+    """텍스트 미리보기를 서식대로 그릴지(markdown) 원문으로 둘지(plain).
+
+    마크다운 판정은 확장자로만 한다. `text/markdown` 을 실어 보내는 브라우저는 드물고,
+    반대로 확장자가 .md 인데 text/plain 으로 오는 경우가 대부분이라 MIME 은 신호가 못 된다.
+    """
+    if _extension(filename) in _MARKDOWN_EXTS:
+        return "markdown"
+    if (mime_type or "").split(";", 1)[0].strip().lower() == "text/markdown":
+        return "markdown"
+    return "plain"
 
 
 @dataclass(frozen=True)
@@ -86,11 +156,13 @@ class PreviewPlan:
     internal_redirect: str | None = None
     text_content: bytes | None = None
     truncated: bool = False
+    #: text 일 때만 의미가 있다. 프런트가 마크다운 렌더러를 붙일지 판단한다.
+    text_kind: TextKind = "plain"
 
 
 async def build_preview_plan(storage: StorageService, file: File) -> PreviewPlan:
     """접근 검증이 끝난 File 로 미리보기 계획을 만든다. 폴더/삭제 여부는 호출자가 먼저 배제한다."""
-    kind = classify(file.mime_type)
+    kind = classify(file.mime_type, file.name)
     original_mime = file.mime_type or "application/octet-stream"
 
     if kind == "unsupported":
@@ -114,4 +186,5 @@ async def build_preview_plan(storage: StorageService, file: File) -> PreviewPlan
         mime="text/plain; charset=utf-8",
         text_content=content,
         truncated=truncated,
+        text_kind=text_kind(file.mime_type, file.name),
     )

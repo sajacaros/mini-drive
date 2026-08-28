@@ -1071,7 +1071,7 @@ async def prepare_preview_stream(
     file = await ensure_file_access(session, user, await get_file(session, file_id))
     if file.is_folder or file.is_deleted:
         raise FileServiceError(404, "파일을 찾을 수 없습니다.")
-    if previews_service.classify(file.mime_type) != "video":
+    if previews_service.classify(file.mime_type, file.name) != "video":
         raise FileServiceError(404, "파일을 찾을 수 없습니다.")
 
     presigned = await storage.presign_get_async(file.file_key)

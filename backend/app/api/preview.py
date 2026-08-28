@@ -57,5 +57,8 @@ async def render_preview(
         return gateway_inline_response(plan.internal_redirect, filename, plan.mime)
     # text
     return preview_text_response(
-        plan.text_content or b"", filename, truncated=plan.truncated
+        plan.text_content or b"",
+        filename,
+        truncated=plan.truncated,
+        text_kind=plan.text_kind,
     )
