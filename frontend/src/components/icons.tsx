@@ -356,6 +356,15 @@ export const FlameIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 더 보기(⋯) — 좁은 화면에서 행 액션 묶음을 하단 시트로 여는 입구. */
+export const MoreIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="5" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="12" cy="19" r="1" />
+  </svg>
+);
+
 export const GripIcon = (p: IconProps) => (
   <svg {...base(p)} fill="currentColor" stroke="none">
     <circle cx="9" cy="6" r="1.4" />

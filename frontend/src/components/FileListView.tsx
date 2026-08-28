@@ -12,12 +12,14 @@
 import { useState } from "react";
 
 import type { FileNode } from "@/api/types";
+import { FileCardList } from "@/components/FileCardList";
 import { Badge } from "@/components/ui";
 import { FavoriteStar } from "@/components/FavoriteStar";
 import { Thumbnail } from "@/components/Thumbnail";
 import { DownloadIcon, FileIcon, FolderIcon } from "@/components/icons";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionLabel, permissionTone } from "@/lib/labels";
+import { useIsNarrow } from "@/lib/media";
 import {
   CARD_ACTIVE_CLASS,
   ROW_ACTION_PROPS,
@@ -58,8 +60,30 @@ function openOf(f: FileNode, p: ViewProps) {
 export function FileListView(props: FileListViewProps) {
   const [activeId, setActiveId] = useState<number | null>(null);
   const coarse = useCoarsePointer();
+  const narrow = useIsNarrow();
   const p: ViewProps = { ...props, activeId, onFocus: setActiveId, coarse };
-  return (props.view ?? "list") === "grid" ? <Grid {...p} /> : <Table {...p} />;
+  if ((props.view ?? "list") === "grid") return <Grid {...p} />;
+  // 좁은 화면에서는 여섯 열짜리 표 대신 카드 목록으로 — 드라이브 목록과 같은 규칙이다.
+  return narrow ? (
+    <FileCardList
+      items={props.items}
+      actionsFor={(f) => [
+        {
+          key: "download",
+          label: f.is_folder ? "ZIP 으로 다운로드" : "다운로드",
+          icon: <DownloadIcon width={16} height={16} />,
+          onClick: () => props.onDownload(f),
+        },
+      ]}
+      onOpenFolder={props.onOpenFolder}
+      onPreview={props.onPreview}
+      onToggleFavorite={props.onToggleFavorite}
+      activeId={activeId}
+      onFocus={setActiveId}
+    />
+  ) : (
+    <Table {...p} />
+  );
 }
 
 /** 권한 셀 — owner 는 "소유자"로 구분해 강조하고, 그 외는 라벨/톤 배지로 표시. */
@@ -87,7 +111,7 @@ function DownloadButton({ file, onDownload }: { file: FileNode; onDownload: (f: 
         e.stopPropagation();
         onDownload(file);
       }}
-      className="rounded-md p-1.5 text-muted transition-colors hover:bg-[color:var(--bg-secondary)] hover:text-[color:var(--text-primary)]"
+      className="icon-btn p-1.5 text-muted hover:bg-[color:var(--bg-secondary)] hover:text-[color:var(--text-primary)]"
     >
       <DownloadIcon width={16} height={16} />
     </button>
@@ -96,7 +120,7 @@ function DownloadButton({ file, onDownload }: { file: FileNode; onDownload: (f: 
 
 function Table(p: ViewProps) {
   return (
-    <div className="card overflow-x-auto">
+    <div className="card table-scroll">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
@@ -170,7 +194,7 @@ function Table(p: ViewProps) {
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
                 <div
-                  className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100"
+                  className="row-actions flex justify-end"
                   {...ROW_ACTION_PROPS}
                 >
                   <DownloadButton file={f} onDownload={p.onDownload} />
@@ -232,11 +256,11 @@ function Grid(p: ViewProps) {
           <div className="flex items-center gap-1 border-t border-token px-2.5 py-2">
             <button className="min-w-0 flex-1 text-left">
               <p className={`truncate text-xs ${f.is_folder ? "font-medium" : ""}`}>{f.name}</p>
-              <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
-              {f.location && <p className="truncate text-[10px] text-muted">{f.location}</p>}
+              <p className="text-xs text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
+              {f.location && <p className="truncate text-xs text-muted">{f.location}</p>}
             </button>
             <span
-              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+              className="row-actions shrink-0"
               {...ROW_ACTION_PROPS}
             >
               <DownloadButton file={f} onDownload={p.onDownload} />
