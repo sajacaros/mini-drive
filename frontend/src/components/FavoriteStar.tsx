@@ -32,7 +32,7 @@ export function FavoriteStar({
       className={`rounded-md p-1.5 transition-colors ${
         active
           ? "text-accent"
-          : "text-muted opacity-0 hover:text-[color:var(--text-primary)] group-hover:opacity-100"
+          : "row-actions text-muted hover:text-[color:var(--text-primary)]"
       } ${className}`}
     >
       <StarIcon width={size} height={size} filled={active} />

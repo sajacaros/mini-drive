@@ -11,14 +11,17 @@
  *    구조로, 섹션별 선택 역시 localStorage 에 남는다. 기본은 모두 펼침. 화면이 하나뿐인
  *    "게시판"은 섹션 없이 항목 하나로 놓이고, 접근 가능한 게시판이 없으면 아예 사라진다.
  *
- * 높이 규약: 이 레이아웃이 h-screen 을 소유하고 각 페이지는 h-full 로 그 안을 채운다. 페이지가
- * 직접 h-screen 을 쓰면 모바일 상단 바 높이만큼 화면 밖으로 넘쳐 body 가 세로로 흔들린다.
+ * 높이 규약: 이 레이아웃이 화면 높이(100dvh)를 소유하고 각 페이지는 h-full 로 그 안을 채운다.
+ * 페이지가 직접 화면 높이를 쓰면 모바일 상단 바 높이만큼 화면 밖으로 넘쳐 body 가 세로로
+ * 흔들린다. 100vh 가 아니라 dvh 인 것도 같은 이유다 — vh 는 주소창이 접히기 전 높이라
+ * 휴대폰에서 늘 화면보다 크다.
  */
 
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatBytes, formatPercent } from "@/lib/format";
+import { useIsNarrow } from "@/lib/media";
 import { todayStr } from "@/lib/localDate";
 import { useAuthStore } from "@/store/auth";
 import { useBoardAccessStore } from "@/store/boardAccess";
@@ -80,16 +83,7 @@ export function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   // 닫힌 서랍은 화면 밖에 있을 뿐 DOM 에는 남아 있어, 그대로 두면 Tab 으로 보이지 않는 링크에
   // 들어가 버린다. inert 로 잠그려면 지금이 모바일 폭인지 JS 로도 알아야 한다(md=768px).
-  const [isMobile, setIsMobile] = useState(
-    () => window.matchMedia("(max-width: 767.98px)").matches,
-  );
-
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767.98px)");
-    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
+  const isMobile = useIsNarrow();
 
   const toggleCollapsed = () => {
     setCollapsed((v) => {
@@ -144,7 +138,7 @@ export function Layout() {
   const ratio = max > 0 ? used / max : 0;
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-[100dvh] overflow-hidden">
       {/* 모바일 서랍 뒤 배경 — 바깥을 누르면 닫힌다. */}
       {drawerOpen && (
         <div

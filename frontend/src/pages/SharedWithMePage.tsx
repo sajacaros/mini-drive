@@ -69,14 +69,14 @@ export function SharedWithMePage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <h1 className="text-lg font-semibold">공유됨</h1>
         <p className="mt-0.5 text-sm text-muted">
           내가 속한 그룹을 통해 공유받은 파일과 폴더입니다.
         </p>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -88,7 +88,7 @@ export function SharedWithMePage() {
             hint="그룹에 초대되고 파일 권한을 받으면 여기에 표시됩니다."
           />
         ) : (
-          <div className="card overflow-x-auto">
+          <div className="card table-scroll">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-token text-left text-xs text-muted">
@@ -145,7 +145,7 @@ export function SharedWithMePage() {
                       <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
                       <td className="px-4 py-2.5">
                         <div
-                          className="flex justify-end opacity-0 transition-opacity group-hover:opacity-100"
+                          className="row-actions flex justify-end"
                           {...ROW_ACTION_PROPS}
                         >
                           {!f.is_folder && permissionCovers(item.permission, "read") && (

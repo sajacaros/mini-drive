@@ -32,15 +32,23 @@ test.describe("즐겨찾기", () => {
       await expect(row).toBeVisible({ timeout: 20_000 });
       const starButton = row.getByRole("button", { name: "즐겨찾기", exact: true });
 
-      // 2. hover 하지 않은 상태에서 별 아이콘 버튼(aria-label="즐겨찾기")의 opacity를 확인
-      // expect: hover 전에는 opacity가 0(시각적으로 숨김) 이다
-      await expect(starButton).toHaveClass(/opacity-0/);
+      /*
+        2~3. 숨김/노출은 **계산된 opacity** 로 확인한다. 예전에는 opacity-0 /
+        group-hover:opacity-100 이라는 클래스 이름을 직접 봤는데, 그러면 구현을 바꾸는 순간
+        동작이 멀쩡해도 깨진다. 실제로 이 숨김은 이제 `.row-actions` 가 미디어 쿼리
+        (hover: hover)로 처리한다 — 손가락 기기에서는 아예 숨기지 않는다.
+        이 프로젝트는 데스크톱 크로미움이라 hover 가 있으므로 숨김이 적용된다.
+      */
+      const starOpacity = () =>
+        starButton.evaluate((el) => getComputedStyle(el).opacity);
+
+      // expect: hover 전에는 보이지 않는다
+      await expect.poll(starOpacity).toBe("0");
 
       // 3. 해당 행에 마우스를 hover 한다
       await row.hover();
-      // expect: 별 아이콘이 시각적으로 노출된다(group-hover 클래스 적용, opacity-0 은 유지되나
-      // group-hover:opacity-100 로 실제 노출됨)
-      await expect(starButton).toHaveClass(/group-hover:opacity-100/);
+      // expect: 별 아이콘이 시각적으로 노출된다
+      await expect.poll(starOpacity).toBe("1");
 
       // 4. 별 아이콘(aria-label="즐겨찾기") 클릭
       await starButton.click();
@@ -51,10 +59,12 @@ test.describe("즐겨찾기", () => {
       await expect(unfavoriteButton).toHaveAttribute("aria-pressed", "true");
 
       // expect: hover를 해제해도(마우스를 다른 곳으로 이동) 별 아이콘이 계속 보인다
-      // (opacity-0 클래스가 제거됨)
+      // — 즐겨찾기가 켜진 별은 hover 숨김 대상에서 빠진다.
       await page.getByRole("link", { name: "내 드라이브" }).hover();
       await expect(unfavoriteButton).toBeVisible();
-      await expect(unfavoriteButton).not.toHaveClass(/opacity-0/);
+      await expect
+        .poll(() => unfavoriteButton.evaluate((el) => getComputedStyle(el).opacity))
+        .toBe("1");
 
       // 5. 사이드바 '즐겨찾기'(/favorites)로 이동
       await page.getByRole("link", { name: "즐겨찾기" }).click();
