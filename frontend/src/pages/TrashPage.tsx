@@ -166,14 +166,14 @@ export function TrashPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <h1 className="text-lg font-semibold">휴지통</h1>
           <p className="mt-0.5 text-sm text-muted">삭제한 항목을 복구하거나 영구 삭제할 수 있습니다.</p>
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         {loading ? (
           <LoadingState />
         ) : error ? (
@@ -181,7 +181,7 @@ export function TrashPage() {
         ) : items.length === 0 ? (
           <EmptyState icon={<TrashIcon width={40} height={40} />} title="휴지통이 비어 있습니다" />
         ) : (
-          <div className="card overflow-x-auto">
+          <div className="card table-scroll">
             {retentionDays !== null && (
               <p className="border-b border-token px-4 py-2.5 text-xs text-muted">
                 휴지통 항목은 삭제 후 {retentionDays}일이 지나면 자동으로 영구 삭제됩니다.

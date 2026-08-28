@@ -49,14 +49,16 @@ export function ProfileMenu() {
   return (
     <div className="relative" ref={ref}>
       <button
-        className="flex max-w-[200px] items-center gap-2 rounded-full border border-token py-1 pl-1 pr-2.5 transition-colors hover:bg-[color:var(--bg-muted)]"
+        // 좁은 화면에서는 이름을 접고 아바타만 남긴다. 페이지 헤더 첫 줄을 브레드크럼·툴바와
+        // 나눠 쓰는 자리라, 여기서 최대 200px 를 잡으면 정작 그 줄의 주인공이 밀린다.
+        className="flex max-w-[200px] items-center gap-2 rounded-full border border-token py-1 pl-1 pr-1 transition-colors hover:bg-[color:var(--bg-muted)] sm:pr-2.5"
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
         title="내 계정"
       >
         <Avatar avatarUrl={user.avatar_url} name={label} size={28} />
-        <span className="truncate text-sm font-medium">{label}</span>
+        <span className="hidden truncate text-sm font-medium sm:inline">{label}</span>
       </button>
 
       {open && (

@@ -124,7 +124,9 @@
 
 body {
   margin: 0;
+  /* 100vh 는 모바일에서 주소창 높이를 포함해 화면보다 커진다 — dvh 를 지원하면 그쪽을 쓴다. */
   min-height: 100vh;
+  min-height: 100dvh;
   font-family: var(--font-family);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -201,6 +203,15 @@ body {
     filter: brightness(0.93);
   }
 
+  /*
+   * 아이콘만 있는 버튼(행 액션·업로드 제어·모달 닫기 등). 마우스에서는 지금처럼 촘촘하지만
+   * 손가락으로는 못 누를 크기(22~28px)라, 터치 기기에서만 44px 로 넓힌다. 넓히는 것은
+   * "누를 수 있는 상자"지 아이콘이 아니라서 화면이 뚱뚱해지지 않는다.
+   */
+  .icon-btn {
+    @apply inline-flex items-center justify-center rounded-md transition-colors;
+  }
+
   /* 입력 */
   .input {
     @apply w-full rounded-lg px-3 py-2 text-sm outline-none transition;
@@ -246,6 +257,14 @@ body {
 .border-token {
   border-color: var(--border-color);
 }
+/*
+ * divide-y 는 자식들의 border-top-width 만 세우고 색은 border-color 를 따른다. Tailwind 의
+ * 기본 border-color 는 currentColor 라, 토큰 색을 지정하지 않으면 구분선이 **글씨색**으로
+ * 그려진다 — 목록 사이에 검은 줄이 그어져 있던 게 이것이다. border-token 과 짝을 맞춰 둔다.
+ */
+.divide-token > * + * {
+  border-color: var(--border-color);
+}
 .bg-muted-token {
   background: var(--bg-muted);
 }
@@ -257,4 +276,203 @@ body {
 .alert-success-soft {
   background: color-mix(in srgb, var(--success) 18%, transparent);
   color: var(--success);
+}
+
+/* ── 터치 / 좁은 화면 대응 ───────────────────────────── */
+/*
+ * 행 액션(이름 변경·공유·삭제 …)은 마우스 환경에서만 hover 로 나타난다.
+ *
+ * 전에는 `opacity-0 group-hover:opacity-100` 을 그대로 썼는데, hover 가 없는 기기에서는
+ * group-hover 가 영영 켜지지 않아 **액션이 통째로 도달 불가**였다(휴대폰에서 계산된 opacity 가
+ * 0 으로 고정). 버튼이 없는 것과 같아서, 모바일에서는 이름 변경도 삭제도 할 수 없었다.
+ * 그래서 "숨김"은 hover 를 실제로 쓸 수 있는 환경에만 건다.
+ *
+ * :focus-within 도 함께 둔다 — 키보드로 Tab 해 들어가도 보이지 않던 문제가 같은 뿌리다.
+ */
+.row-actions {
+  opacity: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .row-actions {
+    opacity: 0;
+    transition: opacity var(--transition-base) ease;
+  }
+  .group:hover .row-actions,
+  .row-actions:focus-within {
+    opacity: 1;
+  }
+}
+
+/*
+ * 손가락 최소 타깃. 마우스에서는 지금 크기를 유지하고 터치 기기에서만 넓힌다 —
+ * 데스크톱 밀도를 희생하지 않으면서 휴대폰에서 오조작을 없앤다.
+ */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+  }
+  .icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/*
+ * 가로로 늘어선 탭/칩 줄. 좁은 화면에서 "전체 / 활성 / 비활성" 이 글자 단위로 접혀
+ * 세로로 흩어지던 것을 막는다 — 접지 말고 옆으로 밀게 한다.
+ */
+.tab-scroller {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab-scroller::-webkit-scrollbar {
+  display: none;
+}
+.tab-scroller > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+/*
+ * 넘치는 표를 감싸는 스크롤 상자. 오른쪽에 옅은 그라데이션을 깔아 "더 있다"를 알린다 —
+ * 모바일에서 열이 잘려 보일 때 스크롤 가능하다는 유일한 단서다.
+ */
+.table-scroll {
+  position: relative;
+  overflow-x: auto;
+}
+.table-scroll::after {
+  content: "";
+  position: sticky;
+  top: 0;
+  right: 0;
+  float: right;
+  width: 1.5rem;
+  height: 100%;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--bg-secondary));
+}
+
+/*
+ * 문서용 마크다운 서식 (components/MarkdownDoc.tsx).
+ *
+ * Tailwind 의 preflight 가 제목·리스트·인용의 기본 서식을 지워 두기 때문에, 마크다운을
+ * 렌더하는 자리에서는 그것을 다시 세워야 한다. @tailwindcss/typography 를 붙이지 않고
+ * 손으로 쓰는 이유는 (a) 의존성을 하나 더 늘리지 않으려는 것과 (b) 이 앱은 테마가 넷이라
+ * 색을 전부 토큰으로 잡아야 하기 때문이다 — 플러그인 기본 팔레트는 게임보이 테마에서 깨진다.
+ */
+.markdown-doc > *:first-child {
+  margin-top: 0;
+}
+.markdown-doc > *:last-child {
+  margin-bottom: 0;
+}
+.markdown-doc h1,
+.markdown-doc h2,
+.markdown-doc h3,
+.markdown-doc h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.5em 0 0.6em;
+}
+.markdown-doc h1 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border-color);
+}
+.markdown-doc h2 {
+  font-size: 1.25em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border-color);
+}
+.markdown-doc h3 {
+  font-size: 1.1em;
+}
+.markdown-doc p {
+  margin: 0.75em 0;
+}
+.markdown-doc a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-doc ul,
+.markdown-doc ol {
+  margin: 0.75em 0;
+  padding-left: 1.5em;
+}
+.markdown-doc ul {
+  list-style: disc;
+}
+.markdown-doc ol {
+  list-style: decimal;
+}
+.markdown-doc li {
+  margin: 0.25em 0;
+}
+.markdown-doc li > ul,
+.markdown-doc li > ol {
+  margin: 0.25em 0;
+}
+/* GFM 체크박스 — 목록 마커 대신 네모칸이 보이도록 */
+.markdown-doc li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.25em;
+}
+.markdown-doc li > input[type="checkbox"] {
+  margin-right: 0.5em;
+}
+.markdown-doc blockquote {
+  margin: 0.75em 0;
+  padding: 0.1em 1em;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+.markdown-doc code {
+  background: var(--bg-muted);
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+  font-family: ui-monospace, "D2Coding", Menlo, Consolas, monospace;
+  font-size: 0.875em;
+}
+.markdown-doc pre {
+  margin: 0.75em 0;
+  padding: 0.85em 1em;
+  background: var(--bg-muted);
+  border-radius: var(--radius);
+  /* 긴 줄은 접지 말고 이 상자 안에서 밀리게 한다 — 코드는 줄바꿈이 곧 오독이다. */
+  overflow-x: auto;
+}
+.markdown-doc pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+  white-space: pre;
+}
+.markdown-doc table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 0.9em;
+}
+.markdown-doc th,
+.markdown-doc td {
+  border: 1px solid var(--border-color);
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.markdown-doc th {
+  background: var(--bg-muted);
+  font-weight: 600;
+}
+.markdown-doc hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--border-color);
+}
+.markdown-doc img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
 }

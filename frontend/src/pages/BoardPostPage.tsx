@@ -178,7 +178,7 @@ export function BoardPostPage() {
   }
   if (error || !post) {
     return (
-      <div className="p-6">
+      <div className="p-4 md:p-6">
         <ErrorState
           message={error ?? "글을 찾을 수 없습니다."}
           onRetry={() => void load()}
@@ -193,7 +193,7 @@ export function BoardPostPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <Link
             to={`/boards/${bid}`}
@@ -228,7 +228,7 @@ export function BoardPostPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
           {/* 본문 */}
           {editing ? (
@@ -338,7 +338,7 @@ export function BoardPostPage() {
                         {formatBytes(a.size)}
                       </span>
                       <button
-                        className="btn btn-ghost p-1.5"
+                        className="icon-btn btn-ghost p-1.5"
                         title="다운로드"
                         onClick={() => void downloadAttachment(bid, pid, a)}
                       >
@@ -346,7 +346,7 @@ export function BoardPostPage() {
                       </button>
                       {post.can_delete && (
                         <button
-                          className="btn btn-ghost p-1.5 text-[color:var(--danger)]"
+                          className="icon-btn btn-ghost p-1.5 text-[color:var(--danger)]"
                           title="첨부 삭제"
                           onClick={() => void removeAttachment(a.id, a.filename)}
                         >
@@ -378,7 +378,7 @@ export function BoardPostPage() {
                       <span>{formatDateTime(c.created_at)}</span>
                       {c.can_delete && (
                         <button
-                          className="btn btn-ghost ml-auto p-1"
+                          className="icon-btn btn-ghost ml-auto p-1"
                           title="댓글 삭제"
                           onClick={() => void removeComment(c.id)}
                         >

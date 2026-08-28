@@ -91,7 +91,7 @@ export function BoardPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -123,7 +123,7 @@ export function BoardPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto w-full max-w-3xl">
           {composing && (
             <div className="card mb-4 flex flex-col gap-3 p-4">

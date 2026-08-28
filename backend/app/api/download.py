@@ -56,10 +56,17 @@ def gateway_inline_response(internal_redirect: str, filename: str, mime: str) ->
     )
 
 
-def preview_text_response(content: bytes, filename: str, *, truncated: bool) -> Response:
+def preview_text_response(
+    content: bytes, filename: str, *, truncated: bool, text_kind: str = "plain"
+) -> Response:
     """텍스트 미리보기 인라인 본문 응답 (PRD 3.2).
 
     앞부분만 잘린 경우 X-Preview-Truncated: true 헤더로 프론트에 알린다. 본문은 UTF-8 text/plain.
+
+    본문 Content-Type 은 언제나 text/plain 이라 프런트가 마크다운을 구분할 수 없어,
+    X-Preview-Text-Kind 로 하위 종류(markdown|plain)를 따로 알린다. Content-Type 을 직접
+    text/markdown 으로 바꾸지 않는 이유는, 그러면 브라우저가 본문을 내려받기로 처리하는
+    경우가 생기기 때문이다 — 우리는 어디까지나 인라인 본문으로 넘기고 렌더는 앱이 한다.
     """
     return Response(
         content=content,
@@ -68,5 +75,6 @@ def preview_text_response(content: bytes, filename: str, *, truncated: bool) -> 
         headers={
             "Content-Disposition": content_disposition(filename, inline=True),
             "X-Preview-Truncated": "true" if truncated else "false",
+            "X-Preview-Text-Kind": text_kind,
         },
     )

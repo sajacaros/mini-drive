@@ -8,6 +8,8 @@
  * 응답 규약:
  *   - 이미지/PDF: 게이트웨이 인라인 스트리밍(바이트) → blob → objectURL 로 <img>/<iframe> 렌더.
  *   - 텍스트:     text/plain 본문. X-Preview-Truncated: true 면 앞부분만 표시된 것.
+ *                 본문 Content-Type 은 언제나 text/plain 이라 마크다운을 구분할 수 없어,
+ *                 백엔드가 X-Preview-Text-Kind(markdown|plain)로 하위 종류를 따로 알린다.
  *   - 영상(mp4):  바이트 대신 JSON 으로 재생 주소를 준다. <video src> 가 그 주소로 Range 요청을
  *                 보내 필요한 구간만 받아 오므로, 파일이 커도 즉시 재생·구간 이동이 된다.
  *   - 미지원:     415 → "미리보기 미지원, 다운로드" 폴백.
@@ -19,10 +21,13 @@ import { errorStatus } from "@/api/client";
 import apiClient from "@/api/client";
 import { withBase } from "@/lib/basePath";
 
+/** 텍스트 미리보기 하위 종류 — 서식대로 그릴지(markdown) 원문으로 둘지(plain). */
+export type TextKind = "markdown" | "plain";
+
 export type PreviewResult =
   | { kind: "image"; url: string }
   | { kind: "pdf"; url: string }
-  | { kind: "text"; text: string; truncated: boolean }
+  | { kind: "text"; text: string; truncated: boolean; textKind: TextKind }
   | { kind: "video"; url: string; mime: string }
   | { kind: "unsupported" };
 
@@ -50,10 +55,11 @@ async function toResult(
   contentType: string,
   blob: Blob,
   truncated: boolean,
+  textKind: TextKind,
 ): Promise<PreviewResult> {
   const ct = contentType.toLowerCase();
   if (ct.startsWith("text/")) {
-    return { kind: "text", text: await blob.text(), truncated };
+    return { kind: "text", text: await blob.text(), truncated, textKind };
   }
   if (ct.includes("application/json")) {
     // 영상: 바이트가 아니라 재생 주소. 서브패스 배포에서도 게이트웨이에 닿도록 베이스를 붙인다.
@@ -67,6 +73,11 @@ async function toResult(
   return { kind: "image", url: URL.createObjectURL(blob) };
 }
 
+/** 헤더 값을 TextKind 로 좁힌다. 모르는 값이면 원문 취급 — 서식을 잘못 입히는 쪽이 더 나쁘다. */
+function toTextKind(raw: string | null | undefined): TextKind {
+  return raw === "markdown" ? "markdown" : "plain";
+}
+
 /** 인증 사용자의 파일 미리보기. 415 는 unsupported 로 흡수, 그 외 오류는 던진다. */
 export async function fetchFilePreview(fileId: number): Promise<PreviewResult> {
   try {
@@ -75,7 +86,8 @@ export async function fetchFilePreview(fileId: number): Promise<PreviewResult> {
     });
     const contentType = String(res.headers["content-type"] ?? "");
     const truncated = String(res.headers["x-preview-truncated"] ?? "") === "true";
-    return await toResult(contentType, res.data, truncated);
+    const textKind = toTextKind(String(res.headers["x-preview-text-kind"] ?? ""));
+    return await toResult(contentType, res.data, truncated, textKind);
   } catch (err) {
     if (errorStatus(err) === 415) return { kind: "unsupported" };
     throw err;
@@ -112,7 +124,8 @@ async function fetchSharePreviewByPath(path: string, password?: string): Promise
 
   const contentType = res.headers.get("content-type") ?? "";
   const truncated = res.headers.get("x-preview-truncated") === "true";
-  return await toResult(contentType, await res.blob(), truncated);
+  const textKind = toTextKind(res.headers.get("x-preview-text-kind"));
+  return await toResult(contentType, await res.blob(), truncated, textKind);
 }
 
 /**

@@ -1,12 +1,18 @@
 /**
- * 파일 미리보기 모달 (PRD 3.2). 이미지/PDF/텍스트/영상(mp4)을 인라인으로 보여주고, 미지원
- * 형식(415)은 "미리보기 미지원 → 다운로드" 로 폴백한다. 인증 파일과 공개 공유 양쪽에서
+ * 파일 미리보기 모달 (PRD 3.2). 이미지/PDF/텍스트/마크다운/영상(mp4)을 인라인으로 보여주고,
+ * 미지원 형식(415)은 "미리보기 미지원 → 다운로드" 로 폴백한다. 인증 파일과 공개 공유 양쪽에서
  * 재사용한다: 실제 로딩은 `load` 콜백에 위임하고(경로별로 다름), 이 컴포넌트는 표시와
  * objectURL 수명만 맡는다.
+ *
+ * 좁은 화면에서는 창이 아니라 **전체 화면**으로 연다. 390px 짜리 화면에서 바깥 여백과
+ * 카드 테두리까지 물리면 정작 문서에 남는 폭이 300px 밑으로 떨어진다 — 읽으라고 여는
+ * 화면에서 읽을 자리를 여백에 내주는 셈이었다.
  */
 
 import { useEffect, useRef, useState } from "react";
 
+import { MarkdownDoc } from "@/components/MarkdownDoc";
+import { useIsNarrow } from "@/lib/media";
 import { type PreviewResult, releasePreview } from "@/lib/preview";
 import { DownloadIcon, XIcon } from "./icons";
 import { LoadingState } from "./ui";
@@ -25,6 +31,7 @@ export function PreviewModal({ open, title, onClose, load, onDownload }: Preview
   const [result, setResult] = useState<PreviewResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const narrow = useIsNarrow();
 
   // load 콜백은 부모 렌더마다 새 참조가 될 수 있으므로 ref 로 잡아 effect 재실행을 막는다.
   const loadRef = useRef(load);
@@ -72,35 +79,40 @@ export function PreviewModal({ open, title, onClose, load, onDownload }: Preview
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4"
+      className={`fixed inset-0 z-40 flex items-center justify-center bg-black/50 ${
+        narrow ? "" : "p-4"
+      }`}
       onMouseDown={onClose}
     >
       <div
-        className="card flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden p-0"
+        className={`card flex w-full flex-col overflow-hidden p-0 ${
+          narrow ? "h-[100dvh] max-w-none rounded-none border-0" : "max-h-[88vh] max-w-4xl"
+        }`}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
         {/* 헤더 */}
-        <div className="flex items-center justify-between gap-3 border-b border-token px-5 py-3">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-token px-4 py-2.5 md:px-5 md:py-3">
           <h2 className="min-w-0 truncate text-base font-semibold" title={title}>
             {title}
           </h2>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 md:gap-2">
             {onDownload && (
-              <button className="btn btn-secondary" onClick={onDownload}>
+              <button className="btn btn-secondary px-2.5 md:px-3.5" onClick={onDownload}>
                 <DownloadIcon width={16} height={16} />
-                다운로드
+                {/* 좁은 화면에서는 라벨을 접는다 — 제목이 쓸 폭을 버튼이 가져가지 않게. */}
+                <span className="hidden sm:inline">다운로드</span>
               </button>
             )}
-            <button className="btn btn-ghost px-2 py-1.5" onClick={onClose} aria-label="닫기">
+            <button className="icon-btn btn-ghost p-2" onClick={onClose} aria-label="닫기">
               <XIcon width={18} height={18} />
             </button>
           </div>
         </div>
 
         {/* 본문 */}
-        <div className="min-h-[240px] flex-1 overflow-auto bg-muted-token">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted-token">
           {loading ? (
             <LoadingState label="미리보기 불러오는 중..." />
           ) : error ? (
@@ -125,32 +137,17 @@ function PreviewBody({
   result: PreviewResult;
   onDownload?: () => void;
 }) {
-  if (result.kind === "image") {
-    return (
-      <div className="flex h-full items-center justify-center p-4">
-        <img src={result.url} alt="" className="max-h-[74vh] max-w-full object-contain" />
-      </div>
-    );
-  }
-  if (result.kind === "pdf") {
-    return <iframe src={result.url} title="PDF 미리보기" className="h-[74vh] w-full" />;
-  }
-  if (result.kind === "video") {
-    return <VideoPreview result={result} onDownload={onDownload} />;
-  }
+  if (result.kind === "image") return <ImagePreview url={result.url} />;
+  if (result.kind === "pdf") return <PdfPreview url={result.url} />;
+  if (result.kind === "video") return <VideoPreview result={result} onDownload={onDownload} />;
   if (result.kind === "text") {
     return (
-      <div className="flex h-full flex-col">
-        {result.truncated && (
-          <p className="border-b border-token bg-[color:var(--bg-secondary)] px-4 py-2 text-xs text-muted">
-            파일이 커서 앞부분만 표시됩니다.
-            {onDownload ? " 전체 내용은 다운로드해 확인하세요." : ""}
-          </p>
-        )}
-        <pre className="flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-xs leading-relaxed">
-          {result.text}
-        </pre>
-      </div>
+      <TextPreview
+        text={result.text}
+        truncated={result.truncated}
+        markdown={result.textKind === "markdown"}
+        onDownload={onDownload}
+      />
     );
   }
   // unsupported — 다운로드가 없는 경로(읽기 전용 공유)에서는 다운로드를 권하지 않는다.
@@ -164,6 +161,106 @@ function PreviewBody({
       }
       onDownload={onDownload}
     />
+  );
+}
+
+/**
+ * 텍스트/마크다운. 마크다운은 기본이 **서식**이고, 원문 토글로 되돌릴 수 있다 —
+ * 문서를 읽으러 온 사람에게는 서식이 맞지만, 표가 왜 안 그려지는지 보려면 원문이 필요하다.
+ */
+function TextPreview({
+  text,
+  truncated,
+  markdown,
+  onDownload,
+}: {
+  text: string;
+  truncated: boolean;
+  markdown: boolean;
+  onDownload?: () => void;
+}) {
+  const [raw, setRaw] = useState(false);
+  const rendered = markdown && !raw;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {(truncated || markdown) && (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-token bg-[color:var(--bg-secondary)] px-4 py-2">
+          <p className="text-xs text-muted">
+            {truncated
+              ? `파일이 커서 앞부분만 표시됩니다.${
+                  onDownload ? " 전체 내용은 다운로드해 확인하세요." : ""
+                }`
+              : "마크다운 문서"}
+          </p>
+          {markdown && (
+            <button
+              className="btn btn-secondary px-2.5 py-1 text-xs"
+              onClick={() => setRaw((v) => !v)}
+              aria-pressed={raw}
+            >
+              {raw ? "서식 보기" : "원문 보기"}
+            </button>
+          )}
+        </div>
+      )}
+      {rendered ? (
+        <div className="min-h-0 flex-1 overflow-auto bg-[color:var(--bg-secondary)] px-4 py-4 md:px-6">
+          <MarkdownDoc text={text} />
+        </div>
+      ) : (
+        <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[13px] leading-relaxed">
+          {text}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 이미지. 기본은 화면에 맞춤이고, 누르면 원본 크기로 펼쳐 상자 안에서 스크롤한다 —
+ * 스크린샷·도면처럼 글씨가 들어간 이미지는 맞춤 상태에서 읽을 수 없다.
+ */
+function ImagePreview({ url }: { url: string }) {
+  const [actual, setActual] = useState(false);
+  return (
+    <div className={`min-h-0 flex-1 ${actual ? "overflow-auto p-4" : "flex items-center justify-center overflow-hidden p-4"}`}>
+      <button
+        type="button"
+        onClick={() => setActual((v) => !v)}
+        title={actual ? "화면에 맞추기" : "원본 크기로 보기"}
+        aria-label={actual ? "화면에 맞추기" : "원본 크기로 보기"}
+        className={actual ? "cursor-zoom-out" : "cursor-zoom-in"}
+      >
+        <img
+          src={url}
+          alt=""
+          className={actual ? "max-w-none" : "max-h-full max-w-full object-contain"}
+        />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * PDF. 브라우저 내장 뷰어에 맡기지만, 그게 늘 뜨는 건 아니다 — iOS Safari 는 blob 을 물린
+ * iframe 안에서 PDF 를 자주 빈 화면으로 그린다. 화면이 비었을 때 사용자가 할 수 있는 일이
+ * 아무것도 없으면 안 되므로, "새 탭에서 열기" 를 항상 곁에 둔다.
+ */
+function PdfPreview({ url }: { url: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <iframe src={url} title="PDF 미리보기" className="min-h-0 w-full flex-1" />
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-token bg-[color:var(--bg-secondary)] px-4 py-2">
+        <p className="text-xs text-muted">PDF 가 보이지 않나요?</p>
+        <button
+          className="btn btn-secondary px-2.5 py-1 text-xs"
+          onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+        >
+          새 탭에서 열기
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -199,7 +296,7 @@ function VideoPreview({
   }
 
   return (
-    <div className="flex h-full items-center justify-center bg-black p-2">
+    <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-2">
       <video
         src={result.url}
         controls
@@ -209,7 +306,7 @@ function VideoPreview({
         controlsList="nodownload"
         preload="metadata"
         playsInline
-        className="max-h-[74vh] w-full"
+        className="max-h-full w-full"
         onError={() => setFailed(true)}
       />
     </div>
@@ -226,7 +323,7 @@ function PreviewMessage({
   onDownload?: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-10 text-center">
       <span className="text-4xl opacity-40">📄</span>
       <p className="font-medium">{title}</p>
       <p className="max-w-sm text-sm text-muted">{hint}</p>

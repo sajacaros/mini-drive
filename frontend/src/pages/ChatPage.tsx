@@ -30,8 +30,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { PreviewModal } from "@/components/PreviewModal";
 import { ArtifactView } from "@/components/chat/ArtifactView";
 import { CitationList } from "@/components/chat/CitationList";
-import { ChatIcon, PlusIcon, RenameIcon, TrashIcon } from "@/components/icons";
+import { ChatIcon, ListIcon, PlusIcon, RenameIcon, TrashIcon } from "@/components/icons";
 import { EmptyState, ErrorState, LoadingState, Spinner } from "@/components/ui";
+import { useIsNarrow } from "@/lib/media";
 import { fetchFilePreview } from "@/lib/preview";
 
 /** 낙관적으로 그린 질문의 임시 id. 서버 id 와 겹치지 않게 음수를 쓴다. */
@@ -105,7 +106,7 @@ function SessionRow({
       </button>
       {/* 액션은 hover·focus 에서만 드러낸다 — 목록이 아이콘으로 붐비면 제목이 안 읽힌다. */}
       <button
-        className="btn btn-ghost shrink-0 p-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100"
+        className="row-actions btn btn-ghost shrink-0 p-1.5"
         title="제목 변경"
         onClick={() => {
           setDraft(session.title);
@@ -115,7 +116,7 @@ function SessionRow({
         <RenameIcon width={14} height={14} />
       </button>
       <button
-        className="btn btn-ghost shrink-0 p-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100"
+        className="row-actions btn btn-ghost shrink-0 p-1.5"
         title="대화 삭제"
         onClick={onDelete}
       >
@@ -166,6 +167,9 @@ function MessageBubble({
 export function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionItem[]>([]);
   const [activeId, setActiveId] = useState<number | null>(null);
+  const narrow = useIsNarrow();
+  /** 좁은 화면의 세션 목록 서랍. 데스크톱에서는 늘 붙어 있으므로 의미가 없다. */
+  const [listOpen, setListOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scope, setScope] = useState<{ searched: number; examined: number } | null>(null);
 
@@ -336,20 +340,56 @@ export function ChatPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 pt-4 pb-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
-          <h1 className="text-lg font-semibold">채팅</h1>
-          <p className="mt-0.5 text-sm text-muted">
-            전사 위키 문서에 이어서 물어볼 수 있습니다. 답변에는 근거 문서와 위치가 붙습니다.
-          </p>
+          <div className="flex items-start gap-2">
+            {/* 좁은 화면에서 세션 목록은 서랍이라, 여는 입구가 헤더에 있어야 한다. */}
+            <button
+              className="icon-btn btn-ghost mt-0.5 p-2 md:hidden"
+              aria-label="지난 대화 목록"
+              aria-expanded={listOpen}
+              onClick={() => setListOpen(true)}
+            >
+              <ListIcon width={18} height={18} />
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-lg font-semibold">채팅</h1>
+              <p className="mt-0.5 text-sm text-muted">
+                전사 위키 문서에 이어서 물어볼 수 있습니다. 답변에는 근거 문서와 위치가 붙습니다.
+              </p>
+            </div>
+          </div>
         </PageHeader>
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        {/* 좌측 — 세션 목록 */}
-        <aside className="flex w-64 shrink-0 flex-col border-r border-token">
+      <div className="relative flex min-h-0 flex-1">
+        {/* 서랍이 열렸을 때 뒤를 덮는 막 — 바깥을 누르면 닫힌다(모바일 전용). */}
+        {listOpen && (
+          <div
+            className="absolute inset-0 z-20 bg-black/40 md:hidden"
+            onClick={() => setListOpen(false)}
+            aria-hidden="true"
+          />
+        )}
+        {/*
+          좌측 — 세션 목록. 데스크톱은 고정 패널이지만 휴대폰에서는 서랍이다. 256px 짜리
+          패널을 390px 화면에 상시로 두면 대화·입력창에 130px 밖에 남지 않아 채팅 자체가
+          불가능했다. 닫힌 서랍은 화면 밖에 있을 뿐 DOM 에 남으므로 Tab 이 새지 않게 inert 로 잠근다.
+        */}
+        <aside
+          inert={narrow && !listOpen}
+          className={`absolute inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col border-r border-token bg-[color:var(--bg-secondary)] transition-transform duration-200 md:static md:translate-x-0 md:bg-transparent md:transition-none ${
+            listOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+        >
           <div className="p-3">
-            <button className="btn btn-primary w-full" onClick={() => void onNewSession()}>
+            <button
+              className="btn btn-primary w-full"
+              onClick={() => {
+                setListOpen(false);
+                void onNewSession();
+              }}
+            >
               <PlusIcon width={16} height={16} />새 채팅
             </button>
           </div>
@@ -373,7 +413,10 @@ export function ChatPage() {
                     key={s.id}
                     session={s}
                     active={s.id === activeId}
-                    onSelect={() => setActiveId(s.id)}
+                    onSelect={() => {
+                      setActiveId(s.id);
+                      setListOpen(false);
+                    }}
                     onRename={(t) => void onRename(s.id, t)}
                     onDelete={() => void onDelete(s.id)}
                   />
@@ -385,7 +428,7 @@ export function ChatPage() {
 
         {/* 우측 — 대화 */}
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-auto p-6">
+          <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
             {loadingThread ? (
               <LoadingState label="대화를 불러오는 중" />
             ) : messages.length === 0 && !asking ? (

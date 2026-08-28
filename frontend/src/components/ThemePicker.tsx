@@ -62,7 +62,7 @@ export function ThemePicker() {
       </button>
 
       {open && (
-        <div className="card absolute bottom-full left-0 z-30 mb-2 w-full min-w-56 p-2">
+        <div className="card absolute bottom-full left-0 z-30 mb-2 w-full p-2">
           <div className="grid grid-cols-2 gap-2">
             {THEMES.map((id) => {
               const active = id === theme;

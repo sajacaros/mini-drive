@@ -105,7 +105,7 @@ export function AdminBoardsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader align="start">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -131,7 +131,7 @@ export function AdminBoardsPage() {
         </PageHeader>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto p-4 md:p-6">
         <div className="mx-auto w-full max-w-3xl">
           {loading ? (
             <LoadingState />
@@ -325,7 +325,7 @@ function BoardGroupsModal({ board, onClose }: { board: AdminBoard; onClose: () =
       ) : (
         <div className="flex flex-col gap-4">
           <div className="flex flex-wrap items-end gap-2">
-            <label className="flex min-w-40 flex-1 flex-col gap-1 text-sm">
+            <label className="flex min-w-32 flex-1 flex-col gap-1 text-sm">
               <span className="text-muted">그룹</span>
               <select
                 className="input"

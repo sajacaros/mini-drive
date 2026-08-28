@@ -18,7 +18,9 @@ import {
 } from "@/api/files";
 import { checkPermission, listSharedWithMe } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
+import { ActionSheet, type SheetAction } from "@/components/ActionSheet";
 import { FavoriteStar } from "@/components/FavoriteStar";
+import { FileCardList } from "@/components/FileCardList";
 import { Modal } from "@/components/Modal";
 import { MoveModal } from "@/components/MoveModal";
 import { PageHeader } from "@/components/PageHeader";
@@ -41,6 +43,7 @@ import {
   HistoryIcon,
   InboxIcon,
   ListIcon,
+  MoreIcon,
   MoveIcon,
   PauseIcon,
   PlayIcon,
@@ -56,6 +59,7 @@ import {
 import { downloadArchive, downloadNode } from "@/lib/download";
 import { InlineNameInput } from "@/components/InlineName";
 import { subscribeFileEvents } from "@/lib/fileEvents";
+import { useIsNarrow } from "@/lib/media";
 import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
@@ -170,6 +174,8 @@ let uploadSeq = 0;
 
 export function FileBrowserPage() {
   const toast = useToast();
+  // 휴대폰 폭에서는 목록을 표가 아니라 카드로 그린다(components/FileCardList.tsx).
+  const narrow = useIsNarrow();
   const navigate = useNavigate();
   const location = useLocation();
   const { folderId } = useParams();
@@ -207,6 +213,8 @@ export function FileBrowserPage() {
     () => (localStorage.getItem(VIEW_KEY) as ViewMode) || "list",
   );
   const [previewTarget, setPreviewTarget] = useState<FileNode | null>(null);
+  /** 좁은 화면에서 헤더의 ⋯ 로 여는 폴더 작업 시트(새 폴더 등). */
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   /**
    * 체크 선택된 항목들 — 선택 액션 바(일괄 다운로드)의 대상이다. 체크박스, Ctrl/Cmd 토글,
    * Shift 범위로만 담긴다. 클릭 한 번은 여기에 손대지 않는다(→ activeId).
@@ -1042,11 +1050,16 @@ export function FileBrowserPage() {
   return (
     <div className="flex h-full flex-col">
       {/* 헤더: breadcrumb + 액션 + 프로필 칩 */}
-      <div className="border-b border-token px-6 py-4">
+      <div className="border-b border-token px-4 py-3 md:px-6 md:py-4">
         <PageHeader>
           {/* 좁은 화면에서는 브레드크럼과 액션이 두 줄로 나뉜다(한 줄로 두면 업로드 버튼이 잘린다). */}
           <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav className="flex min-w-0 items-center gap-1 text-sm">
+        {/*
+          깊은 경로는 접지 말고 옆으로 밀리게 한다. 예전에는 각 조각의 span 에 min-w-0 이 없어
+          안쪽 truncate 가 아예 동작하지 않았고, 넘친 앞부분(루트 쪽)으로 되돌아갈 방법도
+          없었다 — 휴대폰에서 상위 폴더로 못 올라가는 상태였다.
+        */}
+        <nav className="flex min-w-0 items-center gap-1 overflow-x-auto text-sm">
           {path.map((crumb, i) => {
             // 상위 경로는 드롭 대상이다 — 항목을 breadcrumb 에 떨어뜨려 한 단계 위로 꺼낸다.
             // 현재 폴더 자신과 "공유" 가상 폴더는 대상이 될 수 없다.
@@ -1055,7 +1068,7 @@ export function FileBrowserPage() {
             const isCrumbActive =
               dropTarget?.kind === "crumb" && dropTarget.id === crumb.id;
             return (
-              <span key={i} className="flex items-center gap-1">
+              <span key={i} className="flex min-w-0 shrink-0 items-center gap-1">
                 {i > 0 && <span className="text-muted">/</span>}
                 <button
                   className={`truncate rounded px-1.5 py-0.5 ${
@@ -1116,21 +1129,45 @@ export function FileBrowserPage() {
 
           {canWrite && (
             <>
-              <button className="btn btn-secondary" onClick={() => setNewFolderOpen(true)}>
-                <PlusIcon width={16} height={16} />
-                새 폴더
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => folderInputRef.current?.click()}
-              >
-                <FolderUploadIcon width={16} height={16} />
-                폴더 업로드
-              </button>
-              <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
-                <UploadIcon width={16} height={16} />
-                업로드
-              </button>
+              {/*
+                넓은 화면은 세 버튼을 그대로 펼친다. 좁은 화면에서는 라벨 달린 버튼 셋이
+                세로로 세 줄을 쌓아 헤더가 화면의 절반을 먹었으므로, "업로드" 하나만 남기고
+                나머지는 ⋯ 시트로 접는다.
+
+                폴더 업로드는 모바일에서 아예 빼는데, webkitdirectory 가 iOS Safari 와
+                Android 크롬에서 동작하지 않아 눌러도 파일 하나짜리 선택창만 뜨기 때문이다 —
+                되지 않는 일을 버튼으로 남겨 두지 않는다.
+              */}
+              <div className="hidden items-center gap-2 md:flex">
+                <button className="btn btn-secondary" onClick={() => setNewFolderOpen(true)}>
+                  <PlusIcon width={16} height={16} />
+                  새 폴더
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => folderInputRef.current?.click()}
+                >
+                  <FolderUploadIcon width={16} height={16} />
+                  폴더 업로드
+                </button>
+                <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
+                  <UploadIcon width={16} height={16} />
+                  업로드
+                </button>
+              </div>
+              <div className="flex items-center gap-1 md:hidden">
+                <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
+                  <UploadIcon width={16} height={16} />
+                  업로드
+                </button>
+                <button
+                  className="icon-btn btn-ghost p-2"
+                  aria-label="폴더 작업 더 보기"
+                  onClick={() => setFolderMenuOpen(true)}
+                >
+                  <MoreIcon width={18} height={18} />
+                </button>
+              </div>
             </>
           )}
           <input
@@ -1203,7 +1240,7 @@ export function FileBrowserPage() {
 
       {/* 본문: 드롭존 */}
       <div
-        className="relative flex-1 overflow-auto p-6"
+        className="relative flex-1 overflow-auto p-4 md:p-6"
         // 드래그 앤 드롭 경로는 E2E 에서만 재현 가능하다(FileSystem API 는 합성 이벤트로만
         // 주입된다). 안정적인 드롭 대상 선택자를 남겨 둔다.
         data-testid="dropzone"
@@ -1294,7 +1331,7 @@ export function FileBrowserPage() {
                       <div className="flex items-center gap-1">
                         {t.status === "paused" ? (
                           <button
-                            className="rounded p-1 text-muted transition-colors hover:text-[color:var(--text-primary)]"
+                            className="icon-btn p-1 text-muted hover:text-[color:var(--text-primary)]"
                             title="재개"
                             aria-label="재개"
                             onClick={() => t.controller?.resume()}
@@ -1303,7 +1340,7 @@ export function FileBrowserPage() {
                           </button>
                         ) : (
                           <button
-                            className="rounded p-1 text-muted transition-colors hover:text-[color:var(--text-primary)]"
+                            className="icon-btn p-1 text-muted hover:text-[color:var(--text-primary)]"
                             title="일시정지"
                             aria-label="일시정지"
                             onClick={() => t.controller?.pause()}
@@ -1312,7 +1349,7 @@ export function FileBrowserPage() {
                           </button>
                         )}
                         <button
-                          className="rounded p-1 text-muted transition-colors hover:text-danger"
+                          className="icon-btn p-1 text-muted hover:text-danger"
                           title="취소"
                           aria-label="취소"
                           onClick={() => void t.controller?.cancel()}
@@ -1438,8 +1475,11 @@ export function FileBrowserPage() {
               onRenameSubmit: submitRename,
               onRenameCancel: () => setRenamingId(null),
             };
-            return view === "grid" ? (
-              <FileGrid items={items} {...rowProps} />
+            // 좁은 화면에서는 목록 보기를 카드로 바꾼다. 그리드(썸네일) 보기는 원래
+            // 카드라 그대로 두고, 카드 안의 액션만 ⋯ 로 접힌다.
+            if (view === "grid") return <FileGrid items={items} {...rowProps} />;
+            return narrow ? (
+              <MobileFileCards items={items} {...rowProps} />
             ) : (
               <FileTable items={items} {...rowProps} />
             );
@@ -1699,6 +1739,21 @@ export function FileBrowserPage() {
         }}
       />
 
+      {/* 좁은 화면 헤더의 ⋯ — 데스크톱에서 버튼으로 펼쳐 두는 폴더 작업들. */}
+      <ActionSheet
+        open={folderMenuOpen}
+        title="이 폴더에서"
+        actions={[
+          {
+            key: "new-folder",
+            label: "새 폴더",
+            icon: <PlusIcon width={16} height={16} />,
+            onClick: () => setNewFolderOpen(true),
+          },
+        ]}
+        onClose={() => setFolderMenuOpen(false)}
+      />
+
       <PreviewModal
         open={previewTarget !== null}
         title={previewTarget?.name ?? ""}
@@ -1816,78 +1871,80 @@ function SelectCheckbox({
   );
 }
 
-/** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용). */
-function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
+/**
+ * 한 항목에 걸린 동작 목록을 **데이터로** 만든다.
+ *
+ * 같은 목록을 두 곳이 소비한다: 데스크톱은 아이콘 줄(RowActions), 좁은 화면은 라벨이 붙은
+ * 하단 시트(ActionSheet). 판정을 여기 한 곳에만 두는 게 요점이다 — 권한 게이팅을 두 벌로
+ * 베껴 두면 한쪽만 고쳐진 채로 백엔드 기준과 어긋난다(공유 생성은 write 이상, 권한·위키는
+ * manage 이상).
+ */
+function buildRowActions(f: FileNode, p: FileRowProps): SheetAction[] {
   // 행별 조작(새 버전/이름 변경/삭제/권한 관리)은 항목 자체 권한으로 게이팅한다.
   const canWrite = rowCanWrite(f, p.canWrite);
   const canManage = rowCanManage(f, p.canManage);
+  const actions: SheetAction[] = [];
+  const push = (
+    key: string,
+    label: string,
+    icon: React.ReactNode,
+    onClick: () => void,
+    danger?: boolean,
+  ) => actions.push({ key, label, icon, onClick, danger });
+
+  if (f.is_folder) {
+    // 폴더는 하위 전체를 ZIP 하나로 묶어 받는다 (backend 스트리밍).
+    push("download", "ZIP 으로 다운로드", <DownloadIcon width={16} height={16} />, () =>
+      p.onDownload(f),
+    );
+    // 폴더 공유 — 방문자는 하위 전체를 ZIP 으로 받는다. 파일과 같은 기준(write 이상).
+    if (canWrite) {
+      push("share", "공유", <ShareIcon width={16} height={16} />, () => p.onShare(f));
+    }
+  } else {
+    push("preview", "미리보기", <EyeIcon width={16} height={16} />, () => p.onPreview(f));
+    push("download", "다운로드", <DownloadIcon width={16} height={16} />, () => p.onDownload(f));
+    if (canWrite) {
+      push("new-version", "새 버전 업로드", <UploadIcon width={16} height={16} />, () =>
+        p.onNewVersion(f),
+      );
+    }
+    push("versions", "버전 기록", <HistoryIcon width={16} height={16} />, () => p.onVersions(f));
+    // 공유 링크 생성은 소유자 또는 write 이상 — 백엔드 create_share 와 같은 기준으로
+    // 게이팅한다(컨테이너가 공유 트리인지가 아니라 항목 자체의 유효 권한).
+    if (canWrite) {
+      push("share", "공유", <ShareIcon width={16} height={16} />, () => p.onShare(f));
+    }
+  }
+
+  if (canManage) {
+    push("permissions", "권한 관리", <ShieldIcon width={16} height={16} />, () =>
+      p.onPermissions(f),
+    );
+    // 발행은 소유자·manage 만 — 백엔드 _can_publish 와 같은 기준으로 게이팅한다.
+    // md/html 이 아닌 파일에서도 연다. 모달이 스위치를 비활성 + 사유로 보여주기 때문이다 —
+    // 숨기면 "기능이 없다"로 읽히고, 실제로는 "이 형식은 아직 안 된다"다.
+    push("wiki", "위키 설정", <BookIcon width={16} height={16} />, () => p.onWiki(f));
+  }
+
+  if (canWrite) {
+    push("move", "이동", <MoveIcon width={16} height={16} />, () => p.onMove(f));
+    push("rename", "이름 변경", <RenameIcon width={16} height={16} />, () => p.onRename(f));
+    push("delete", "삭제", <TrashIcon width={16} height={16} />, () => p.onDelete(f), true);
+  }
+
+  return actions;
+}
+
+/** 파일/폴더 한 항목의 아이콘 동작 모음 (목록·그리드 공용, 데스크톱). */
+function RowActions({ file: f, ...p }: { file: FileNode } & FileRowProps) {
   return (
     <>
-      {f.is_folder && (
-        <>
-          {/* 폴더는 하위 전체를 ZIP 하나로 묶어 받는다 (backend 스트리밍). */}
-          <IconAction title="ZIP 으로 다운로드" onClick={() => p.onDownload(f)}>
-            <DownloadIcon width={16} height={16} />
-          </IconAction>
-          {/* 폴더 공유 — 방문자는 하위 전체를 ZIP 으로 받는다. 파일과 같은 기준(write 이상). */}
-          {canWrite && (
-            <IconAction title="공유" onClick={() => p.onShare(f)}>
-              <ShareIcon width={16} height={16} />
-            </IconAction>
-          )}
-        </>
-      )}
-      {!f.is_folder && (
-        <>
-          <IconAction title="미리보기" onClick={() => p.onPreview(f)}>
-            <EyeIcon width={16} height={16} />
-          </IconAction>
-          <IconAction title="다운로드" onClick={() => p.onDownload(f)}>
-            <DownloadIcon width={16} height={16} />
-          </IconAction>
-          {canWrite && (
-            <IconAction title="새 버전 업로드" onClick={() => p.onNewVersion(f)}>
-              <UploadIcon width={16} height={16} />
-            </IconAction>
-          )}
-          <IconAction title="버전 기록" onClick={() => p.onVersions(f)}>
-            <HistoryIcon width={16} height={16} />
-          </IconAction>
-          {/* 공유 링크 생성은 소유자 또는 write 이상 — 백엔드 create_share 와 같은 기준으로
-              게이팅한다(컨테이너가 공유 트리인지가 아니라 항목 자체의 유효 권한). */}
-          {canWrite && (
-            <IconAction title="공유" onClick={() => p.onShare(f)}>
-              <ShareIcon width={16} height={16} />
-            </IconAction>
-          )}
-        </>
-      )}
-      {canManage && (
-        <>
-          <IconAction title="권한 관리" onClick={() => p.onPermissions(f)}>
-            <ShieldIcon width={16} height={16} />
-          </IconAction>
-          {/* 발행은 소유자·manage 만 — 백엔드 _can_publish 와 같은 기준으로 게이팅한다.
-              md/html 이 아닌 파일에서도 연다. 모달이 스위치를 비활성 + 사유로 보여주기 때문이다 —
-              숨기면 "기능이 없다"로 읽히고, 실제로는 "이 형식은 아직 안 된다"다. */}
-          <IconAction title="위키 설정" onClick={() => p.onWiki(f)}>
-            <BookIcon width={16} height={16} />
-          </IconAction>
-        </>
-      )}
-      {canWrite && (
-        <>
-          <IconAction title="이동" onClick={() => p.onMove(f)}>
-            <MoveIcon width={16} height={16} />
-          </IconAction>
-          <IconAction title="이름 변경" onClick={() => p.onRename(f)}>
-            <RenameIcon width={16} height={16} />
-          </IconAction>
-          <IconAction title="삭제" onClick={() => p.onDelete(f)} danger>
-            <TrashIcon width={16} height={16} />
-          </IconAction>
-        </>
-      )}
+      {buildRowActions(f, p).map((a) => (
+        <IconAction key={a.key} title={a.label} onClick={a.onClick} danger={a.danger}>
+          {a.icon}
+        </IconAction>
+      ))}
     </>
   );
 }
@@ -1935,10 +1992,61 @@ function ItemName({
   );
 }
 
+/**
+ * 좁은 화면의 목록 보기 — 공용 카드 목록(FileCardList)에 이 화면의 사정만 얹는다.
+ * 권한 판정은 buildRowActions 하나를 데스크톱 아이콘 줄과 함께 쓴다.
+ */
+function MobileFileCards({ items, ...p }: { items: FileNode[] } & FileRowProps) {
+  const coarse = useCoarsePointer();
+  return (
+    <FileCardList
+      items={items}
+      actionsFor={(f) => buildRowActions(f, p)}
+      onOpenFolder={p.onOpenFolder}
+      onPreview={p.onPreview}
+      onToggleFavorite={p.onToggleFavorite}
+      decorate={(f) => (
+        <>
+          <WikiMark file={f} />
+          {!f.is_folder && f.current_version >= 2 && (
+            <span className="mr-1 text-xs text-muted">v{f.current_version}</span>
+          )}
+        </>
+      )}
+      activeId={p.activeId}
+      onFocus={p.onFocus}
+      selectedIds={p.selectedIds}
+      onSelect={(id) => p.onSelect(id, { toggle: true, range: false })}
+      leading={
+        p.onOpenShared ? (
+          <div
+            className={`flex items-center gap-3 px-3 py-2.5 ${ROW_BASE_CLASS} ${
+              p.activeId === SHARED_VIRTUAL_ID ? ROW_ACTIVE_CLASS : ""
+            }`}
+            {...rowOpenHandlers({
+              coarse,
+              focus: () => p.onFocus(SHARED_VIRTUAL_ID),
+              open: p.onOpenShared,
+            })}
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center text-accent">
+              <InboxIcon width={22} height={22} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">공유</p>
+              <p className="text-xs text-muted">공유받은 항목</p>
+            </div>
+          </div>
+        ) : null
+      }
+    />
+  );
+}
+
 function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   const coarse = useCoarsePointer();
   return (
-    <div className="card overflow-x-auto">
+    <div className="card table-scroll">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
@@ -2077,7 +2185,7 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
                 <div
-                  className="flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+                  className="row-actions flex justify-end gap-0.5"
                   {...ROW_ACTION_PROPS}
                 >
                   <RowActions file={f} {...p} />
@@ -2094,6 +2202,8 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
 /** 썸네일 중심 그리드 뷰 (PRD 3.2). 클릭은 현재 항목, 더블클릭은 폴더 탐색/파일 미리보기. */
 function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
   const coarse = useCoarsePointer();
+  // 터치에서 ⋯ 로 여는 액션 시트의 대상. 데스크톱은 아이콘 줄을 그대로 쓴다.
+  const [sheetFor, setSheetFor] = useState<FileNode | null>(null);
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
       {/* 내 드라이브 루트 전용 "공유" 가상 폴더 카드 */}
@@ -2151,7 +2261,7 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
             label={`${f.name} 선택`}
             onToggle={() => p.onSelect(f.id, { toggle: true, range: false })}
             className={`absolute left-1.5 top-1.5 z-10 transition-opacity ${
-              p.selectedIds.includes(f.id) ? "" : "opacity-0 group-hover:opacity-100"
+              p.selectedIds.includes(f.id) ? "" : "row-actions"
             }`}
           />
           {/* 즐겨찾기 별 — 활성이면 항상, 아니면 hover 시 노출 */}
@@ -2202,17 +2312,34 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                 {f.name}
               </p>
             </ItemName>
-            <p className="text-[10px] text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
-            {/* 좁은 셀에서 넘치지 않도록 아이콘은 줄바꿈 허용 */}
-            <div
-              className="flex flex-wrap opacity-0 transition-opacity group-hover:opacity-100"
-              {...ROW_ACTION_PROPS}
-            >
+            <p className="text-xs text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
+            {/*
+              데스크톱은 아이콘을 펼치고(좁은 셀이라 줄바꿈 허용), 터치에서는 ⋯ 하나로 접는다.
+              2열 그리드의 카드 폭은 155px 남짓이라 28px 아이콘 아홉 개가 세 줄로 접히면서
+              카드 높이를 두 배로 만들었고, 라벨이 없어 무엇을 누르는지도 알 수 없었다.
+            */}
+            <div className="row-actions hidden flex-wrap md:flex" {...ROW_ACTION_PROPS}>
               <RowActions file={f} {...p} />
+            </div>
+            <div className="flex justify-end md:hidden" {...ROW_ACTION_PROPS}>
+              <button
+                className="icon-btn p-1.5 text-muted"
+                aria-label={`${f.name} 작업 더 보기`}
+                onClick={() => setSheetFor(f)}
+              >
+                <MoreIcon width={18} height={18} />
+              </button>
             </div>
           </div>
         </div>
       ))}
+
+      <ActionSheet
+        open={sheetFor !== null}
+        title={sheetFor?.name ?? ""}
+        actions={sheetFor ? buildRowActions(sheetFor, p) : []}
+        onClose={() => setSheetFor(null)}
+      />
     </div>
   );
 }
@@ -2233,7 +2360,7 @@ function IconAction({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className={`rounded-md p-1.5 transition-colors hover:bg-[color:var(--bg-secondary)] ${
+      className={`icon-btn p-1.5 hover:bg-[color:var(--bg-secondary)] ${
         danger
           ? "text-muted hover:text-danger"
           : "text-muted hover:text-[color:var(--text-primary)]"

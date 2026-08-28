@@ -545,7 +545,7 @@ async def prepare_ticketed_share_preview(
     if root is None or root.is_deleted:
         raise ShareServiceError(410, "공유가 더 이상 유효하지 않습니다.")
     node, _crumbs = await _resolve_share_node(session, root, file_id)
-    if node.is_folder or previews_service.classify(node.mime_type) != "video":
+    if node.is_folder or previews_service.classify(node.mime_type, node.name) != "video":
         raise ShareServiceError(404, "항목을 찾을 수 없습니다.")
     return await presign_share_file(storage, node)
 

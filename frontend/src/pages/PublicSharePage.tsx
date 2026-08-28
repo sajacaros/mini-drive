@@ -134,14 +134,14 @@ export function PublicSharePage() {
   const readOnly = state.kind === "ready" && state.meta.permission === "read";
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
+    <div className="flex min-h-[100dvh] items-center justify-center p-4">
       <div className={`w-full ${isFolderBrowser ? "max-w-2xl" : "max-w-md"}`}>
         <div className="mb-6 flex items-center justify-center gap-2 text-accent">
           <DriveIcon width={24} height={24} />
           <span className="text-lg font-semibold text-[color:var(--text-primary)]">Flex Drive</span>
         </div>
 
-        <div className="card p-6">
+        <div className="card p-5 md:p-6">
           {state.kind === "loading" && <LoadingState />}
 
           {state.kind === "not-found" && (
