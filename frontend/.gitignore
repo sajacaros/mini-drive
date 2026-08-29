@@ -2,3 +2,6 @@
 /e2e/.auth/
 /playwright-report/
 /test-results/
+
+# pdf.js 보조 자원 (vite 플러그인이 node_modules 에서 복사 — 커밋 대상 아님)
+/public/pdfjs/

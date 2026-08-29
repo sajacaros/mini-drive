@@ -375,3 +375,31 @@ export const GripIcon = (p: IconProps) => (
     <circle cx="15" cy="18" r="1.4" />
   </svg>
 );
+
+/** 축소 — 돋보기 안의 빼기. PDF 뷰어 배율 조절용. */
+export const ZoomOutIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3" />
+    <path d="M8 11h6" />
+  </svg>
+);
+
+/** 확대 — 돋보기 안의 더하기. */
+export const ZoomInIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3" />
+    <path d="M11 8v6" />
+    <path d="M8 11h6" />
+  </svg>
+);
+
+/** 새 탭에서 열기 — 상자 밖으로 나가는 화살표. */
+export const ExternalLinkIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M15 3h6v6" />
+    <path d="M10 14 21 3" />
+    <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+  </svg>
+);

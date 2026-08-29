@@ -6,7 +6,8 @@
  *   - 공개 공유:  POST /api/public/shares/{url}/preview (무인증 — 순수 fetch, 비밀번호 옵션)
  *
  * 응답 규약:
- *   - 이미지/PDF: 게이트웨이 인라인 스트리밍(바이트) → blob → objectURL 로 <img>/<iframe> 렌더.
+ *   - 이미지:     게이트웨이 인라인 스트리밍(바이트) → blob → objectURL 로 <img> 렌더.
+ *   - PDF:        같은 바이트를 blob 그대로 넘겨 pdf.js 가 canvas 에 그린다(PdfViewer).
  *   - 텍스트:     text/plain 본문. X-Preview-Truncated: true 면 앞부분만 표시된 것.
  *                 본문 Content-Type 은 언제나 text/plain 이라 마크다운을 구분할 수 없어,
  *                 백엔드가 X-Preview-Text-Kind(markdown|plain)로 하위 종류를 따로 알린다.
@@ -26,7 +27,7 @@ export type TextKind = "markdown" | "plain";
 
 export type PreviewResult =
   | { kind: "image"; url: string }
-  | { kind: "pdf"; url: string }
+  | { kind: "pdf"; url: string; blob: Blob }
   | { kind: "text"; text: string; truncated: boolean; textKind: TextKind }
   | { kind: "video"; url: string; mime: string }
   | { kind: "unsupported" };
@@ -67,7 +68,9 @@ async function toResult(
     return { kind: "video", url: withBase(pointer.url), mime: pointer.mime };
   }
   if (ct.includes("application/pdf")) {
-    return { kind: "pdf", url: URL.createObjectURL(blob) };
+    // blob 을 같이 들려 보낸다: 뷰어가 pdf.js 에 바이트를 직접 넘긴다(모바일 브라우저는
+    // iframe 안의 blob URL 로는 PDF 를 그려 주지 않는다). url 은 "새 탭에서 열기" 용.
+    return { kind: "pdf", url: URL.createObjectURL(blob), blob };
   }
   // 나머지는 이미지로 간주(백엔드가 image/*·pdf·text·영상 외에는 415 로 거른다).
   return { kind: "image", url: URL.createObjectURL(blob) };

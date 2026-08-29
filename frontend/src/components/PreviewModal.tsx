@@ -7,15 +7,24 @@
  * 좁은 화면에서는 창이 아니라 **전체 화면**으로 연다. 390px 짜리 화면에서 바깥 여백과
  * 카드 테두리까지 물리면 정작 문서에 남는 폭이 300px 밑으로 떨어진다 — 읽으라고 여는
  * 화면에서 읽을 자리를 여백에 내주는 셈이었다.
+ *
+ * 넓은 화면에서 크기는 **내용 종류가 정한다**. 텍스트나 안내 메시지는 지금처럼 내용만큼만
+ * 차지하면 되지만, PDF·영상 뷰어는 자기 높이를 스스로 못 정한다(특히 canvas·iframe 은 부모가
+ * 높이를 안 주면 브라우저 기본값으로 쪼그라든다). 그래서 그 둘일 때만 카드에 실제 높이를
+ * 주고 폭도 넓혀, 뷰어가 화면을 채우게 한다.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 
 import { MarkdownDoc } from "@/components/MarkdownDoc";
 import { useIsNarrow } from "@/lib/media";
 import { type PreviewResult, releasePreview } from "@/lib/preview";
 import { DownloadIcon, XIcon } from "./icons";
 import { LoadingState } from "./ui";
+
+// pdf.js 는 무겁다(워커까지 합쳐 수백 KB). PDF 를 실제로 열 때만 받아 오도록 갈라 둔다 —
+// 파일 목록만 훑는 사람이 PDF 엔진을 내려받을 이유는 없다.
+const PdfViewer = lazy(() => import("./PdfViewer"));
 
 interface PreviewModalProps {
   open: boolean;
@@ -77,6 +86,9 @@ export function PreviewModal({ open, title, onClose, load, onDownload }: Preview
 
   if (!open) return null;
 
+  // 뷰어형 내용(PDF/영상)은 카드에 실제 높이를 받아야 제 크기로 펼쳐진다.
+  const fill = result?.kind === "pdf" || result?.kind === "video";
+
   return (
     <div
       className={`fixed inset-0 z-40 flex items-center justify-center bg-black/50 ${
@@ -86,7 +98,11 @@ export function PreviewModal({ open, title, onClose, load, onDownload }: Preview
     >
       <div
         className={`card flex w-full flex-col overflow-hidden p-0 ${
-          narrow ? "h-[100dvh] max-w-none rounded-none border-0" : "max-h-[88vh] max-w-4xl"
+          narrow
+            ? "h-[100dvh] max-w-none rounded-none border-0"
+            : fill
+              ? "h-[92vh] max-w-6xl"
+              : "max-h-[88vh] max-w-4xl"
         }`}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
@@ -138,7 +154,19 @@ function PreviewBody({
   onDownload?: () => void;
 }) {
   if (result.kind === "image") return <ImagePreview url={result.url} />;
-  if (result.kind === "pdf") return <PdfPreview url={result.url} />;
+  if (result.kind === "pdf") {
+    return (
+      <Suspense fallback={<LoadingState label="PDF 뷰어 준비 중..." />}>
+        {/* key: 다른 파일을 열면 뷰어를 새로 마운트한다(페이지 위치·배율·문서 상태를 함께 비운다). */}
+        <PdfViewer
+          key={result.url}
+          blob={result.blob}
+          url={result.url}
+          onDownload={onDownload}
+        />
+      </Suspense>
+    );
+  }
   if (result.kind === "video") return <VideoPreview result={result} onDownload={onDownload} />;
   if (result.kind === "text") {
     return (
@@ -238,28 +266,6 @@ function ImagePreview({ url }: { url: string }) {
           className={actual ? "max-w-none" : "max-h-full max-w-full object-contain"}
         />
       </button>
-    </div>
-  );
-}
-
-/**
- * PDF. 브라우저 내장 뷰어에 맡기지만, 그게 늘 뜨는 건 아니다 — iOS Safari 는 blob 을 물린
- * iframe 안에서 PDF 를 자주 빈 화면으로 그린다. 화면이 비었을 때 사용자가 할 수 있는 일이
- * 아무것도 없으면 안 되므로, "새 탭에서 열기" 를 항상 곁에 둔다.
- */
-function PdfPreview({ url }: { url: string }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <iframe src={url} title="PDF 미리보기" className="min-h-0 w-full flex-1" />
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-token bg-[color:var(--bg-secondary)] px-4 py-2">
-        <p className="text-xs text-muted">PDF 가 보이지 않나요?</p>
-        <button
-          className="btn btn-secondary px-2.5 py-1 text-xs"
-          onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
-        >
-          새 탭에서 열기
-        </button>
-      </div>
     </div>
   );
 }

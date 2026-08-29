@@ -18,6 +18,6 @@ esac
 
 echo "[base-path] BASE_PATH=${BASE_PATH} — '/__BASE__/' 치환 중..."
 find /usr/share/nginx/html -type f \
-  \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.map' \) \
+  \( -name '*.js' -o -name '*.mjs' -o -name '*.css' -o -name '*.html' -o -name '*.map' \) \
   -exec sed -i "s#/__BASE__/#${BASE_PATH}#g" {} +
 echo "[base-path] 완료."
