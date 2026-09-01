@@ -172,6 +172,8 @@ async def shared_with_me(user: CurrentUser, session: DbSession) -> SharedWithMeR
     # 소유자명은 배치로, permission/group_names 는 이미 서비스가 돌려준 부여 행에서 그대로 채운다
     # (공유받은 항목이므로 permission = 부여 수준, group_names = 부여 그룹명 한 건).
     await files_service.annotate_owner_names(session, [item.file for item in items])
+    # 공유 목록도 폴더 행에 항목 수를 보여준다 — 내 드라이브와 같은 표라 한쪽만 비면 어긋난다.
+    await files_service.annotate_child_counts(session, [item.file for item in items])
     for item in items:
         item.file.permission = item.permission  # type: ignore[attr-defined]
         item.file.group_names = [item.group_name]  # type: ignore[attr-defined]

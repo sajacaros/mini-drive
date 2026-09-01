@@ -59,7 +59,7 @@ import { downloadArchive, downloadNode } from "@/lib/download";
 import { InlineNameInput } from "@/components/InlineName";
 import { subscribeFileEvents } from "@/lib/fileEvents";
 import { useIsNarrow } from "@/lib/media";
-import { formatBytes, formatDateTime, roParticle } from "@/lib/format";
+import { folderCountLabel, formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import { fetchFilePreview } from "@/lib/preview";
 import {
@@ -2208,7 +2208,9 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               <td className="px-4 py-2.5">
                 <PermissionCell f={f} />
               </td>
-              <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
+              <td className="px-4 py-2.5 text-muted">
+                {f.is_folder ? folderCountLabel(f.child_count, "-") : formatBytes(f.size)}
+              </td>
               <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
               <td className="px-4 py-2.5">
                 <div
@@ -2339,7 +2341,9 @@ function FileGrid({ items, ...p }: { items: FileNode[] } & FileRowProps) {
                 {f.name}
               </p>
             </ItemName>
-            <p className="text-xs text-muted">{f.is_folder ? "폴더" : formatBytes(f.size)}</p>
+            <p className="text-xs text-muted">
+              {f.is_folder ? folderCountLabel(f.child_count, "폴더", "폴더") : formatBytes(f.size)}
+            </p>
             {/*
               데스크톱은 아이콘을 펼치고(좁은 셀이라 줄바꿈 허용), 터치에서는 ⋯ 하나로 접는다.
               2열 그리드의 카드 폭은 155px 남짓이라 28px 아이콘 아홉 개가 세 줄로 접히면서

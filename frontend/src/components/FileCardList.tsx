@@ -22,7 +22,7 @@ import { ActionSheet, type SheetAction } from "@/components/ActionSheet";
 import { FavoriteStar } from "@/components/FavoriteStar";
 import { Thumbnail } from "@/components/Thumbnail";
 import { FileIcon, FolderIcon, MoreIcon } from "@/components/icons";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import { folderCountLabel, formatBytes, formatDateTime } from "@/lib/format";
 import {
   ROW_ACTION_PROPS,
   ROW_ACTIVE_CLASS,
@@ -114,7 +114,8 @@ export function FileCardList({
                 {f.name}
               </p>
               <p className="truncate text-xs text-muted">
-                {f.is_folder ? "폴더" : formatBytes(f.size)} · {formatDateTime(f.updated_at)}
+                {f.is_folder ? folderCountLabel(f.child_count, "폴더", "폴더") : formatBytes(f.size)}{" "}
+                · {formatDateTime(f.updated_at)}
               </p>
             </div>
 

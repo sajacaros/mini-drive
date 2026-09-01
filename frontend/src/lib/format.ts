@@ -65,3 +65,21 @@ export function roParticle(word: string): string {
   // 0 = 받침 없음, 8 = 받침 ㄹ.
   return jongseong === 0 || jongseong === 8 ? "로" : "으로";
 }
+
+/**
+ * 폴더 행의 "크기" 자리에 넣을 문구. 폴더는 크기가 없으니 대신 **직속 항목 수**를 보여준다.
+ *
+ * `child_count` 가 null/undefined 면 세지 않은 목록(휴지통 등)이라 예전처럼 비워 둔다 —
+ * 0 으로 넘겨 "비어 있음"이라고 단정하면 내용이 있는 폴더를 비었다고 말하게 된다.
+ *
+ * @param empty 0개일 때 문구. 표는 빈 칸을 못 읽으므로 "비어 있음", 카드는 날짜와 이어 붙어
+ *              "폴더" 로 두는 편이 자연스러워 호출부가 고른다.
+ */
+export function folderCountLabel(
+  childCount: number | null | undefined,
+  fallback: string,
+  empty = "비어 있음",
+): string {
+  if (childCount == null) return fallback;
+  return childCount === 0 ? empty : `항목 ${childCount.toLocaleString("ko-KR")}개`;
+}

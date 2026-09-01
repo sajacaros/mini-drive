@@ -64,6 +64,14 @@ export interface FileNode {
   location?: string;
   /** 소유자 표시 이름 (Unix 스타일 소유자 열). 목록/단건 응답의 파생 필드. */
   owner_name?: string;
+  /**
+   * 폴더의 **직속** 활성 하위 항목 수(파일 + 폴더). 파일이면 null.
+   *
+   * null 은 0 이 아니라 **"세지 않았다"** 는 뜻이다 — 휴지통처럼 이 필드를 부착하지 않는
+   * 목록이 있고, 거기서 0 으로 읽으면 내용이 있는 폴더가 "비어 있음"으로 보인다.
+   * 표시는 `folderCountLabel`(lib/format.ts) 한 곳에서만 판단한다.
+   */
+  child_count?: number | null;
   /** 공유 그룹명 목록. 소유자 시점: 이 항목이 공유된 그룹들, 수신자 시점: 접근을 부여한 그룹. */
   group_names?: string[];
   /**

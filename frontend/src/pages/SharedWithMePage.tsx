@@ -13,7 +13,7 @@ import {
   FolderIcon,
   InboxIcon,
 } from "@/components/icons";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import { folderCountLabel, formatBytes, formatDateTime } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
 import {
   ROW_ACTION_PROPS,
@@ -140,7 +140,7 @@ export function SharedWithMePage() {
                         </Badge>
                       </td>
                       <td className="px-4 py-2.5 text-muted">
-                        {f.is_folder ? "-" : formatBytes(f.size)}
+                        {f.is_folder ? folderCountLabel(f.child_count, "-") : formatBytes(f.size)}
                       </td>
                       <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
                       <td className="px-4 py-2.5">

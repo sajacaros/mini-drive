@@ -296,6 +296,34 @@ async def _annotate_wiki_status(
         f.wiki_status = by_file.get(f.id, "off")  # type: ignore[attr-defined]
 
 
+async def annotate_child_counts(session: AsyncSession, files: Sequence[File]) -> None:
+    """폴더에 `child_count`(직속 활성 하위 항목 수)를 in-place 부착한다.
+
+    재귀 합계가 아니라 **직속** 수다. 화면이 이 숫자를 폴더 행에 붙이는데, 폴더를 열었을 때
+    보이는 항목 수와 다르면 그 자리에서 틀린 값이 된다. 재귀 합계는 페이지 위 모든 폴더의
+    서브트리를 목록 요청마다 순회해야 해서 비용도 다른 등급이다.
+
+    파일 행은 건드리지 않는다 — None 으로 남아 "세지 않았다"를 뜻한다(schemas 주석 참조).
+    폴더 id 를 한 번에 묶어 GROUP BY 한 번으로 끝내므로 목록당 쿼리 1회다(idx_files_parent).
+    """
+    folder_ids = [f.id for f in files if f.is_folder]
+    if not folder_ids:
+        return
+
+    rows = (
+        await session.execute(
+            select(File.parent_folder_id, func.count())
+            .where(File.parent_folder_id.in_(folder_ids), File.is_deleted.is_(False))
+            .group_by(File.parent_folder_id)
+        )
+    ).all()
+    counts = {parent_id: int(n) for parent_id, n in rows}
+    for f in files:
+        if f.is_folder:
+            # 하위가 하나도 없으면 GROUP BY 결과에 행 자체가 없다 — 0 으로 채운다.
+            f.child_count = counts.get(f.id, 0)  # type: ignore[attr-defined]
+
+
 async def annotate_listing_meta(
     session: AsyncSession, user: User, files: Sequence[File]
 ) -> None:
@@ -303,6 +331,7 @@ async def annotate_listing_meta(
 
     부착 필드 (schemas.files.FileResponse):
       - owner_name:  파일 소유자(files.user_id)의 표시명.
+      - child_count: 폴더면 직속 활성 하위 항목 수, 파일이면 건드리지 않는다.
       - permission:  요청자의 유효 권한 — 소유자면 "owner", 아니면 그룹 수준(read/write/manage).
       - group_names: 소유 항목이면 이 파일에 직접 부여된(미만료) 그룹명들(내가 공유한 대상),
                      공유받은 항목이면 접근을 부여한 그룹명들(직접 부여 우선, 없으면 상속 소스).
@@ -315,6 +344,7 @@ async def annotate_listing_meta(
 
     await annotate_owner_names(session, files)
     await _annotate_wiki_status(session, files)
+    await annotate_child_counts(session, files)
 
     # 파일들의 직접 부여(미만료)를 그룹명과 함께 한 번에 모은다 — 소유자의 "공유 대상" 표기와
     # 공유받은 항목의 직접 부여 매칭에 공용으로 쓴다. 그룹명순으로 안정 정렬.

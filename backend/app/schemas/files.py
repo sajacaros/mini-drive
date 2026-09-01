@@ -40,6 +40,15 @@ class FileResponse(BaseModel):
     owner_name: str = ""
     group_names: list[str] = Field(default_factory=list)
     permission: str = "owner"
+    # 파생 필드 — 폴더의 **직속** 활성 하위 항목 수(파일 + 폴더). 파일이면 None.
+    #
+    # None 은 "0개"가 아니라 **"세지 않았다"** 는 뜻이며, 화면은 둘을 다르게 그려야 한다.
+    # 이 필드를 부착하지 않는 목록이 있기 때문이다 — 대표적으로 휴지통은 하위 항목도 함께
+    # 삭제 상태라 여기 기준(is_deleted=False)으로 세면 내용이 있는 폴더가 0개로 보인다.
+    # 기본값을 0 으로 두면 그 거짓말이 화면까지 그대로 나간다.
+    #
+    # 재귀 합계가 아니라 직속 수인 이유: 폴더를 열었을 때 보이는 수와 일치해야 한다.
+    child_count: int | None = None
     # 파생 필드 (spec/wiki-index.md) — 위키 인덱싱 상태. 목록에서 배지로 쓴다.
     # off | pending | indexing | ready | stale | failed. **null 을 쓰지 않는다.**
     wiki_status: str = "off"
