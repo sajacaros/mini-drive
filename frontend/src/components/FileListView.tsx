@@ -19,6 +19,7 @@ import { Thumbnail } from "@/components/Thumbnail";
 import { DownloadIcon, FileIcon, FolderIcon } from "@/components/icons";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { permissionLabel, permissionTone } from "@/lib/labels";
+import { CELL_NOWRAP, COL } from "@/lib/tableCols";
 import { useIsNarrow } from "@/lib/media";
 import {
   CARD_ACTIVE_CLASS,
@@ -124,13 +125,13 @@ function Table(p: ViewProps) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
-            <th className="px-4 py-2.5 font-medium">이름</th>
-            <th className="w-32 px-4 py-2.5 font-medium">소유자</th>
-            <th className="w-40 px-4 py-2.5 font-medium">그룹</th>
-            <th className="w-24 px-4 py-2.5 font-medium">권한</th>
-            <th className="w-24 px-4 py-2.5 font-medium">크기</th>
-            <th className="w-36 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-24 px-4 py-2.5" />
+            <th className={`${COL.name} px-4 py-2.5 font-medium`}>이름</th>
+            <th className={`${COL.owner} px-4 py-2.5 font-medium`}>소유자</th>
+            <th className={`${COL.group} px-4 py-2.5 font-medium`}>그룹</th>
+            <th className={`${COL.perm} px-4 py-2.5 font-medium`}>권한</th>
+            <th className={`${COL.size} px-4 py-2.5 font-medium`}>크기</th>
+            <th className={`${COL.date} px-4 py-2.5 font-medium`}>수정일</th>
+            <th className={`${COL.actionsOne} px-4 py-2.5`} />
           </tr>
         </thead>
         <tbody>
@@ -190,8 +191,12 @@ function Table(p: ViewProps) {
               <td className="px-4 py-2.5">
                 <PermissionCell f={f} />
               </td>
-              <td className="px-4 py-2.5 text-muted">{f.is_folder ? "-" : formatBytes(f.size)}</td>
-              <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
+              <td className={`px-4 py-2.5 text-muted ${CELL_NOWRAP}`}>
+                {f.is_folder ? "-" : formatBytes(f.size)}
+              </td>
+              <td className={`px-4 py-2.5 text-muted ${CELL_NOWRAP}`}>
+                {formatDateTime(f.updated_at)}
+              </td>
               <td className="px-4 py-2.5">
                 <div
                   className="row-actions flex justify-end"

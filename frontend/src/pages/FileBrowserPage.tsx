@@ -61,6 +61,7 @@ import { subscribeFileEvents } from "@/lib/fileEvents";
 import { useIsNarrow } from "@/lib/media";
 import { folderCountLabel, formatBytes, formatDateTime, roParticle } from "@/lib/format";
 import { permissionCovers, permissionLabel, permissionTone } from "@/lib/labels";
+import { CELL_NOWRAP, COL } from "@/lib/tableCols";
 import { fetchFilePreview } from "@/lib/preview";
 import {
   CARD_ACTIVE_CLASS,
@@ -2077,20 +2078,20 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-token text-left text-xs text-muted">
-            <th className="w-10 px-4 py-2.5">
+            <th className={`${COL.check} px-4 py-2.5`}>
               <SelectCheckbox
                 checked={p.allSelected}
                 label="전체 선택"
                 onToggle={p.onToggleSelectAll}
               />
             </th>
-            <th className="px-4 py-2.5 font-medium">이름</th>
-            <th className="w-32 px-4 py-2.5 font-medium">소유자</th>
-            <th className="w-40 px-4 py-2.5 font-medium">그룹</th>
-            <th className="w-24 px-4 py-2.5 font-medium">권한</th>
-            <th className="w-24 px-4 py-2.5 font-medium">크기</th>
-            <th className="w-36 px-4 py-2.5 font-medium">수정일</th>
-            <th className="w-64 px-4 py-2.5" />
+            <th className={`${COL.name} px-4 py-2.5 font-medium`}>이름</th>
+            <th className={`${COL.owner} px-4 py-2.5 font-medium`}>소유자</th>
+            <th className={`${COL.group} px-4 py-2.5 font-medium`}>그룹</th>
+            <th className={`${COL.perm} px-4 py-2.5 font-medium`}>권한</th>
+            <th className={`${COL.size} px-4 py-2.5 font-medium`}>크기</th>
+            <th className={`${COL.date} px-4 py-2.5 font-medium`}>수정일</th>
+            <th className={`${COL.actions} px-4 py-2.5`} />
           </tr>
         </thead>
         <tbody>
@@ -2208,10 +2209,12 @@ function FileTable({ items, ...p }: { items: FileNode[] } & FileRowProps) {
               <td className="px-4 py-2.5">
                 <PermissionCell f={f} />
               </td>
-              <td className="px-4 py-2.5 text-muted">
+              <td className={`px-4 py-2.5 text-muted ${CELL_NOWRAP}`}>
                 {f.is_folder ? folderCountLabel(f.child_count, "-") : formatBytes(f.size)}
               </td>
-              <td className="px-4 py-2.5 text-muted">{formatDateTime(f.updated_at)}</td>
+              <td className={`px-4 py-2.5 text-muted ${CELL_NOWRAP}`}>
+                {formatDateTime(f.updated_at)}
+              </td>
               <td className="px-4 py-2.5">
                 <div
                   className="row-actions flex justify-end gap-0.5"
