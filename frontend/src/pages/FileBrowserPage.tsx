@@ -14,7 +14,6 @@ import {
   renameFile,
   reuploadFile,
   softDeleteFile,
-  uploadFile,
 } from "@/api/files";
 import { checkPermission, listSharedWithMe } from "@/api/permissions";
 import type { FileNode } from "@/api/types";
@@ -95,6 +94,7 @@ import {
 import {
   preflight,
   runFolderUpload,
+  withRateLimitRetry,
   type PreflightResult,
   type SkippedEntry,
 } from "@/lib/folderUpload";
@@ -677,52 +677,74 @@ export function FileBrowserPage() {
     onDone: () => {},
   });
 
+  /**
+   * 1GB 초과 파일 — 개별 태스크로 남긴다. 청킹·일시정지·재개·취소가 필요한 구간이고,
+   * 파일 하나가 이미 요청 하나 값을 해 배치로 묶을 이득도 없다.
+   *
+   * 세션 개시(POST /files/uploads)는 업로드 rate limit 대상이므로, 큰 파일을 여러 개
+   * 한꺼번에 고른 경우를 위해 429 를 흡수한다. 파트 전송은 한도 밖이라 그대로 둔다.
+   */
+  const startResumableTask = async (file: File) => {
+    const id = ++uploadSeq;
+    setUploads((u) => [...u, { id, name: file.name, percent: 0, status: "uploading" }]);
+    try {
+      const controller = await withRateLimitRetry(() =>
+        startNewResumableUpload(file, parentId, resumableCallbacks(id, file.name)),
+      );
+      patchTask(id, { controller });
+      void controller.start();
+    } catch (err) {
+      const msg = extractErrorMessage(err, "업로드 시작 실패");
+      patchTask(id, { error: msg, status: "error" });
+      toast.error(`${file.name}: ${msg}`);
+    }
+  };
+
+  /**
+   * 여러 파일 선택 · 파일 드롭. 폴더 업로드와 **같은 배치 경로**로 보낸다.
+   *
+   * 예전에는 파일마다 POST /files/upload 를 하나씩 보냈다. 업로드 rate limit 이 user 당
+   * 분당 10회라 11번째 파일부터 429 로 그냥 실패했고(재시도도 없었다), 파일마다 목록
+   * 전체를 다시 읽느라 느리기까지 했다. 폴더 업로드는 애초에 배치로 이 문제를 피해 갔으니,
+   * 같은 파일들을 "폴더로" 끌면 되고 "파일로" 고르면 막히는 상태였다.
+   *
+   * 배치는 200개/56MB 를 요청 하나로 묶고 429 를 Retry-After 만큼 기다렸다 재시도하므로
+   * 한도가 사실상 사라진다.
+   */
   const runUpload = async (files: FileList | File[]) => {
     const list = Array.from(files);
     if (list.length === 0) return;
 
-    for (const file of list) {
-      const id = ++uploadSeq;
-      setUploads((u) => [...u, { id, name: file.name, percent: 0, status: "uploading" }]);
+    // 평평한 목록이라 디렉터리가 없다 — 폴더 트리를 만드는 1단계는 건너뛴다.
+    const plan = preflight({ files: list.map((file) => ({ path: file.name, file })), dirs: [] }, remainingBytes);
 
-      // 1GB 초과: 재개 가능 업로드로 분기(청킹/일시정지/재개/취소).
-      if (file.size > RESUMABLE_THRESHOLD) {
-        try {
-          const controller = await startNewResumableUpload(
-            file,
-            parentId,
-            resumableCallbacks(id, file.name),
-          );
-          patchTask(id, { controller });
-          void controller.start();
-        } catch (err) {
-          const msg = extractErrorMessage(err, "업로드 시작 실패");
-          patchTask(id, { error: msg, status: "error" });
-          toast.error(`${file.name}: ${msg}`);
-        }
-        continue;
-      }
-
-      // 1GB 이하: 기존 단일 업로드 경로.
-      try {
-        await uploadFile(file, parentId, (percent) => patchTask(id, { percent }));
-        patchTask(id, { percent: 100, status: "completed" });
-        notifyUploadSuccess(file.name);
-      } catch (err) {
-        const status = errorStatus(err);
-        const msg =
-          status === 413
-            ? "저장 용량 초과"
-            : status === 409
-              ? "같은 이름의 파일이 있습니다"
-              : status === 403 || status === 404
-                ? "이 폴더에 업로드할 권한이 없습니다"
-                : extractErrorMessage(err, "업로드 실패");
-        patchTask(id, { error: msg, status: "error" });
-        toast.error(`${file.name}: ${msg}`);
-      }
-      await afterUpload();
+    // 용량이 모자라면 보내 봐야 전부 413 이다. 파일 수만큼 토스트를 띄우지 않고 한 번만 알린다.
+    if (plan.quotaShortfall > 0) {
+      toast.error(`저장 용량이 부족합니다 — ${formatBytes(plan.quotaShortfall)}이 더 필요합니다.`);
+      return;
     }
+    if (plan.entries.length === 0) {
+      toast.error("업로드할 수 있는 파일이 없습니다.");
+      if (plan.skipped.length > 0) setFolderFailures(plan.skipped);
+      return;
+    }
+
+    const large = plan.entries.filter((e) => e.file.size > RESUMABLE_THRESHOLD);
+    const small = plan.entries.filter((e) => e.file.size <= RESUMABLE_THRESHOLD);
+    for (const entry of large) void startResumableTask(entry.file);
+
+    if (small.length === 0) {
+      if (plan.skipped.length > 0) setFolderFailures(plan.skipped);
+      return;
+    }
+    await runBatchUpload(
+      {
+        ...plan,
+        entries: small,
+        totalBytes: small.reduce((sum, e) => sum + e.file.size, 0),
+      },
+      small.length === 1 ? (small[0]?.file.name ?? "파일") : `파일 ${small.length}개`,
+    );
   };
 
   // 중단된 세션을 재선택한 파일로 이어올린다(새로고침 후 복구).
@@ -867,15 +889,19 @@ export function FileBrowserPage() {
     const current = folderPlan;
     setFolderPlan(null);
     if (!current) return;
-    const { plan } = current;
+    await runBatchUpload(current.plan, current.plan.entries[0]?.path.split("/")[0] ?? "폴더");
+  };
 
+  /**
+   * 배치 경로로 여러 파일을 올리고 진행률·실패를 **태스크 하나**에 집계한다.
+   * 폴더 업로드와 여러 파일 선택이 공유하는 지점이다(runUpload 주석 참조).
+   */
+  const runBatchUpload = async (plan: PreflightResult, label: string) => {
     const id = ++uploadSeq;
-    const label = plan.entries[0]?.path.split("/")[0] ?? "폴더";
     const total = plan.entries.length;
-    setUploads((u) => [
-      ...u,
-      { id, name: `${label} (0/${total})`, percent: 0, status: "uploading" },
-    ]);
+    // 파일 하나뿐이면 "(0/1)" 이 군더더기다 — 이름만 보여준다.
+    const named = (done: number) => (total > 1 ? `${label} (${done}/${total})` : label);
+    setUploads((u) => [...u, { id, name: named(0), percent: 0, status: "uploading" }]);
 
     let result;
     try {
@@ -884,7 +910,7 @@ export function FileBrowserPage() {
           patchTask(id, {
             percent: plan.totalBytes > 0 ? Math.min(100, Math.round((bytes / plan.totalBytes) * 100)) : 100,
           }),
-        onCount: (done) => patchTask(id, { name: `${label} (${done}/${total})` }),
+        onCount: (done) => patchTask(id, { name: named(done) }),
       });
     } catch (err) {
       const msg = uploadErrorFromException(err);
@@ -898,13 +924,14 @@ export function FileBrowserPage() {
     patchTask(id, {
       percent: 100,
       status: failures.length > 0 ? "error" : "completed",
-      name: `${label} (${result.succeeded}/${total})`,
+      name: named(result.succeeded),
       error: failures.length > 0 ? `${failures.length}개 실패` : undefined,
       failures: failures.length > 0 ? failures : undefined,
     });
 
     if (failures.length === 0) {
-      toast.success(`${result.succeeded}개 파일을 업로드했습니다.`);
+      if (total === 1) notifyUploadSuccess(label);
+      else toast.success(`${result.succeeded}개 파일을 업로드했습니다.`);
     } else if (result.succeeded > 0) {
       toast.error(`${result.succeeded}개 완료 · ${failures.length}개 실패`);
     } else {

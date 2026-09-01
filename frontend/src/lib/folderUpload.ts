@@ -138,7 +138,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * 사용자가 고칠 수 있는 문제가 아니다. rate limit 은 핸들러 진입 전에 걸리므로 재시도가
  * 항목을 중복 생성하지 않는다.
  */
-async function withRateLimitRetry<T>(run: () => Promise<T>): Promise<T> {
+export async function withRateLimitRetry<T>(run: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await run();
