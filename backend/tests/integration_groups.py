@@ -9,7 +9,7 @@
   → 비-owner 삭제 403 → owner 삭제 204 (권한 행 제거 + 파일 group_id NULL)
   → 삭제 그룹 상세 404 / 목록 제외 → audit_logs 기록 확인.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.integration_groups`.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET. `python -m tests.integration_groups`.
 """
 
 from __future__ import annotations

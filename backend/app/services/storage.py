@@ -10,7 +10,7 @@ boto3 클라이언트는 스레드 안전하다(세션은 아니다) — 모듈 
 
 게이트웨이 다운로드 모델(PRD 2.2, 8절): presign_get 은 **내부 전용**(nginx→스토리지, 60초 TTL)
 이며 브라우저에 노출하지 않는다. `to_internal_redirect` 로 presigned URL 을 nginx 의
-`/_minio/` internal location 경로(X-Accel-Redirect 값)로 변환한다(경로 이름은 이력상 이름).
+`/_s3/` internal location 경로(X-Accel-Redirect 값)로 변환한다.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from botocore.exceptions import ClientError
 from app.core.config import settings
 from app.core.metrics import observe_upload_bytes
 
-# nginx `location /_minio/` (internal) 접두어 — X-Accel-Redirect 대상 (PRD 8.1).
-INTERNAL_REDIRECT_PREFIX = "/_minio"
+# nginx `location /_s3/` (internal) 접두어 — X-Accel-Redirect 대상 (PRD 8.1).
+INTERNAL_REDIRECT_PREFIX = "/_s3"
 
 # 내부 presign TTL — nginx↔스토리지 전용, 브라우저 비노출 (PRD 2.2, 10장).
 PRESIGN_TTL_SECONDS = 60
@@ -135,13 +135,13 @@ def make_s3_client(
       S3 호환 서버마다 지원이 들쭉날쭉해, 규격상 필수인 경우에만 보내게 해 호환 폭을 넓힌다.
     - region 은 SigV4 서명에만 쓰인다. SeaweedFS 는 값을 가리지 않는다.
     """
-    use_tls = settings.minio_secure if secure is None else secure
-    host = endpoint or settings.minio_endpoint
+    use_tls = settings.s3_secure if secure is None else secure
+    host = endpoint or settings.s3_endpoint
     return boto3.client(
         "s3",
         endpoint_url=f"{'https' if use_tls else 'http'}://{host}",
-        aws_access_key_id=access_key or settings.minio_access_key,
-        aws_secret_access_key=secret_key or settings.minio_secret_key,
+        aws_access_key_id=access_key or settings.s3_access_key,
+        aws_secret_access_key=secret_key or settings.s3_secret_key,
         region_name="us-east-1",
         config=Config(
             signature_version="s3v4",
@@ -165,9 +165,9 @@ class StorageService:
         bucket: str | None = None,
         secure: bool | None = None,
     ) -> None:
-        self.endpoint = endpoint or settings.minio_endpoint
-        self.bucket = bucket or settings.minio_bucket
-        self.secure = settings.minio_secure if secure is None else secure
+        self.endpoint = endpoint or settings.s3_endpoint
+        self.bucket = bucket or settings.s3_bucket
+        self.secure = settings.s3_secure if secure is None else secure
         self._client = make_s3_client(
             endpoint=self.endpoint,
             access_key=access_key,
@@ -462,10 +462,10 @@ class StorageService:
     # --- X-Accel-Redirect 변환 ---------------------------------------------
 
     def to_internal_redirect(self, presigned_url: str) -> str:
-        """presigned URL 을 nginx `/_minio/` internal 경로로 변환한다 (PRD 2.2, 8.1).
+        """presigned URL 을 nginx `/_s3/` internal 경로로 변환한다 (PRD 2.2, 8.1).
 
         `http://seaweedfs:9000/minidrive/users/1/5?X-Amz-...`
-          → `/_minio/minidrive/users/1/5?X-Amz-...`
+          → `/_s3/minidrive/users/1/5?X-Amz-...`
 
         서명은 Host=seaweedfs:9000 기준으로 계산되고, nginx 가
         `proxy_set_header Host seaweedfs:9000` 으로 동일 Host 를 강제하므로 SigV4 서명이

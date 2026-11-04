@@ -1,14 +1,14 @@
-"""공유 링크 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""공유 링크 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오: admin 부트스트랩 → alice 승인/로그인 → 업로드 → 공유 생성 → 무인증 메타 조회 →
-무인증 다운로드(X-Accel-Redirect + presigned URL 로 MinIO 직접 GET 바이트 일치) →
+무인증 다운로드(X-Accel-Redirect + presigned URL 로 스토리지 직접 GET 바이트 일치) →
 비밀번호 공유(오답 401 / 정답 200) → 만료 공유 410(메타·다운로드) →
 max_downloads 소진 410 → 폴더 공유 ZIP(직접/티켓, max_downloads 422) → 웹 탐색(목록/
 브레드크럼/개별·하위 ZIP 다운로드/미리보기/트리 밖 404/비밀번호 관문) → 없는 URL 404 →
 비활성화(DELETE) 후 즉시 410 차단 → 목록 활성/비활성 탭 필터 + 페이지네이션 →
 공유 있는 파일 영구 삭제 성공(FK 이슈 해결 + shares 행 제거).
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.integration_shares`.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET. `python -m tests.integration_shares`.
 """
 
 from __future__ import annotations
@@ -75,12 +75,12 @@ async def _upload(
     return r.json()["id"]
 
 
-async def _direct_minio_bytes(accel: str) -> bytes:
-    secure = "https" if settings.minio_secure else "http"
-    minio_path = accel[len("/_minio") :]
-    minio_url = f"{secure}://{settings.minio_endpoint}{minio_path}"
+async def _direct_s3_bytes(accel: str) -> bytes:
+    secure = "https" if settings.s3_secure else "http"
+    s3_path = accel[len("/_s3") :]
+    s3_url = f"{secure}://{settings.s3_endpoint}{s3_path}"
     async with httpx.AsyncClient(timeout=60) as raw:
-        got = await raw.get(minio_url)
+        got = await raw.get(s3_url)
     assert got.status_code == 200, f"{got.status_code} {got.text[:200]}"
     return got.content
 
@@ -126,9 +126,9 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         r = await c.post(f"/api/public/shares/{share_url}/download")
         assert r.status_code == 200, r.text
         accel = r.headers.get("X-Accel-Redirect")
-        assert accel and accel.startswith("/_minio/"), accel
+        assert accel and accel.startswith("/_s3/"), accel
         assert r.headers.get("X-Share-Permission") == "download"
-        assert await _direct_minio_bytes(accel) == PAYLOAD
+        assert await _direct_s3_bytes(accel) == PAYLOAD
         _ok("무인증 다운로드 (X-Accel-Redirect + presigned 직접 GET 바이트 일치)")
 
         # download_count 증가 반영
@@ -149,7 +149,7 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         # 무헤더 GET → 바이트 일치
         r = await c.get(ticket_url)
         assert r.status_code == 200, r.text
-        assert await _direct_minio_bytes(r.headers["X-Accel-Redirect"]) == PAYLOAD
+        assert await _direct_s3_bytes(r.headers["X-Accel-Redirect"]) == PAYLOAD
         # 재사용 실패(1회용) + 무효 티켓 404
         assert (await c.get(ticket_url)).status_code == 404
         assert (
@@ -178,7 +178,7 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
 
         r = await c.post(f"/api/public/shares/{pw_url}/download", json={"password": "s3cr3t!"})
         assert r.status_code == 200, r.text
-        assert await _direct_minio_bytes(r.headers["X-Accel-Redirect"]) == PAYLOAD
+        assert await _direct_s3_bytes(r.headers["X-Accel-Redirect"]) == PAYLOAD
         _ok("비밀번호 공유 정답 200 (바이트 일치)")
 
         # --- 읽기 전용 공유: 다운로드 계열 전부 403, 열람은 그대로 -------------
@@ -352,7 +352,7 @@ async def scenario() -> None:  # noqa: C901 - 통합 시나리오 한 흐름
         assert r.status_code == 200, r.text
         accel = r.headers.get("x-accel-redirect")
         assert accel, r.headers
-        assert await _direct_minio_bytes(accel) == PAYLOAD
+        assert await _direct_s3_bytes(accel) == PAYLOAD
         # 하위 폴더 하나만 ZIP 으로.
         r = await c.post(f"/api/public/shares/{fol_url}/files/{sub_id}/download-ticket")
         assert r.status_code == 200, r.text

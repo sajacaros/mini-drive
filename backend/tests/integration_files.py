@@ -1,11 +1,11 @@
-"""파일 서비스 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""파일 서비스 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오: admin 부트스트랩 → alice 승인/로그인 → 10MB 업로드 → 목록/메타 → 다운로드
-(X-Accel-Redirect 헤더 확인 + 해당 presigned URL 로 MinIO 직접 GET 바이트 일치) → 폴더 생성
-→ 이름 변경 → 동명 409 → 소프트 삭제 → 휴지통 → 복구 → 영구 삭제(MinIO 오브젝트 제거 +
+(X-Accel-Redirect 헤더 확인 + 해당 presigned URL 로 스토리지 직접 GET 바이트 일치) → 폴더 생성
+→ 이름 변경 → 동명 409 → 소프트 삭제 → 휴지통 → 복구 → 영구 삭제(스토리지 오브젝트 제거 +
 storage_used 감소) → 할당량 초과 413.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.integration_files`.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET. `python -m tests.integration_files`.
 """
 
 from __future__ import annotations
@@ -99,16 +99,16 @@ async def scenario() -> None:
         r = await c.get(f"/api/files/{file_id}/download", headers=alice_h)
         assert r.status_code == 200, r.text
         accel = r.headers.get("X-Accel-Redirect")
-        assert accel and accel.startswith("/_minio/"), accel
+        assert accel and accel.startswith("/_s3/"), accel
         assert "attachment" in r.headers.get("Content-Disposition", "")
         _ok(f"다운로드 X-Accel-Redirect 헤더 확인 ({accel[:40]}...)")
 
-        # presigned URL 로 MinIO 직접 GET → 바이트 일치
-        secure = "https" if settings.minio_secure else "http"
-        minio_path = accel[len("/_minio") :]  # /minidrive/users/..?X-Amz-..
-        minio_url = f"{secure}://{settings.minio_endpoint}{minio_path}"
+        # presigned URL 로 스토리지 직접 GET → 바이트 일치
+        secure = "https" if settings.s3_secure else "http"
+        s3_path = accel[len("/_s3") :]  # /minidrive/users/..?X-Amz-..
+        s3_url = f"{secure}://{settings.s3_endpoint}{s3_path}"
         async with httpx.AsyncClient(timeout=60) as raw:
-            got = await raw.get(minio_url)
+            got = await raw.get(s3_url)
         assert got.status_code == 200, f"{got.status_code} {got.text[:200]}"
         assert got.content == PAYLOAD, f"len={len(got.content)} vs {len(PAYLOAD)}"
         _ok("presigned URL 직접 GET → 바이트 일치 (10MB)")
@@ -181,7 +181,7 @@ async def scenario() -> None:
         assert r.status_code == 204, r.text
         r = await c.post(f"/api/files/{nested_id}/permanent-delete", headers=alice_h)
         assert r.status_code == 204, r.text
-        # MinIO 오브젝트 제거 확인
+        # 스토리지 오브젝트 제거 확인
         try:
             storage_service.stat(nested_key)
             raise AssertionError("nested 오브젝트가 아직 존재함")
@@ -189,7 +189,7 @@ async def scenario() -> None:
             pass
         # storage_used 감소 (nested = 6 bytes)
         assert await _storage_used(alice_id) == used_before - len(b"nested")
-        _ok("영구 삭제 (MinIO 오브젝트 제거 + storage_used 감소)")
+        _ok("영구 삭제 (스토리지 오브젝트 제거 + storage_used 감소)")
 
         # 휴지통 아닌 항목 영구 삭제 거부 409
         r = await c.post(f"/api/files/{file_id}/permanent-delete", headers=alice_h)

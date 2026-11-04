@@ -13,7 +13,7 @@ active 사용자만 반환한다. rate limit 대상(user 당 20회/분).
 `PUT /api/users/me/password` — 본인 비밀번호 변경. 현재 비밀번호 검증 후 새 비밀번호를
 정책 검증·해싱해 갱신하고, 도용 세션 차단을 위해 전체 refresh 세션을 폐기한다.
 
-`POST/DELETE /api/users/me/avatar` — 본인 프로필 아바타 업로드/삭제(MinIO 저장).
+`POST/DELETE /api/users/me/avatar` — 본인 프로필 아바타 업로드/삭제(스토리지 저장).
 `GET /api/users/{user_id}/avatar` — 아바타 조회(인증 필요, 게이트웨이 스트리밍). 사내
 서비스라 로그인 사용자는 누구든 다른 사용자의 아바타를 볼 수 있다.
 """
@@ -123,7 +123,7 @@ async def upload_my_avatar(
     """본인 프로필 아바타 업로드 (multipart `file`). PNG/JPEG/WEBP, 최대 2MB.
 
     프론트가 클라이언트에서 256x256 로 리사이즈해 올리므로 서버측 이미지 처리는 없다.
-    MinIO `avatars/{userId}` 에 저장(덮어쓰기)하고 avatar_url 을 조회 API 경로로 갱신한다.
+    스토리지 `avatars/{userId}` 에 저장(덮어쓰기)하고 avatar_url 을 조회 API 경로로 갱신한다.
     """
     try:
         avatar_url = await set_avatar(session, get_storage(), current, file)
@@ -134,7 +134,7 @@ async def upload_my_avatar(
 
 @router.delete("/me/avatar", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_my_avatar(current: CurrentUser, session: DbSession) -> Response:
-    """본인 프로필 아바타 삭제 — MinIO 객체 제거(없어도 무시) + avatar_url=NULL. 멱등."""
+    """본인 프로필 아바타 삭제 — 스토리지 객체 제거(없어도 무시) + avatar_url=NULL. 멱등."""
     await clear_avatar(session, get_storage(), current)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -145,7 +145,7 @@ async def get_user_avatar(
 ) -> Response:
     """아바타 조회 (인증 필요, 게이트웨이 스트리밍). 없으면 404.
 
-    파일 다운로드와 동일하게 presigned URL 을 노출하지 않고 X-Accel-Redirect 로 nginx→MinIO
+    파일 다운로드와 동일하게 presigned URL 을 노출하지 않고 X-Accel-Redirect 로 nginx→스토리지
     스트리밍을 유도한다. content-type 은 저장 시 타입을 보존하고, 사설 캐시를 1시간 허용한다.
     사내 서비스라 로그인 사용자는 누구의 아바타든 조회할 수 있다.
     """

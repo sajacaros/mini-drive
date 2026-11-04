@@ -189,7 +189,7 @@ class BoardComment(Base):
 class BoardAttachment(Base):
     """글 첨부. 드라이브 `files` 와 분리되어 개인 할당량을 차감하지 않는다.
 
-    같은 MinIO 버킷을 쓰되 키만 `board/{board_id}/{post_id}/{uuid}` 로 가른다. 삭제는
+    같은 스토리지 버킷을 쓰되 키만 `board/{board_id}/{post_id}/{uuid}` 로 가른다. 삭제는
     **하드**이고 오브젝트 회수를 같은 요청 안에서 끝낸다(spec 「회수는 삭제하는 그 자리에서」).
     """
 

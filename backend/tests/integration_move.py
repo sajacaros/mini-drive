@@ -1,4 +1,4 @@
-"""파일/폴더 이동 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""파일/폴더 이동 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오 (PRD 6.2 POST /api/files/{id}/move):
   A 가 src/dst 폴더 + 파일 구성 → 파일 이동(목록 이동 확인) → 루트로 이동(parent_id=null)
@@ -7,7 +7,7 @@
   → 그룹 read 공유 폴더에서 꺼내오기 차단 / 밀어 넣기 차단 → write 로 승격하면 허용
   → 이동 후 상속 권한이 즉시 반영되는지(권한 캐시 무효화).
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 실행: `python -m tests.integration_move`.
 """
 

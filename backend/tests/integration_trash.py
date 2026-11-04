@@ -1,11 +1,11 @@
-"""휴지통 보존 기간 자동 정리 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""휴지통 보존 기간 자동 정리 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오: alice/bob 준비 → alice 파일 A + 폴더 F(안에 alice 파일 + bob 파일) → 소프트 삭제
 → A 만 기한 초과로 조작 → 정리(A 만 사라지고 F 는 남는다) → dry-run(아무것도 지우지 않음)
 → F 기한 초과 → 정리(하위 포함 제거 + **소유자별** storage_used 회수) → purge 이벤트 발행 확인
 → 보존 기간 0 이면 아무 일도 하지 않음 → 수동 영구 삭제도 이벤트를 발행하는지 확인.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET. `python -m tests.integration_trash`.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET. `python -m tests.integration_trash`.
 """
 
 from __future__ import annotations

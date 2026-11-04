@@ -4,7 +4,7 @@ S3 Multipart Upload 기반 재개 업로드의 세션 상태를 담는다. Redis
 업로드 세션은 대용량 파일이 여러 요청에 걸쳐 수 분~수 시간 이어질 수 있고, 고아 multipart
 정리를 위해 만료 세션을 열거해야 하므로 DB 에 둔다(진실 소스는 여전히 PostgreSQL).
 
-업로드된 파트의 etag/크기는 여기 저장하지 않는다 — 스테이징된 파트의 진실 소스는 MinIO
+업로드된 파트의 etag/크기는 여기 저장하지 않는다 — 스테이징된 파트의 진실 소스는 스토리지
 (`list_parts`)이고, 재개/완료 시 그로부터 재구성한다. 이 행은 세션 메타데이터만 보관한다.
 
 `file_id` 의미 (kind 에 따라 다름):
@@ -49,7 +49,7 @@ class UploadSession(Base):
     # 'new' 일 때 대상 부모 폴더(None=루트). 'version' 은 사용하지 않음.
     parent_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
-    # multipart 대상 오브젝트 키 + MinIO 업로드 ID.
+    # multipart 대상 오브젝트 키 + 스토리지 업로드 ID.
     object_key: Mapped[str] = mapped_column(String(500), nullable=False)
     upload_id: Mapped[str] = mapped_column(String(255), nullable=False)
 

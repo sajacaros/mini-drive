@@ -1,11 +1,11 @@
-"""프로필 아바타 서비스 — 업로드/삭제/조회 (MinIO 저장).
+"""프로필 아바타 서비스 — 업로드/삭제/조회 (스토리지 저장).
 
 아바타는 사용자당 하나이며 오브젝트 키 `avatars/{userId}` 에 저장한다(덮어쓰기). 프론트가
 클라이언트에서 256x256 로 리사이즈해 올리므로 서버측 이미지 처리는 하지 않는다(Pillow 등
 신규 의존성 없음) — content-type/크기만 검증한다.
 
 조회는 파일 다운로드와 동일한 게이트웨이 모델(PRD 2.2)을 쓴다: presigned URL 을 브라우저에
-노출하지 않고 X-Accel-Redirect 로 nginx→MinIO 스트리밍을 유도한다.
+노출하지 않고 X-Accel-Redirect 로 nginx→스토리지 스트리밍을 유도한다.
 """
 
 from __future__ import annotations
@@ -70,9 +70,9 @@ def _upload_size(upload: UploadFile) -> int:
 async def set_avatar(
     session: AsyncSession, storage: StorageService, user: User, upload: UploadFile
 ) -> str:
-    """아바타를 MinIO 에 저장하고 users.avatar_url 을 API 경로로 갱신한다.
+    """아바타를 스토리지에 저장하고 users.avatar_url 을 API 경로로 갱신한다.
 
-    흐름: 검증 → MinIO put(content-type 보존, 기존 것 덮어쓰기) → avatar_url 갱신 → commit.
+    흐름: 검증 → 스토리지 put(content-type 보존, 기존 것 덮어쓰기) → avatar_url 갱신 → commit.
     avatar_url 에는 조회 API 경로 `/api/users/{userId}/avatar?v={epoch}` 를 저장한다(캐시 무효화).
     반환: 저장된 avatar_url.
     """
@@ -97,7 +97,7 @@ async def set_avatar(
 async def clear_avatar(
     session: AsyncSession, storage: StorageService, user: User
 ) -> None:
-    """아바타를 삭제한다 — MinIO 객체 제거(없어도 무시) + avatar_url=NULL. 멱등."""
+    """아바타를 삭제한다 — 스토리지 객체 제거(없어도 무시) + avatar_url=NULL. 멱등."""
     await _safe_delete_object(storage, build_avatar_key(user.id))
     user.avatar_url = None
     await session.commit()

@@ -75,7 +75,7 @@ ComponentStatus = Literal["ok", "error"]
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     database: ComponentStatus
-    minio: ComponentStatus
+    storage: ComponentStatus
     redis: ComponentStatus
 
 
@@ -96,8 +96,7 @@ async def _check_redis() -> ComponentStatus:
         return "error"
 
 
-async def _check_minio() -> ComponentStatus:
-    # 응답 키 이름 "minio" 는 /health 계약이라 유지한다(값은 SeaweedFS 를 본다).
+async def _check_storage() -> ComponentStatus:
     def _probe() -> bool:
         # 버킷 HEAD 한 번으로 연결/자격증명/버킷 존재를 함께 검증한다. 공유 클라이언트를 쓴다.
         if not storage_service.bucket_exists():
@@ -112,17 +111,17 @@ async def _check_minio() -> ComponentStatus:
 
 
 async def health() -> HealthResponse:
-    """DB / MinIO / Redis 연결 상태를 확인한다 (PRD 11절)."""
-    database, redis_state, minio_state = await asyncio.gather(
+    """DB / 오브젝트 스토리지 / Redis 연결 상태를 확인한다 (PRD 11절)."""
+    database, redis_state, storage_state = await asyncio.gather(
         _check_database(),
         _check_redis(),
-        _check_minio(),
+        _check_storage(),
     )
-    overall = "ok" if all(s == "ok" for s in (database, redis_state, minio_state)) else "degraded"
+    overall = "ok" if all(s == "ok" for s in (database, redis_state, storage_state)) else "degraded"
     return HealthResponse(
         status=overall,
         database=database,
-        minio=minio_state,
+        storage=storage_state,
         redis=redis_state,
     )
 

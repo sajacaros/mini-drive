@@ -160,4 +160,4 @@ class TestPresign:
         url = svc.presign_get("users/1/5", ttl=60)
         assert url.startswith("http://seaweedfs:9000/b/users/1/5?")
         assert "X-Amz-Signature=" in url
-        assert svc.to_internal_redirect(url).startswith("/_minio/b/users/1/5?")
+        assert svc.to_internal_redirect(url).startswith("/_s3/b/users/1/5?")

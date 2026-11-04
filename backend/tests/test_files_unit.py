@@ -1,6 +1,6 @@
-"""파일 서비스 단위 테스트 (DB/MinIO 불필요).
+"""파일 서비스 단위 테스트 (DB/스토리지 불필요).
 
-키 생성 규약, presign→/_minio/ 변환, 권한 관문, Content-Disposition 인코딩을 검증한다.
+키 생성 규약, presign→/_s3/ 변환, 권한 관문, Content-Disposition 인코딩을 검증한다.
 """
 
 from __future__ import annotations
@@ -53,22 +53,22 @@ class TestInternalRedirect:
         url = "http://seaweedfs:9000/minidrive/users/1/5?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
         out = svc.to_internal_redirect(url)
         assert out == (
-            "/_minio/minidrive/users/1/5"
+            "/_s3/minidrive/users/1/5"
             "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
         )
 
     def test_no_query(self) -> None:
         svc = self._svc()
         assert svc.to_internal_redirect("http://seaweedfs:9000/minidrive/users/1/5") == (
-            "/_minio/minidrive/users/1/5"
+            "/_s3/minidrive/users/1/5"
         )
 
     def test_internal_path_is_not_browser_facing_host(self) -> None:
-        # 변환 결과에 MinIO 엔드포인트/스킴이 남지 않아야 한다.
+        # 변환 결과에 스토리지 엔드포인트/스킴이 남지 않아야 한다.
         svc = self._svc()
         out = svc.to_internal_redirect("http://seaweedfs:9000/minidrive/a?b=c")
         assert "seaweedfs:9000" not in out
-        assert out.startswith("/_minio/")
+        assert out.startswith("/_s3/")
 
 
 class TestEnsureFileAccess:

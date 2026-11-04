@@ -40,13 +40,13 @@ class Settings(BaseSettings):
     # PostgreSQL (asyncpg)
     database_url: str = "postgresql+asyncpg://postgres:password@db:5432/minidrive"
 
-    # S3 호환 오브젝트 스토리지 — 서버는 SeaweedFS(2026-11 MinIO 에서 전환). 이름 minio_* 는
-    # 기존 .env(MINIO_*) 호환을 위해 유지한다. 클라이언트는 boto3(services/storage.py).
-    minio_endpoint: str = "seaweedfs:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "change-me-in-production"
-    minio_bucket: str = "minidrive"
-    minio_secure: bool = False
+    # S3 호환 오브젝트 스토리지 — 서버는 SeaweedFS(2026-11 MinIO 에서 전환), 클라이언트는 boto3
+    # (services/storage.py). 2026-11 전 환경변수 이름은 MINIO_* 였다.
+    s3_endpoint: str = "seaweedfs:9000"
+    s3_access_key: str = "s3admin"
+    s3_secret_key: str = "change-me-in-production"
+    s3_bucket: str = "minidrive"
+    s3_secure: bool = False
 
     # JWT
     jwt_secret: str = "change-me-in-production"
@@ -172,7 +172,7 @@ class Settings(BaseSettings):
             name
             for name, value in (
                 ("JWT_SECRET", self.jwt_secret),
-                ("MINIO_SECRET_KEY", self.minio_secret_key),
+                ("S3_SECRET_KEY", self.s3_secret_key),
                 ("DATABASE_URL", self.database_url),
             )
             if PLACEHOLDER_SECRET in value

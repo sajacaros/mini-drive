@@ -39,7 +39,7 @@ cp .env.deploy.example .env && chmod 600 .env
 # BASE_PATH=/drive/ 확인하고, 아래 셋은 강한 랜덤값으로 교체:
 openssl rand -hex 32   # JWT_SECRET
 openssl rand -hex 24   # POSTGRES_PASSWORD
-openssl rand -hex 24   # MINIO_ROOT_PASSWORD
+openssl rand -hex 24   # S3_SECRET_KEY
 ```
 
 ### 0-3. 스택 기동
@@ -200,8 +200,13 @@ $DC --profile tools run --rm --no-deps --user "$(id -u):$(id -g)" \
 
 ### MinIO → SeaweedFS 전환 (2026-11, 1회)
 오브젝트 스토리지가 MinIO 에서 SeaweedFS 로 바뀌었다. 새 볼륨(`seaweedfs_data`)으로 뜨므로 **기존
-`minio_data` 의 객체는 자동으로 옮겨지지 않는다.** `.env` 는 그대로 쓴다(`MINIO_ROOT_USER/PASSWORD`
-가 SeaweedFS 의 S3 키가 된다).
+`minio_data` 의 객체는 자동으로 옮겨지지 않는다.**
+
+**`.env` 키 이름도 바꿔야 한다** — 값은 그대로 두고 이름만:
+```bash
+sed -i 's/^MINIO_ROOT_USER=/S3_ACCESS_KEY=/; s/^MINIO_ROOT_PASSWORD=/S3_SECRET_KEY=/; s/^MINIO_BUCKET=/S3_BUCKET=/' .env
+```
+안 바꾸면 S3 키가 빈 값으로 들어가 backend 가 운영 시크릿 검사에서 뜨지 않는다.
 
 - **데이터를 버려도 되는 서버:** `$DC up -d --remove-orphans` 후 DB 도 비운다(객체 없는 파일 행이
   남지 않게) — `$DC down -v` 로 볼륨째 지우고 다시 올리는 게 가장 깔끔하다.

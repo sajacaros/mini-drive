@@ -1,4 +1,4 @@
-"""드라이브 UX(Phase 8) 통합 검증 — 즐겨찾기·최근 항목·SSE 이벤트 (실 postgres+redis+minio).
+"""드라이브 UX(Phase 8) 통합 검증 — 즐겨찾기·최근 항목·SSE 이벤트 (실 postgres+redis+seaweedfs).
 
 시나리오:
   A/B 가입 → A 파일 업로드
@@ -9,7 +9,7 @@
   [SSE] 채널 구독 상태에서 폴더 생성 → 발행 이벤트 1건 수신(payload 검증)
         + 권한 필터(user_can_receive_event): 타인 비공개 파일 차단 → 권한 부여 후 통과
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 실행: `python -m tests.integration_drive_ux`.
 """
 

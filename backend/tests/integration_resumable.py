@@ -1,4 +1,4 @@
-"""재개 가능 업로드(S3 Multipart) 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""재개 가능 업로드(S3 Multipart) 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 Phase 5-2 시나리오:
   - 새 파일 다청크 업로드 완료 → 내용 무결성(다운로드 바이트 일치), 목록 노출, 세션 소멸.
@@ -9,7 +9,7 @@ Phase 5-2 시나리오:
   - 할당량 초과: 개시 소프트 거부(413) + 완료 원자적 거부(413) 후 세션 폐기.
   - abort 후 세션 무효(404).
 
-env: DATABASE_URL / REDIS_URL / MINIO_* + RESUMABLE_PART_SIZE=5242880(테스트는 5MiB 청크).
+env: DATABASE_URL / REDIS_URL / S3_* + RESUMABLE_PART_SIZE=5242880(테스트는 5MiB 청크).
 실행: `python -m tests.integration_resumable`.
 """
 
@@ -63,10 +63,10 @@ async def _reset() -> None:
     storage_service.delete_many(leftover)
 
 
-async def _fetch_minio(accel: str) -> httpx.Response:
-    secure = "https" if settings.minio_secure else "http"
-    minio_path = accel[len("/_minio") :]
-    url = f"{secure}://{settings.minio_endpoint}{minio_path}"
+async def _fetch_s3(accel: str) -> httpx.Response:
+    secure = "https" if settings.s3_secure else "http"
+    s3_path = accel[len("/_s3") :]
+    url = f"{secure}://{settings.s3_endpoint}{s3_path}"
     async with httpx.AsyncClient(timeout=120) as raw:
         return await raw.get(url)
 
@@ -93,7 +93,7 @@ async def _download_bytes(
     r = await c.get(f"/api/files/{file_id}/download", headers=h)
     assert r.status_code == 200, r.text
     accel = r.headers["X-Accel-Redirect"]
-    got = await _fetch_minio(accel)
+    got = await _fetch_s3(accel)
     assert got.status_code == 200, got.status_code
     return got.content
 
@@ -105,7 +105,7 @@ async def _download_version_bytes(
         f"/api/files/{file_id}/versions/{version}/download", headers=h
     )
     assert r.status_code == 200, r.text
-    got = await _fetch_minio(r.headers["X-Accel-Redirect"])
+    got = await _fetch_s3(r.headers["X-Accel-Redirect"])
     assert got.status_code == 200, got.status_code
     return got.content
 

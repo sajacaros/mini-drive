@@ -1108,4 +1108,5 @@ Phase 7 설계 당시 Karpathy 의 LLM Wiki 패턴(2026-04 gist)을 권한 경�
 | 2026-07-19 | 구현 현행화: 델타 동기화 범위 제외(3.5), 가입 승인제→가입 코드제 전환(3.1, 5.11, 10장), 첫 admin 부트스트랩을 셋업 위저드로 대체(3.6.2, 5.12), setup·signup-codes API(6.1, 6.7), 마일스톤 상태 반영(Phase 1~5 완료, Phase 6 진행 중) |
 | 2026-11-04 | 오브젝트 스토리지 MinIO → **SeaweedFS 4.47** 전환(MinIO 커뮤니티판 지원 종료). 앱 코드는 표준 S3 API 만 써서 변경 없음 — compose 서비스·nginx upstream·버킷 초기화(`weed shell s3.bucket.create`)·백업 도구(`mc mirror` → `rclone sync`)만 교체. 설정 이름 `MINIO_*`·내부 경로 `/_minio/` 는 호환을 위해 유지. 본문의 compose/nginx 예시(7·8장)는 작성 당시 기록이다 |
 | 2026-11-04 | S3 클라이언트 minio-py → **boto3** 전환. 멀티파트가 SDK 비공개 메서드 의존에서 공개 API 로, 5 GiB 초과 서버측 복사(버전 스냅샷)도 관리형 multipart copy 로 가능해졌다. 호출부는 `ObjectNotFoundError`·`ObjectStat` 만 안다 |
+| 2026-11-04 | MinIO 잔재 이름 정리: 환경변수 `MINIO_*` → `S3_*`(`.env` 는 `S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`), 내부 경로 `/_minio/` → `/_s3/`, `/health` 응답 키 `minio` → `storage`. 기존 서버는 `.env` 키 이름을 바꿔야 한다(deploy/DEPLOY.md) |
 | 2026-07-21 | 문서 역할 전환(명세 → 설계 근거 기록). Phase 7 잔재를 스텁으로 축약(3.7, 5.13~5.16, 6.8~6.9, 13.3 및 4·10·12·14장 LLM 항목 삭제), Phase 6 완료·Phase 8 반영, PRD 이후 구현 기록 추가(3.8, 3.8.1, 5.17, 6.10, 9장). `spec/wiki-v2-redesign.md` 삭제 |

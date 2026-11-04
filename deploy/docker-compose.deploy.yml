@@ -22,12 +22,12 @@ x-logging: &default-logging
 # backend 와 사이드카들(purger·wiki-indexer)이 공유하는 환경. 새 변수는 여기 한 곳에만.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-minidrive}
-  # 설정 이름은 MINIO_* 그대로(SDK·기존 .env 호환) — 값은 SeaweedFS 를 본다.
-  MINIO_ENDPOINT: seaweedfs:9000
-  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
-  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-  MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
-  MINIO_SECURE: "false"
+  # 오브젝트 스토리지(SeaweedFS S3). 클라이언트는 boto3(services/storage.py).
+  S3_ENDPOINT: seaweedfs:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+  S3_BUCKET: ${S3_BUCKET:-minidrive}
+  S3_SECURE: "false"
   JWT_SECRET: ${JWT_SECRET}
   JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
   REDIS_URL: redis://redis:6379/0
@@ -65,7 +65,7 @@ services:
     ports:
       - "127.0.0.1:7755:80"
     volumes:
-      # 리포 루트의 기존 HTTP 게이트웨이 설정을 그대로 재사용(listen 80, /api·/_minio·/).
+      # 리포 루트의 기존 HTTP 게이트웨이 설정을 그대로 재사용(listen 80, /api·/_s3·/).
       - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ../nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on:
@@ -184,8 +184,8 @@ services:
       - "9000"
     environment:
       # 유일한 관리자 identity — 있으면 익명 요청은 403 (게이트웨이 모델 전제, PRD 7).
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
     volumes:
       - seaweedfs_data:/data
     healthcheck:
@@ -209,9 +209,9 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${MINIO_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${MINIO_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
+      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${S3_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${S3_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
       do sleep 2; done;
-      echo 'SeaweedFS 초기화 완료: 버킷 ${MINIO_BUCKET:-minidrive} 준비';
+      echo 'SeaweedFS 초기화 완료: 버킷 ${S3_BUCKET:-minidrive} 준비';
       "
     networks:
       - minidrive
@@ -226,8 +226,8 @@ services:
       RCLONE_CONFIG_S3_TYPE: s3
       RCLONE_CONFIG_S3_PROVIDER: SeaweedFS
       RCLONE_CONFIG_S3_ENDPOINT: http://seaweedfs:9000
-      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
       # 설정 파일이 없다는 NOTICE 를 끈다(위 환경변수가 전부다).
       RCLONE_CONFIG: /dev/null
     networks:

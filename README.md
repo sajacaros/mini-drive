@@ -91,7 +91,7 @@
 ```
 브라우저 ─▶ nginx(게이트웨이, :80) ─┬─▶ /        → frontend (React SPA)
                                     ├─▶ /api/    → backend (FastAPI)
-                                    └─▶ /_minio/ → SeaweedFS S3 (X-Accel-Redirect 내부 전용)
+                                    └─▶ /_s3/ → SeaweedFS S3 (X-Accel-Redirect 내부 전용)
                                                     backend ─▶ PostgreSQL / Redis / SeaweedFS
 
 사이드카(같은 이미지, entrypoint 만 다름)
@@ -106,8 +106,7 @@
     backend 가 스트리밍 주체가 됩니다. 인가는 티켓 발급·소비 두 번 판정하고, 개수·용량 상한은 첫
     바이트 전에 확정합니다.
 - **스토리지 익명 접근 완전 차단**이 이 모델의 전제입니다. SeaweedFS 는 S3 identity 가 하나라도 있으면
-  익명 요청을 403 으로 막습니다 — compose 가 `MINIO_ROOT_USER/PASSWORD` 로 그 identity 를 만듭니다.
-  (설정 이름 `MINIO_*` 와 내부 경로 `/_minio/` 는 MinIO 시절 이름을 호환 때문에 그대로 둔 것입니다.)
+  익명 요청을 403 으로 막습니다 — compose 가 `S3_ACCESS_KEY/S3_SECRET_KEY` 로 그 identity 를 만듭니다.
 - **backend 는 호스트 포트를 열지 않습니다.** 모든 트래픽이 nginx 를 지납니다.
 - **경로를 이미지에 굽지 않습니다**: 프론트는 `base=/__BASE__/` 로 빌드하고 기동 시 `BASE_PATH` 로
   치환합니다. 같은 이미지가 로컬(`/`)과 서버(`/drive/`)에서 재빌드 없이 돕니다.
@@ -177,7 +176,7 @@ Solar-Open2-250B 가 다음 한 수를 고른다  ◀─────────
 ```bash
 cp .env.example .env               # 시크릿을 실제 값으로 교체
 docker compose up -d --build
-curl http://localhost:7400/health  # {"status":"ok","database":"ok","minio":"ok","redis":"ok"}
+curl http://localhost:7400/health  # {"status":"ok","database":"ok","storage":"ok","redis":"ok"}
 ```
 
 - 웹 UI <http://localhost:7400/> · API 문서 <http://localhost:7400/api/docs>

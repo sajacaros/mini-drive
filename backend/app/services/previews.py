@@ -2,7 +2,7 @@
 
 미리보기는 다운로드와 달리 브라우저가 **인라인 렌더**하도록 유도한다. 지원 타입별 전략:
 
-  - image/*, application/pdf → 게이트웨이 모델(X-Accel-Redirect)로 nginx→MinIO 인라인 스트리밍.
+  - image/*, application/pdf → 게이트웨이 모델(X-Accel-Redirect)로 nginx→스토리지 인라인 스트리밍.
     브라우저가 네이티브로 렌더하며 backend 는 바이트를 적재하지 않는다(대용량 안전).
   - 텍스트 계열(text/*, application/json, csv, xml, javascript 등) → backend 가 앞부분 최대 1MiB 만
     범위 요청으로 읽어 인라인 본문으로 반환한다. 1MiB 초과 원본은 앞부분만 잘라 주고

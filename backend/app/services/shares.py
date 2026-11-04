@@ -2,7 +2,7 @@
 
 게이트웨이 모델(PRD 2.2)이므로 공개 접근은 매 요청 DB 로 검증한다 — 비활성화/만료/횟수
 초과가 즉시 반영된다. presigned URL 은 브라우저에 노출하지 않고, X-Accel-Redirect 로 nginx→
-MinIO 스트리밍을 유도한다(라우트에서 gateway_download_response 로 응답).
+스토리지 스트리밍을 유도한다(라우트에서 gateway_download_response 로 응답).
 
 폴더 공유는 방문자가 웹에서 트리를 탐색하고(목록/개별 미리보기/개별 다운로드), 전체 또는
 하위 폴더를 스트리밍 ZIP 으로 받을 수 있다(archives 재사용). 접근 판정은 방문자가 아니라
@@ -314,7 +314,7 @@ async def consume_download_quota(session: AsyncSession, share: Share) -> None:
 async def presign_share_file(
     storage: StorageService, file: File
 ) -> tuple[str, str, str]:
-    """단일 파일 공유의 스트리밍 준비 — 내부 presign(60s)을 nginx `/_minio/` 경로로 변환.
+    """단일 파일 공유의 스트리밍 준비 — 내부 presign(60s)을 nginx `/_s3/` 경로로 변환.
 
     반환: (internal_redirect, filename, mime). 인가·횟수 소모는 호출자가 끝냈어야 한다.
     """

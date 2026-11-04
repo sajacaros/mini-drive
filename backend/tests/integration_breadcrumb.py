@@ -1,4 +1,4 @@
-"""폴더 breadcrumb API 통합 검증 — GET /api/files/{id}/breadcrumb (실 postgres+redis+minio).
+"""폴더 breadcrumb API 통합 검증 — GET /api/files/{id}/breadcrumb (실 postgres+redis+seaweedfs).
 
 폴더 URL(/f/:id)로 새로고침·링크 진입했을 때 화면이 상위로 올라갈 길을 세울 수 있어야 한다.
 핵심은 **열 수 있는 조상만 담는다**는 것이다 — 남의 드라이브 폴더를 crumb 으로 보여주면
@@ -16,7 +16,7 @@
   [공유루트] B 가 "2026" 자체 조회       → crumbs 1칸, shared=true
   [조상소유] B 가 A 의 폴더 안에 만든 항목을 A 가 조회 → shared=false (내 드라이브 경로)
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 실행: `python -m tests.integration_breadcrumb`.
 """
 

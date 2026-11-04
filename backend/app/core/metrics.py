@@ -39,7 +39,7 @@ http_request_duration_seconds = Histogram(
 
 upload_bytes_total = Counter(
     "minidrive_upload_bytes_total",
-    "MinIO 로 저장된 업로드 바이트 누적",
+    "스토리지로 저장된 업로드 바이트 누적",
 )
 
 download_bytes_total = Counter(

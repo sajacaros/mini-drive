@@ -29,7 +29,7 @@ fi
 
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-minidrive}"
-MINIO_BUCKET="${MINIO_BUCKET:-minidrive}"
+S3_BUCKET="${S3_BUCKET:-minidrive}"
 RETENTION="${BACKUP_RETENTION:-7}"
 
 DC="docker compose"
@@ -56,12 +56,12 @@ log "PostgreSQL 덤프 완료 ($DB_SIZE)"
 # ── 2) 오브젝트 버킷 미러 ─────────────────────────────
 # compose 의 rclone 도구 서비스(profiles: tools)를 스택 네트워크에 붙여 버킷을 호스트 마운트로
 # 미러한다. --user 로 산출물을 호스트 사용자 소유로 만들어 보존 정리(rm)가 가능하게 한다.
-# 자격 증명은 compose 가 .env 의 MINIO_ROOT_USER/PASSWORD 로 rclone 환경에 넣는다.
-log "오브젝트 버킷 미러(rclone sync s3:$MINIO_BUCKET) ..."
+# 자격 증명은 compose 가 .env 의 S3_ACCESS_KEY/PASSWORD 로 rclone 환경에 넣는다.
+log "오브젝트 버킷 미러(rclone sync s3:$S3_BUCKET) ..."
 $DC --profile tools run --rm --no-deps -T \
     --user "$(id -u):$(id -g)" \
     -v "$BACKUP_DIR/objects:/backup" \
-    rclone sync "s3:$MINIO_BUCKET" /backup
+    rclone sync "s3:$S3_BUCKET" /backup
 OBJ_SIZE="$(du -sh "$BACKUP_DIR/objects" | cut -f1)"
 log "오브젝트 미러 완료 ($OBJ_SIZE)"
 
@@ -71,7 +71,7 @@ mini-drive backup
 timestamp:   $TIMESTAMP
 created_at:  $(date -Iseconds)
 postgres_db: $POSTGRES_DB (pg_dump custom format → postgres.dump)
-bucket:      $MINIO_BUCKET (rclone sync → objects/)
+bucket:      $S3_BUCKET (rclone sync → objects/)
 db_size:     $DB_SIZE
 objects_size:$OBJ_SIZE
 EOF

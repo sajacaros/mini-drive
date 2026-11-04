@@ -1,4 +1,4 @@
-"""그룹 게시판 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""그룹 게시판 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오 (spec/group-board.md):
   admin 게시판 생성 → 비관리자 생성 403 / 이름 중복 409
@@ -6,13 +6,13 @@
   → read 그룹은 글쓰기 403 / 읽기는 200 → 무관한 사용자는 404
   → 글 작성·수정(작성자만)·목록 → 댓글(write 필요, 삭제 후 자리 남음)
   → 첨부 상한(개수 409 / 크기 413) → 다운로드 X-Accel-Redirect
-  → 글 삭제 시 MinIO 오브젝트가 **그 자리에서** 사라진다
+  → 글 삭제 시 스토리지 오브젝트가 **그 자리에서** 사라진다
   → admin 은 읽고 남의 글을 지울 수 있으나 쓰지는 못한다
   → 그룹 회수 시 **작성자 본인도** 404 → 재부여 시 글이 그대로 돌아온다
   → @전사 시스템 그룹 할당은 멤버십 없이도 통한다
   → 게시판 삭제(소프트) + 하위 첨부 회수 → audit_logs 기록 확인.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 
 **RATE_LIMIT_ENABLED=false 로 돌린다.** 사용자를 4명 만드는데 가입은 IP 당 3회/분이라, 켠 채로
 돌리면 네 번째 가입이 429 로 죽는다. 앱을 in-process(ASGITransport)로 띄우므로 이 프로세스의
@@ -359,7 +359,7 @@ async def scenario() -> None:  # noqa: C901 - 순차 시나리오
         )
         assert r.status_code == 200, r.text
         accel = r.headers.get("X-Accel-Redirect")
-        assert accel and accel.startswith("/_minio/"), accel
+        assert accel and accel.startswith("/_s3/"), accel
         r = await c.get(
             f"/api/boards/{board_id}/posts/{post_id}/attachments/{aid}/download",
             headers=dave_h,

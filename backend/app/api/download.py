@@ -4,8 +4,8 @@
 (`/api/public/shares/{shareUrl}/download`)가 동일한 X-Accel-Redirect 응답 패턴을
 공유하므로, 라우트별 중복 없이 여기 한 곳에서 만든다.
 
-presigned URL 은 브라우저에 노출하지 않고(PRD 2.2), 서비스 계층이 nginx `/_minio/`
-internal 경로로 변환한 값을 `X-Accel-Redirect` 헤더로 넘겨 nginx→MinIO 스트리밍을 유도한다.
+presigned URL 은 브라우저에 노출하지 않고(PRD 2.2), 서비스 계층이 nginx `/_s3/`
+internal 경로로 변환한 값을 `X-Accel-Redirect` 헤더로 넘겨 nginx→스토리지 스트리밍을 유도한다.
 """
 
 from __future__ import annotations

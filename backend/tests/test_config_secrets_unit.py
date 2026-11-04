@@ -19,7 +19,7 @@ from app.core.config import (
 _STRONG_JWT = "x" * MIN_JWT_SECRET_BYTES
 _SAFE = {
     "jwt_secret": _STRONG_JWT,
-    "minio_secret_key": "minio-secret-value",
+    "s3_secret_key": "s3-secret-value",
     "database_url": "postgresql+asyncpg://u:p@db:5432/minidrive",
 }
 
@@ -44,9 +44,9 @@ class TestProductionGuard:
         with pytest.raises(InsecureSecretError, match="JWT_SECRET"):
             _settings(environment="production", jwt_secret=PLACEHOLDER_SECRET)
 
-    def test_placeholder_minio_secret_rejected(self) -> None:
-        with pytest.raises(InsecureSecretError, match="MINIO_SECRET_KEY"):
-            _settings(environment="production", minio_secret_key=PLACEHOLDER_SECRET)
+    def test_placeholder_s3_secret_rejected(self) -> None:
+        with pytest.raises(InsecureSecretError, match="S3_SECRET_KEY"):
+            _settings(environment="production", s3_secret_key=PLACEHOLDER_SECRET)
 
     def test_placeholder_in_database_url_rejected(self) -> None:
         with pytest.raises(InsecureSecretError, match="DATABASE_URL"):
@@ -61,10 +61,10 @@ class TestProductionGuard:
             _settings(
                 environment="production",
                 jwt_secret=PLACEHOLDER_SECRET,
-                minio_secret_key=PLACEHOLDER_SECRET,
+                s3_secret_key=PLACEHOLDER_SECRET,
             )
         assert "JWT_SECRET" in str(exc.value)
-        assert "MINIO_SECRET_KEY" in str(exc.value)
+        assert "S3_SECRET_KEY" in str(exc.value)
 
     def test_short_jwt_secret_rejected(self) -> None:
         """placeholder 만 피한 짧은 키도 같은 문제를 남긴다 (RFC 7518 3.2)."""

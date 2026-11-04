@@ -46,7 +46,7 @@ if [ -f "$ROOT_DIR/.env" ]; then
 fi
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-minidrive}"
-MINIO_BUCKET="${MINIO_BUCKET:-minidrive}"
+S3_BUCKET="${S3_BUCKET:-minidrive}"
 
 DC="docker compose"
 
@@ -60,7 +60,7 @@ if [ "$ASSUME_YES" != "yes" ]; then
     printf '  다음 백업으로 현재 스택을 복원합니다(기존 데이터 대체):\n'
     printf '    백업:   %s\n' "$BACKUP_DIR"
     printf '    DB:     %s\n' "$POSTGRES_DB"
-    printf '    버킷:   %s\n' "$MINIO_BUCKET"
+    printf '    버킷:   %s\n' "$S3_BUCKET"
     printf '\n'
     printf '  계속하려면 "yes" 를 입력하세요: '
     read -r reply
@@ -75,10 +75,10 @@ log "PostgreSQL 복원 완료."
 
 # ── 2) 오브젝트 버킷 복원 ─────────────────────────────
 # 버킷은 seaweedfs-init 이 스택 기동 때 만들어 둔다.
-log "오브젝트 버킷 복원(rclone sync → s3:$MINIO_BUCKET) ..."
+log "오브젝트 버킷 복원(rclone sync → s3:$S3_BUCKET) ..."
 $DC --profile tools run --rm --no-deps -T \
     -v "$OBJ_DIR:/backup:ro" \
-    rclone sync /backup "s3:$MINIO_BUCKET"
+    rclone sync /backup "s3:$S3_BUCKET"
 log "오브젝트 버킷 복원 완료."
 
 log "복원 완료: $BACKUP_DIR"

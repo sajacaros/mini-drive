@@ -693,9 +693,9 @@ async def upload_file(
 ) -> File:
     """스트리밍 업로드 (PRD 3.2, 5.10).
 
-    흐름: 할당량 원자적 선점 → files 행 생성(current_version=1) → MinIO put →
+    흐름: 할당량 원자적 선점 → files 행 생성(current_version=1) → 스토리지 put →
     file_versions v1 기록 → commit. 실패 시 트랜잭션 롤백으로 할당량 선점까지 취소하고,
-    기록됐을 수 있는 MinIO 오브젝트는 best-effort 로 정리한다.
+    기록됐을 수 있는 스토리지 오브젝트는 best-effort 로 정리한다.
     """
     filename = (upload.filename or "untitled").strip() or "untitled"
     size = _upload_size(upload)
@@ -744,7 +744,7 @@ async def upload_file(
     )
     await session.flush()
 
-    # 3) MinIO 스트리밍 저장 — 실패 시 트랜잭션/오브젝트 롤백.
+    # 3) 스토리지 스트리밍 저장 — 실패 시 트랜잭션/오브젝트 롤백.
     await upload.seek(0)
     try:
         await storage.put_async(file_key, upload.file, size, mime)
@@ -791,7 +791,7 @@ async def _safe_delete_object(storage: StorageService, key: str) -> None:
 # 한 요청에 여러 파일 + 각자의 상대 경로를 받아 폴더 트리를 만들며 저장한다.
 # 파일 저장 자체는 upload_file 을 그대로 재사용한다 — upload_file 이 **파일마다 독립적으로
 # commit** 하므로(위 함수 참조) 한 파일의 실패/rollback 이 이미 커밋된 앞선 파일에 영향을
-# 주지 않는다. 덕분에 할당량 선점·MinIO 스트리밍·v1 버전 기록·썸네일·SSE 가 전부 재사용된다.
+# 주지 않는다. 덕분에 할당량 선점·스토리지 스트리밍·v1 버전 기록·썸네일·SSE 가 전부 재사용된다.
 #
 # 부분 성공은 예외가 아니라 정상 경로다. 200개 중 3개가 409 로 실패해도 나머지는 저장된다.
 
@@ -1038,7 +1038,7 @@ async def prepare_download(
 ) -> tuple[str, str, str]:
     """게이트웨이 다운로드 준비 (PRD 2.2, 6.2).
 
-    소유자 검사 후 내부 presign(60s)을 생성해 nginx `/_minio/` 경로(X-Accel-Redirect 값)로
+    소유자 검사 후 내부 presign(60s)을 생성해 nginx `/_s3/` 경로(X-Accel-Redirect 값)로
     변환한다. 반환: (internal_redirect_path, filename, mime_type). 폴더면 400.
     """
     file = await ensure_file_access(session, user, await get_file(session, file_id))
@@ -1171,7 +1171,7 @@ async def _commit_new_version(
     prev_original_key = file.file_key
     new_version = file.current_version + 1
 
-    # 1) 직전 원본을 스냅샷으로 보존 (MinIO 서버측 복사).
+    # 1) 직전 원본을 스냅샷으로 보존 (스토리지 서버측 복사).
     try:
         snapshot_key = await _snapshot_current_original(session, storage, file)
     except Exception as exc:  # noqa: BLE001
@@ -1617,7 +1617,7 @@ async def purge_tree(
 ) -> tuple[int, int]:
     """휴지통 항목 하나와 하위 전체를 영구 삭제한다. **인가는 호출자 책임.**
 
-    MinIO 오브젝트(원본+버전) 삭제 + storage_used 감소 + files 행 삭제(versions CASCADE).
+    스토리지 오브젝트(원본+버전) 삭제 + storage_used 감소 + files 행 삭제(versions CASCADE).
     DB 를 먼저 확정하고 오브젝트는 best-effort 로 정리해 DB 를 진실 소스로 유지한다.
 
     actor_id 는 사용자의 수동 삭제면 그 사용자, 자동 정리면 None. publish=False 면 이벤트를

@@ -1,6 +1,6 @@
 """Admin API + 이메일 조회 + rate limiting 통합 검증 (실제 postgres+redis 필요, pytest 미수집).
 
-MinIO 없이 동작하도록 파일/공유 행은 DB 로 직접 심는다(내용 다운로드는 검증 범위 밖 —
+스토리지 없이 동작하도록 파일/공유 행은 DB 로 직접 심는다(내용 다운로드는 검증 범위 밖 —
 admin 은 내용 접근 불가, PRD 3.6.4). httpx(ASGITransport)로 검증한다.
 
 시나리오:

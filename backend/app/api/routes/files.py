@@ -2,7 +2,7 @@
 
 라우트 순서 주의: 고정 경로(/upload, /trash)를 `/{file_id}` 보다 먼저 선언해 우선 매칭시킨다.
 다운로드는 게이트웨이 모델(PRD 2.2) — presigned URL 을 직접 발급하지 않고 X-Accel-Redirect 로
-nginx→MinIO 스트리밍을 유도한다.
+nginx→스토리지 스트리밍을 유도한다.
 """
 
 from __future__ import annotations
@@ -552,7 +552,7 @@ async def download_archive_by_ticket(
 ) -> StreamingResponse:
     """티켓 기반 ZIP 스트리밍 다운로드 (무헤더 GET).
 
-    티켓을 원자적으로 소비한 뒤 접근 판정을 다시 하고, MinIO 에서 읽은 청크를 그대로 ZIP
+    티켓을 원자적으로 소비한 뒤 접근 판정을 다시 하고, 스토리지에서 읽은 청크를 그대로 ZIP
     프레임에 실어 내보낸다. `X-Accel-Buffering: no` 로 nginx 가 응답 전체를 버퍼링하지
     않게 해 첫 바이트가 바로 브라우저에 닿게 한다.
     """
@@ -625,7 +625,7 @@ async def download(file_id: int, user: CurrentUser, session: DbSession) -> Respo
     """게이트웨이 스트리밍 다운로드 (PRD 2.2, 6.2).
 
     presigned URL 을 브라우저에 직접 주지 않고, 내부 presign(60s)을 X-Accel-Redirect 로
-    nginx 에 넘겨 MinIO 스트리밍을 유도한다. 폴더면 400.
+    nginx 에 넘겨 스토리지 스트리밍을 유도한다. 폴더면 400.
     """
     try:
         internal, filename, mime = await files_service.prepare_download(

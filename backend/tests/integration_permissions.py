@@ -1,4 +1,4 @@
-"""파일 그룹 권한 + 상속 판정 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""파일 그룹 권한 + 상속 판정 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오 (PRD 3.1.3, 5.7, 6.5/6.6):
   A 가 root/depth1/depth2/file + depth1/depth2b 트리 구성 → 그룹 G 생성, B 를 member 로
@@ -13,7 +13,7 @@
   → B 가 shared-with-me 에서 부여 지점 확인 → permissions/check 응답 확인
   → manage 부여(POST)·read→manage 승격(PUT) 후 수임 그룹이 권한 관리 조작 수행.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 실행: `python -m tests.integration_permissions`.
 """
 

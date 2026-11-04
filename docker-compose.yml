@@ -6,12 +6,12 @@
 # 관리하기 위한 앵커다. 새 변수를 추가할 때 각 서비스에 따로 적지 않는다.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
-  # 설정 이름은 MINIO_* 를 유지한다(기존 .env 호환) — 값은 SeaweedFS 를 본다. 클라이언트는 boto3.
-  MINIO_ENDPOINT: seaweedfs:9000
-  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
-  MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
-  MINIO_SECURE: "false"
+  # 오브젝트 스토리지(SeaweedFS S3). 클라이언트는 boto3(services/storage.py).
+  S3_ENDPOINT: seaweedfs:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-s3admin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-change-me-in-production}
+  S3_BUCKET: ${S3_BUCKET:-minidrive}
+  S3_SECURE: "false"
   JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
   JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
   REDIS_URL: redis://redis:6379/0
@@ -159,8 +159,8 @@ services:
     environment:
       # 이 키쌍이 유일한 관리자 identity 가 된다. identity 가 하나라도 있으면 익명 요청은
       # 403 이다 — 게이트웨이 모델(매 요청 인가)이 내부 네트워크에서 우회되지 않는다(PRD 7).
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-s3admin}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-change-me-in-production}
     volumes:
       - seaweedfs_data:/data
     healthcheck:
@@ -181,9 +181,9 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${MINIO_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${MINIO_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
+      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${S3_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${S3_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
       do sleep 2; done;
-      echo 'SeaweedFS 초기화 완료: 버킷 ${MINIO_BUCKET:-minidrive} 준비';
+      echo 'SeaweedFS 초기화 완료: 버킷 ${S3_BUCKET:-minidrive} 준비';
       "
     networks:
       - minidrive
@@ -198,8 +198,8 @@ services:
       RCLONE_CONFIG_S3_TYPE: s3
       RCLONE_CONFIG_S3_PROVIDER: SeaweedFS
       RCLONE_CONFIG_S3_ENDPOINT: http://seaweedfs:9000
-      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-s3admin}
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-change-me-in-production}
       # 설정 파일이 없다는 NOTICE 를 끈다(위 환경변수가 전부다).
       RCLONE_CONFIG: /dev/null
     networks:

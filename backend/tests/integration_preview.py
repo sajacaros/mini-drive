@@ -1,8 +1,8 @@
-"""썸네일/미리보기/공유 접근 통계 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""썸네일/미리보기/공유 접근 통계 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 Phase 5-1 시나리오:
   - 이미지 업로드 → 썸네일 자동 생성(thumbnails/{fileId}.png), /thumbnail 게이트웨이 인라인
-    스트리밍, presigned URL 로 MinIO 직접 GET → 실제 PNG(≤320px) 확인.
+    스트리밍, presigned URL 로 스토리지 직접 GET → 실제 PNG(≤320px) 확인.
   - 비이미지 업로드 → 썸네일 미생성(/thumbnail 404). 이미지→텍스트 재업로드 시 이전 썸네일 제거.
   - 미리보기: 이미지/PDF 게이트웨이 인라인 redirect, 텍스트 인라인 본문(+1MiB 초과 truncated),
     미지원(zip) 415(구조화 detail), 폴더 400.
@@ -12,7 +12,7 @@ Phase 5-1 시나리오:
   - 공유 접근 통계: 공개 메타/미리보기/다운로드가 view_count·last_access 를 기록하고, 목록/단건
     통계 API 로 조회된다. 미리보기는 download_count 를 소모하지 않는다.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 실행: `python -m tests.integration_preview`.
 """
 
@@ -70,11 +70,11 @@ async def _thumbnail_key(file_id: int) -> str | None:
         return row.thumbnail_key
 
 
-async def _fetch_minio(accel: str) -> httpx.Response:
-    """X-Accel-Redirect(/_minio/...) 를 실제 MinIO presigned URL 로 바꿔 직접 GET 한다."""
-    secure = "https" if settings.minio_secure else "http"
-    minio_path = accel[len("/_minio") :]
-    url = f"{secure}://{settings.minio_endpoint}{minio_path}"
+async def _fetch_s3(accel: str) -> httpx.Response:
+    """X-Accel-Redirect(/_s3/...) 를 실제 스토리지 presigned URL 로 바꿔 직접 GET 한다."""
+    secure = "https" if settings.s3_secure else "http"
+    s3_path = accel[len("/_s3") :]
+    url = f"{secure}://{settings.s3_endpoint}{s3_path}"
     async with httpx.AsyncClient(timeout=60) as raw:
         return await raw.get(url)
 
@@ -107,13 +107,13 @@ async def scenario() -> None:
         r = await c.get(f"/api/files/{img_id}/thumbnail", headers=alice_h)
         assert r.status_code == 200, r.text
         accel = r.headers.get("X-Accel-Redirect")
-        assert accel and accel.startswith("/_minio/"), accel
+        assert accel and accel.startswith("/_s3/"), accel
         assert "inline" in r.headers.get("Content-Disposition", "")
         assert r.headers.get("Content-Type") == "image/png"
         _ok("GET /thumbnail → 200 X-Accel-Redirect inline image/png")
 
         # presigned URL 로 직접 GET → 실제 PNG, 320px 이내
-        got = await _fetch_minio(accel)
+        got = await _fetch_s3(accel)
         assert got.status_code == 200, got.status_code
         assert got.content[:8] == b"\x89PNG\r\n\x1a\n", "PNG 시그니처 불일치"
         thumb = Image.open(io.BytesIO(got.content))
@@ -123,7 +123,7 @@ async def scenario() -> None:
         # === 2. 이미지 미리보기 (게이트웨이 인라인 redirect) ===
         r = await c.get(f"/api/files/{img_id}/preview", headers=alice_h)
         assert r.status_code == 200, r.text
-        assert r.headers.get("X-Accel-Redirect", "").startswith("/_minio/"), r.headers
+        assert r.headers.get("X-Accel-Redirect", "").startswith("/_s3/"), r.headers
         assert r.headers.get("Content-Type") == "image/png"
         assert "inline" in r.headers.get("Content-Disposition", "")
         _ok("이미지 GET /preview → 200 인라인 redirect")
@@ -174,7 +174,7 @@ async def scenario() -> None:
         r = await c.get(f"/api/files/{pdf_id}/preview", headers=alice_h)
         assert r.status_code == 200, r.text
         assert r.headers.get("Content-Type") == "application/pdf"
-        assert r.headers.get("X-Accel-Redirect", "").startswith("/_minio/")
+        assert r.headers.get("X-Accel-Redirect", "").startswith("/_s3/")
         _ok("PDF GET /preview → 200 인라인 redirect (application/pdf)")
 
         # === 5. 미지원 타입 415 (zip) ===
@@ -295,10 +295,10 @@ async def scenario() -> None:
         r = await c.get(stream_url)
         assert r.status_code == 200, r.text
         accel = r.headers.get("X-Accel-Redirect", "")
-        assert accel.startswith("/_minio/"), r.headers
+        assert accel.startswith("/_s3/"), r.headers
         assert r.headers.get("Content-Type") == "video/mp4", r.headers
         assert "inline" in r.headers.get("Content-Disposition", ""), r.headers
-        got = await _fetch_minio(accel)
+        got = await _fetch_s3(accel)
         assert got.status_code == 200 and got.content == mp4, got.status_code
         _ok("preview-stream → 200 인라인 redirect, 오브젝트 바이트 일치")
 
@@ -343,7 +343,7 @@ async def scenario() -> None:
         r = await c.get(vstream)
         assert r.status_code == 200, r.text
         assert r.headers.get("Content-Type") == "video/mp4", r.headers
-        assert r.headers.get("X-Accel-Redirect", "").startswith("/_minio/"), r.headers
+        assert r.headers.get("X-Accel-Redirect", "").startswith("/_s3/"), r.headers
         # 재생은 다운로드가 아니다 — 횟수는 그대로.
         r = await c.get(f"/api/shares/{vshare_id}/stats", headers=alice_h)
         assert r.json()["download_count"] == 0, r.json()
@@ -387,7 +387,7 @@ async def scenario() -> None:
         r = await c.get(r.json()["url"])
         assert r.status_code == 200, r.text
         assert r.headers.get("Content-Type") == "video/mp4", r.headers
-        assert r.headers.get("X-Accel-Redirect", "").startswith("/_minio/"), r.headers
+        assert r.headers.get("X-Accel-Redirect", "").startswith("/_s3/"), r.headers
         _ok("읽기 전용 공유: 다운로드 403 이어도 mp4 재생 주소·스트림은 200")
 
         # 링크를 내리면 남아 있던 티켓도 그 즉시 막힌다(매 요청 재판정).

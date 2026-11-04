@@ -1,4 +1,4 @@
-"""버전 관리 + 다운로드 티켓 통합 검증 (실제 postgres+redis+minio 필요, pytest 미수집).
+"""버전 관리 + 다운로드 티켓 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
 
 시나리오 (PRD 3.3, 6.2):
   업로드(v1) → 재업로드(v2, base_version 일치) → 충돌 409(잘못된 base_version)
@@ -8,7 +8,7 @@
   → 티켓 발급→GET 성공→재사용 실패 → 버전 티켓 발급→GET 성공
   → 영구 삭제 후 모든 오브젝트 제거 + 할당량 0.
 
-env: DATABASE_URL / REDIS_URL / MINIO_ENDPOINT / MINIO_BUCKET.
+env: DATABASE_URL / REDIS_URL / S3_ENDPOINT / S3_BUCKET.
 실행: `python -m tests.integration_versions`.
 """
 
@@ -75,11 +75,11 @@ async def _version_size_sum(file_id: int) -> int:
         ).scalar_one()
 
 
-async def _minio_get(accel: str) -> bytes:
-    secure = "https" if settings.minio_secure else "http"
-    minio_url = f"{secure}://{settings.minio_endpoint}{accel[len('/_minio'):]}"
+async def _s3_get(accel: str) -> bytes:
+    secure = "https" if settings.s3_secure else "http"
+    s3_url = f"{secure}://{settings.s3_endpoint}{accel[len('/_s3'):]}"
     async with httpx.AsyncClient(timeout=60) as raw:
-        got = await raw.get(minio_url)
+        got = await raw.get(s3_url)
     assert got.status_code == 200, f"{got.status_code} {got.text[:200]}"
     return got.content
 
@@ -159,18 +159,18 @@ async def scenario() -> None:
         assert r.status_code == 200, r.text
         accel_v1 = r.headers["X-Accel-Redirect"]
         assert "(v1)" in r.headers.get("Content-Disposition", ""), r.headers
-        assert await _minio_get(accel_v1) == V1
+        assert await _s3_get(accel_v1) == V1
         _ok("v1 다운로드 바이트 일치 (스냅샷)")
 
         # 7. v2 다운로드 → v2 바이트 일치
         r = await c.get(f"/api/files/{file_id}/versions/2/download", headers=alice_h)
         assert r.status_code == 200, r.text
-        assert await _minio_get(r.headers["X-Accel-Redirect"]) == V2
+        assert await _s3_get(r.headers["X-Accel-Redirect"]) == V2
         _ok("v2 다운로드 바이트 일치 (스냅샷)")
 
         # 현재(v3) 다운로드 = file_key
         r = await c.get(f"/api/files/{file_id}/download", headers=alice_h)
-        assert await _minio_get(r.headers["X-Accel-Redirect"]) == V3
+        assert await _s3_get(r.headers["X-Accel-Redirect"]) == V3
         _ok("현재(v3) 다운로드 바이트 일치")
 
         # 없는 버전 404
@@ -185,11 +185,11 @@ async def scenario() -> None:
         _ok("v1 복구 → v4 생성 (size=v1)")
         # 복구 후 현재 다운로드 == V1
         r = await c.get(f"/api/files/{file_id}/download", headers=alice_h)
-        assert await _minio_get(r.headers["X-Accel-Redirect"]) == V1
+        assert await _s3_get(r.headers["X-Accel-Redirect"]) == V1
         _ok("복구 후 현재 다운로드 바이트 == v1")
         # 원본 v1 스냅샷 여전히 접근 가능
         r = await c.get(f"/api/files/{file_id}/versions/1/download", headers=alice_h)
-        assert await _minio_get(r.headers["X-Accel-Redirect"]) == V1
+        assert await _s3_get(r.headers["X-Accel-Redirect"]) == V1
         _ok("복구 후에도 v1 스냅샷 보존 (이력 유실 0%)")
 
         # 9. storage_used == 모든 버전 크기 합계
@@ -207,7 +207,7 @@ async def scenario() -> None:
         # 무헤더 GET
         r = await c.get(ticket_url)
         assert r.status_code == 200, r.text
-        assert await _minio_get(r.headers["X-Accel-Redirect"]) == V1  # 현재=v4(=v1 바이트)
+        assert await _s3_get(r.headers["X-Accel-Redirect"]) == V1  # 현재=v4(=v1 바이트)
         _ok("티켓 발급 → 무헤더 GET 성공")
         # 재사용 실패 (1회용)
         r = await c.get(ticket_url)
@@ -225,7 +225,7 @@ async def scenario() -> None:
         assert r.status_code == 200, r.text
         r = await c.get(r.json()["url"])
         assert r.status_code == 200, r.text
-        assert await _minio_get(r.headers["X-Accel-Redirect"]) == V2
+        assert await _s3_get(r.headers["X-Accel-Redirect"]) == V2
         _ok("버전 티켓 발급 → GET 성공 (v2 바이트)")
 
         # 11. 영구 삭제 → 모든 오브젝트 제거 + 할당량 0
