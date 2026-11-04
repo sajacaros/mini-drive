@@ -6,7 +6,8 @@
 # 관리하기 위한 앵커다. 새 변수를 추가할 때 각 서비스에 따로 적지 않는다.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
-  MINIO_ENDPOINT: minio:9000
+  # 설정 이름은 MINIO_* 를 유지한다(파이썬 SDK 가 minio 라서, 그리고 기존 .env 호환) — 값은 SeaweedFS 를 본다.
+  MINIO_ENDPOINT: seaweedfs:9000
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
   MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
@@ -78,8 +79,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      minio:
+      seaweedfs:
         condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -140,42 +143,65 @@ services:
     networks:
       - minidrive
 
-  # ── MinIO (오브젝트 스토리지) ────────────────────────
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    # 9000(API)/9001(콘솔) 호스트 비노출 — 내부 네트워크에서만 접근 (PRD 10 보안)
+  # ── SeaweedFS (S3 호환 오브젝트 스토리지) ──────────────
+  # MinIO 커뮤니티판 지원 종료로 교체했다. 앱은 표준 S3 API 만 쓰므로(services/storage.py)
+  # minio 파이썬 SDK 를 그대로 둔 채 엔드포인트만 이쪽을 본다. 단일 프로세스로
+  # master·volume·filer·S3 게이트웨이를 함께 띄운다(데이터는 전부 /data 아래).
+  # 이미지 태그는 고정한다 — latest 는 재빌드마다 S3 호환 동작이 바뀔 수 있다.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47
+    # -ip.bind=0.0.0.0: 기본값은 컨테이너의 첫 IP 에만 바인드해 다른 네트워크·localhost 에서 안 닿는다.
+    # -master.volumeSizeLimitMB: 기본 30GB 볼륨 대신 1GB 단위로 잘게 나눠 디스크 선점을 줄인다.
+    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=9000 -master.volumeSizeLimitMB=1024
+    # 9000(S3) 호스트 비노출 — 내부 네트워크에서만 접근 (PRD 10 보안)
     expose:
       - "9000"
-      - "9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
+      # 이 키쌍이 유일한 관리자 identity 가 된다. identity 가 하나라도 있으면 익명 요청은
+      # 403 이다 — 게이트웨이 모델(매 요청 인가)이 내부 네트워크에서 우회되지 않는다(PRD 7).
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
     volumes:
-      - minio_data:/data
+      - seaweedfs_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     networks:
       - minidrive
 
-  # ── MinIO 초기화 (버킷 생성 + 익명 접근 완전 차단) ────
-  mc:
-    image: minio/mc:latest
+  # ── SeaweedFS 초기화 (버킷 생성) ─────────────────────
+  # 이미 있으면 weed shell 이 오류를 내므로 "있음/생성됨" 둘 다 성공으로 본다. 마스터가 막 떠서
+  # 볼륨이 아직 등록되지 않았을 수 있어 성공할 때까지 재시도한다.
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:4.47
     depends_on:
-      minio:
+      seaweedfs:
         condition: service_healthy
-    # 주의: 익명 접근은 반드시 none. download 로 열면 내부 네트워크에서 인가 없이
-    # 객체를 읽을 수 있어 게이트웨이 모델(매 요청 인가)이 무력화됨 (PRD 7 주석).
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-change-me-in-production};
-      mc mb --ignore-existing local/${MINIO_BUCKET:-minidrive};
-      mc anonymous set none local/${MINIO_BUCKET:-minidrive};
-      echo 'MinIO 초기화 완료: 버킷 생성 + 익명 접근 차단(none)';
+      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${MINIO_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${MINIO_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
+      do sleep 2; done;
+      echo 'SeaweedFS 초기화 완료: 버킷 ${MINIO_BUCKET:-minidrive} 준비';
       "
+    networks:
+      - minidrive
+
+  # ── 버킷 백업/복원 도구 (scripts/backup.sh·restore.sh 전용, 평소엔 안 뜬다) ──
+  # profiles 로 묶어 `up` 에서 제외한다. 범용 S3 클라이언트라 스토리지 제품에 묶이지 않는다.
+  # 원격 이름 "s3" 를 환경변수로만 정의한다(설정 파일 없음): rclone sync s3:<bucket> <dir>
+  rclone:
+    image: rclone/rclone:1.68.2
+    profiles: ["tools"]
+    environment:
+      RCLONE_CONFIG_S3_TYPE: s3
+      RCLONE_CONFIG_S3_PROVIDER: SeaweedFS
+      RCLONE_CONFIG_S3_ENDPOINT: http://seaweedfs:9000
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
+      # 설정 파일이 없다는 NOTICE 를 끈다(위 환경변수가 전부다).
+      RCLONE_CONFIG: /dev/null
     networks:
       - minidrive
 
@@ -212,7 +238,7 @@ services:
       - minidrive
 
 volumes:
-  minio_data:
+  seaweedfs_data:
   pg_data:
   redis_data:
 

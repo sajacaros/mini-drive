@@ -1,4 +1,7 @@
-"""StorageService — MinIO(S3 호환) 접근 추상화 계층 (PRD 2.2).
+"""StorageService — S3 호환 오브젝트 스토리지 접근 추상화 계층 (PRD 2.2).
+
+서버는 SeaweedFS 의 S3 게이트웨이다(2026-11 MinIO 에서 전환). 클라이언트는 여전히 minio
+Python SDK 인데, 표준 S3 API 만 쓰므로 서버 제품과 무관하게 동작한다.
 
 인터페이스(`put/get/stat/presign_get/delete`)로 오브젝트 스토리지를 감싸 추후 AWS S3
 전환 시 코드 변경을 최소화한다. MinIO SDK 는 동기 API 이므로, 비동기 라우트에서 호출할 때는
@@ -267,10 +270,10 @@ class StorageService:
     def to_internal_redirect(self, presigned_url: str) -> str:
         """presigned URL 을 nginx `/_minio/` internal 경로로 변환한다 (PRD 2.2, 8.1).
 
-        `http://minio:9000/minidrive/users/1/5?X-Amz-...`
+        `http://seaweedfs:9000/minidrive/users/1/5?X-Amz-...`
           → `/_minio/minidrive/users/1/5?X-Amz-...`
 
-        서명은 Host=minio:9000 기준으로 계산되고, nginx 가 `proxy_set_header Host minio:9000`
+        서명은 Host=seaweedfs:9000 기준으로 계산되고, nginx 가 `proxy_set_header Host seaweedfs:9000`
         으로 동일 Host 를 강제하므로 SigV4 서명이 일치한다 (PRD 12 리스크 대응).
         """
         parts = urlsplit(presigned_url)

@@ -22,7 +22,8 @@ x-logging: &default-logging
 # backend 와 사이드카들(purger·wiki-indexer)이 공유하는 환경. 새 변수는 여기 한 곳에만.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-minidrive}
-  MINIO_ENDPOINT: minio:9000
+  # 설정 이름은 MINIO_* 그대로(SDK·기존 .env 호환) — 값은 SeaweedFS 를 본다.
+  MINIO_ENDPOINT: seaweedfs:9000
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
   MINIO_BUCKET: ${MINIO_BUCKET:-minidrive}
@@ -91,8 +92,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      minio:
+      seaweedfs:
         condition: service_healthy
+      seaweedfs-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -170,25 +173,26 @@ services:
     networks:
       - minidrive
 
-  # ── MinIO (오브젝트 스토리지) ────────────────────────
-  minio:
-    image: minio/minio:latest
+  # ── SeaweedFS (S3 호환 오브젝트 스토리지) ──────────────
+  # MinIO 커뮤니티판 지원 종료로 교체(루트 docker-compose.yml 의 같은 서비스 주석 참고).
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.47
     restart: unless-stopped
     logging: *default-logging
-    command: server /data --console-address ":9001"
+    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=9000 -master.volumeSizeLimitMB=1024
     expose:
       - "9000"
-      - "9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # 유일한 관리자 identity — 있으면 익명 요청은 403 (게이트웨이 모델 전제, PRD 7).
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
     volumes:
-      - minio_data:/data
+      - seaweedfs_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     deploy:
       resources:
         limits:
@@ -197,19 +201,35 @@ services:
     networks:
       - minidrive
 
-  # ── MinIO 초기화 (버킷 생성 + 익명 접근 차단) ────────
-  mc:
-    image: minio/mc:latest
+  # ── SeaweedFS 초기화 (버킷 생성, 이미 있으면 통과) ───
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:4.47
     depends_on:
-      minio:
+      seaweedfs:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-      mc mb --ignore-existing local/${MINIO_BUCKET:-minidrive};
-      mc anonymous set none local/${MINIO_BUCKET:-minidrive};
-      echo 'MinIO 초기화 완료: 버킷 생성 + 익명 접근 차단(none)';
+      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${MINIO_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${MINIO_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
+      do sleep 2; done;
+      echo 'SeaweedFS 초기화 완료: 버킷 ${MINIO_BUCKET:-minidrive} 준비';
       "
+    networks:
+      - minidrive
+
+  # ── 버킷 백업/복원 도구 (scripts/backup.sh·restore.sh 전용, 평소엔 안 뜬다) ──
+  # profiles 로 묶어 `up` 에서 제외한다. 범용 S3 클라이언트라 스토리지 제품에 묶이지 않는다.
+  # 원격 이름 "s3" 를 환경변수로만 정의한다(설정 파일 없음): rclone sync s3:<bucket> <dir>
+  rclone:
+    image: rclone/rclone:1.68.2
+    profiles: ["tools"]
+    environment:
+      RCLONE_CONFIG_S3_TYPE: s3
+      RCLONE_CONFIG_S3_PROVIDER: SeaweedFS
+      RCLONE_CONFIG_S3_ENDPOINT: http://seaweedfs:9000
+      RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      # 설정 파일이 없다는 NOTICE 를 끈다(위 환경변수가 전부다).
+      RCLONE_CONFIG: /dev/null
     networks:
       - minidrive
 
@@ -258,7 +278,7 @@ services:
       - minidrive
 
 volumes:
-  minio_data:
+  seaweedfs_data:
   pg_data:
   redis_data:
 

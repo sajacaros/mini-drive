@@ -4,7 +4,7 @@
 #
 # 지정한 백업 디렉터리를 실행 중인 docker compose 스택에 복원한다.
 #   1) PostgreSQL  → pg_restore --clean --if-exists (기존 스키마 대체)
-#   2) MinIO 버킷  → mc mirror --overwrite --remove (백업 상태로 일치)
+#   2) 오브젝트 버킷 → rclone sync (백업 상태로 일치 — 백업에 없는 객체는 지운다)
 #
 # 사용법:
 #   scripts/restore.sh backups/20260718-120000
@@ -33,7 +33,10 @@ BACKUP_DIR="$BACKUP_ARG"
 BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
 
 [ -f "$BACKUP_DIR/postgres.dump" ] || fail "postgres.dump 가 없습니다: $BACKUP_DIR"
-[ -d "$BACKUP_DIR/minio" ] || fail "minio/ 디렉터리가 없습니다: $BACKUP_DIR"
+# objects/ 가 현행 이름이다. SeaweedFS 전환 전(MinIO mc mirror) 백업은 minio/ 에 들어 있다.
+OBJ_DIR="$BACKUP_DIR/objects"
+[ -d "$OBJ_DIR" ] || OBJ_DIR="$BACKUP_DIR/minio"
+[ -d "$OBJ_DIR" ] || fail "objects/ (또는 구 minio/) 디렉터리가 없습니다: $BACKUP_DIR"
 
 if [ -f "$ROOT_DIR/.env" ]; then
     set -a
@@ -43,8 +46,6 @@ if [ -f "$ROOT_DIR/.env" ]; then
 fi
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-minidrive}"
-MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
-MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-change-me-in-production}"
 MINIO_BUCKET="${MINIO_BUCKET:-minidrive}"
 
 DC="docker compose"
@@ -72,19 +73,12 @@ $DC exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exi
     < "$BACKUP_DIR/postgres.dump"
 log "PostgreSQL 복원 완료."
 
-# ── 2) MinIO 버킷 복원 ────────────────────────────────
-log "MinIO 버킷 복원(mc mirror → local/$MINIO_BUCKET) ..."
-$DC run --rm --no-deps -T \
-    -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
-    -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
-    -e MINIO_BUCKET="$MINIO_BUCKET" \
-    -v "$BACKUP_DIR/minio:/backup:ro" \
-    --entrypoint sh mc -c '
-        set -e
-        mc --config-dir /tmp/mc alias set local "http://minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-        mc --config-dir /tmp/mc mb --ignore-existing "local/$MINIO_BUCKET"
-        mc --config-dir /tmp/mc mirror --overwrite --remove /backup "local/$MINIO_BUCKET"
-    '
-log "MinIO 버킷 복원 완료."
+# ── 2) 오브젝트 버킷 복원 ─────────────────────────────
+# 버킷은 seaweedfs-init 이 스택 기동 때 만들어 둔다.
+log "오브젝트 버킷 복원(rclone sync → s3:$MINIO_BUCKET) ..."
+$DC --profile tools run --rm --no-deps -T \
+    -v "$OBJ_DIR:/backup:ro" \
+    rclone sync /backup "s3:$MINIO_BUCKET"
+log "오브젝트 버킷 복원 완료."
 
 log "복원 완료: $BACKUP_DIR"

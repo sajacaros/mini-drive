@@ -124,7 +124,7 @@ curl -fsS http://127.0.0.1:7755/health && echo OK
 ```
 > 프론트는 경로 무관하게 빌드되므로, 배포 경로를 바꾸려면 `.env` 의 `BASE_PATH` 만 바꾸고 재기동하면 된다.
 
-> **게이트웨이 재시작 불필요.** 게이트웨이 nginx 는 upstream(backend/frontend/minio) 을
+> **게이트웨이 재시작 불필요.** 게이트웨이 nginx 는 upstream(backend/frontend/seaweedfs) 을
 > 도커 내장 DNS(`127.0.0.11`)로 **요청 시점에 다시 해석**한다(`nginx/conf.d/default.conf` 의
 > `resolver` + 변수 `proxy_pass`). 그래서 `$DC up -d` 가 backend/frontend 만 새 IP 로 재생성해도
 > 게이트웨이가 옛 IP 를 물지 않는다. (예전엔 nginx 가 시작 시 IP 를 한 번만 캐시해,
@@ -192,8 +192,22 @@ $DC restart backend
 ### 백업
 ```bash
 $DC exec -T db pg_dump -U postgres -F c minidrive > backup.dump
-# MinIO 는 scripts/backup.sh 참고(compose 파일 경로만 맞춰 조정)
+# 오브젝트 버킷은 rclone 도구 서비스로 미러(scripts/backup.sh 와 같은 방식):
+mkdir -p backup-objects
+$DC --profile tools run --rm --no-deps --user "$(id -u):$(id -g)" \
+  -v "$PWD/backup-objects:/backup" rclone sync s3:minidrive /backup
 ```
+
+### MinIO → SeaweedFS 전환 (2026-11, 1회)
+오브젝트 스토리지가 MinIO 에서 SeaweedFS 로 바뀌었다. 새 볼륨(`seaweedfs_data`)으로 뜨므로 **기존
+`minio_data` 의 객체는 자동으로 옮겨지지 않는다.** `.env` 는 그대로 쓴다(`MINIO_ROOT_USER/PASSWORD`
+가 SeaweedFS 의 S3 키가 된다).
+
+- **데이터를 버려도 되는 서버:** `$DC up -d --remove-orphans` 후 DB 도 비운다(객체 없는 파일 행이
+  남지 않게) — `$DC down -v` 로 볼륨째 지우고 다시 올리는 게 가장 깔끔하다.
+- **데이터를 보존할 서버:** 새 코드로 올리기 **전에** 옛 스택에서 버킷을 받아 두고(`mc mirror`
+  또는 rclone), 새 스택이 뜬 뒤 `rclone sync <받은 디렉터리> s3:minidrive` 로 되올린다. 이전 중에는
+  쓰기를 막는다. 끝나면 `$DC up -d --remove-orphans` 로 옛 `minio`/`mc` 컨테이너를 정리한다.
 
 ### 롤백
 호스트 빌드이므로 소스를 되돌리고 재빌드한다:

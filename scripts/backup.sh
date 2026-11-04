@@ -4,7 +4,7 @@
 #
 # 대상: 실행 중인 docker compose 스택.
 #   1) PostgreSQL  → pg_dump custom format (postgres.dump)
-#   2) MinIO 버킷  → mc mirror (minio/ 디렉터리)
+#   2) 오브젝트 버킷(SeaweedFS S3) → rclone sync (objects/ 디렉터리)
 # 산출물: backups/{timestamp}/  (+ manifest.txt)
 # 보존:   최근 N개(기본 7)만 유지, 나머지 삭제.
 #
@@ -29,8 +29,6 @@ fi
 
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-minidrive}"
-MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
-MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-change-me-in-production}"
 MINIO_BUCKET="${MINIO_BUCKET:-minidrive}"
 RETENTION="${BACKUP_RETENTION:-7}"
 
@@ -46,7 +44,7 @@ if ! $DC ps --status running --services 2>/dev/null | grep -qx db; then
     fail "db 컨테이너가 실행 중이 아닙니다. 'docker compose up -d' 후 다시 실행하세요."
 fi
 
-mkdir -p "$BACKUP_DIR/minio"
+mkdir -p "$BACKUP_DIR/objects"
 log "백업 시작 → $BACKUP_DIR"
 
 # ── 1) PostgreSQL (custom format) ─────────────────────
@@ -55,23 +53,17 @@ $DC exec -T db pg_dump -U "$POSTGRES_USER" -F c "$POSTGRES_DB" > "$BACKUP_DIR/po
 DB_SIZE="$(du -h "$BACKUP_DIR/postgres.dump" | cut -f1)"
 log "PostgreSQL 덤프 완료 ($DB_SIZE)"
 
-# ── 2) MinIO 버킷 미러 ────────────────────────────────
-# minio/mc 컨테이너를 compose 네트워크에 붙여 버킷을 호스트 마운트로 미러한다.
-# --user 로 산출물을 호스트 사용자 소유로 만들어 보존 정리(rm)가 가능하게 한다.
-log "MinIO 버킷 미러(mc mirror local/$MINIO_BUCKET) ..."
-$DC run --rm --no-deps -T \
+# ── 2) 오브젝트 버킷 미러 ─────────────────────────────
+# compose 의 rclone 도구 서비스(profiles: tools)를 스택 네트워크에 붙여 버킷을 호스트 마운트로
+# 미러한다. --user 로 산출물을 호스트 사용자 소유로 만들어 보존 정리(rm)가 가능하게 한다.
+# 자격 증명은 compose 가 .env 의 MINIO_ROOT_USER/PASSWORD 로 rclone 환경에 넣는다.
+log "오브젝트 버킷 미러(rclone sync s3:$MINIO_BUCKET) ..."
+$DC --profile tools run --rm --no-deps -T \
     --user "$(id -u):$(id -g)" \
-    -e MINIO_ROOT_USER="$MINIO_ROOT_USER" \
-    -e MINIO_ROOT_PASSWORD="$MINIO_ROOT_PASSWORD" \
-    -e MINIO_BUCKET="$MINIO_BUCKET" \
-    -v "$BACKUP_DIR/minio:/backup" \
-    --entrypoint sh mc -c '
-        set -e
-        mc --config-dir /tmp/mc alias set local "http://minio:9000" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-        mc --config-dir /tmp/mc mirror --overwrite --remove "local/$MINIO_BUCKET" /backup
-    '
-MINIO_SIZE="$(du -sh "$BACKUP_DIR/minio" | cut -f1)"
-log "MinIO 미러 완료 ($MINIO_SIZE)"
+    -v "$BACKUP_DIR/objects:/backup" \
+    rclone sync "s3:$MINIO_BUCKET" /backup
+OBJ_SIZE="$(du -sh "$BACKUP_DIR/objects" | cut -f1)"
+log "오브젝트 미러 완료 ($OBJ_SIZE)"
 
 # ── manifest ──────────────────────────────────────────
 cat > "$BACKUP_DIR/manifest.txt" <<EOF
@@ -79,9 +71,9 @@ mini-drive backup
 timestamp:   $TIMESTAMP
 created_at:  $(date -Iseconds)
 postgres_db: $POSTGRES_DB (pg_dump custom format → postgres.dump)
-minio_bucket:$MINIO_BUCKET (mc mirror → minio/)
+bucket:      $MINIO_BUCKET (rclone sync → objects/)
 db_size:     $DB_SIZE
-minio_size:  $MINIO_SIZE
+objects_size:$OBJ_SIZE
 EOF
 
 # ── 보존 정리: 최근 RETENTION 개만 유지 ───────────────

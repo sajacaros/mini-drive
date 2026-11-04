@@ -20,7 +20,7 @@
   용량 할당량.
 - **휴지통 자동 정리**: `TRASH_RETENTION_DAYS`(기본 7일)가 지난 항목을 `purger` 사이드카가 하루 1회
   영구 삭제하고 용량을 회수합니다.
-- **ZIP 다운로드**: 폴더는 하위 구조 그대로, 여러 항목은 체크박스로 골라 한 번에. MinIO 청크를
+- **ZIP 다운로드**: 폴더는 하위 구조 그대로, 여러 항목은 체크박스로 골라 한 번에. 오브젝트 청크를
   무압축 ZIP 프레임에 실어 스트리밍하므로 임시 파일이 없습니다(파일 500개 / 2 GB 상한).
 - **통합 드라이브**: 내 드라이브 루트에 가상 "공유" 폴더를 고정해, 내 파일과 공유받은 항목을 하나의
   브레드크럼으로 탐색합니다. 행별 액션은 해당 항목의 유효 권한으로 게이팅합니다.
@@ -91,8 +91,8 @@
 ```
 브라우저 ─▶ nginx(게이트웨이, :80) ─┬─▶ /        → frontend (React SPA)
                                     ├─▶ /api/    → backend (FastAPI)
-                                    └─▶ /_minio/ → MinIO (X-Accel-Redirect 내부 전용)
-                                                    backend ─▶ PostgreSQL / Redis / MinIO
+                                    └─▶ /_minio/ → SeaweedFS S3 (X-Accel-Redirect 내부 전용)
+                                                    backend ─▶ PostgreSQL / Redis / SeaweedFS
 
 사이드카(같은 이미지, entrypoint 만 다름)
   purger        하루 1회  휴지통 영구 삭제 + 위키 트리 유예 삭제
@@ -100,12 +100,14 @@
 ```
 
 - **게이트웨이 다운로드 모델**: presigned URL 을 브라우저에 주지 않고, FastAPI 가 매 요청 인가한 뒤
-  `X-Accel-Redirect` 로 nginx→MinIO 스트리밍합니다. 공유 링크를 끄면 즉시 차단됩니다. 헤더를 실을 수
+  `X-Accel-Redirect` 로 nginx→오브젝트 스토리지 스트리밍합니다. 공유 링크를 끄면 즉시 차단됩니다. 헤더를 실을 수
   없는 대용량 다운로드는 일회성 티켓(Redis, TTL 60초, GETDEL 원자 소비)으로 인가합니다.
   - 예외는 ZIP 하나입니다 — `X-Accel-Redirect` 는 오브젝트 하나만 흘려보낼 수 있어, 묶는 동안에는
     backend 가 스트리밍 주체가 됩니다. 인가는 티켓 발급·소비 두 번 판정하고, 개수·용량 상한은 첫
     바이트 전에 확정합니다.
-- **MinIO 익명 접근 완전 차단**(`mc anonymous set none`)이 이 모델의 전제입니다.
+- **스토리지 익명 접근 완전 차단**이 이 모델의 전제입니다. SeaweedFS 는 S3 identity 가 하나라도 있으면
+  익명 요청을 403 으로 막습니다 — compose 가 `MINIO_ROOT_USER/PASSWORD` 로 그 identity 를 만듭니다.
+  (설정 이름 `MINIO_*` 와 내부 경로 `/_minio/` 는 MinIO 시절 이름을 호환 때문에 그대로 둔 것입니다.)
 - **backend 는 호스트 포트를 열지 않습니다.** 모든 트래픽이 nginx 를 지납니다.
 - **경로를 이미지에 굽지 않습니다**: 프론트는 `base=/__BASE__/` 로 빌드하고 기동 시 `BASE_PATH` 로
   치환합니다. 같은 이미지가 로컬(`/`)과 서버(`/drive/`)에서 재빌드 없이 돕니다.
@@ -162,7 +164,7 @@ Solar-Open2-250B 가 다음 한 수를 고른다  ◀─────────
 | ----------- | ------------------------------------------------------------------------------------- |
 | Frontend    | React 19, TypeScript 5, Tailwind CSS 4, React Router 7, Zustand 5, Vite 6             |
 | Backend     | Python 3.12, FastAPI, Pydantic 2, SQLAlchemy 2(async/asyncpg), Alembic, PyJWT, argon2 |
-| Storage     | MinIO (S3 호환)                                                                       |
+| Storage     | SeaweedFS 4.47 (S3 게이트웨이) — 클라이언트는 minio Python SDK                        |
 | Database    | PostgreSQL 16 (`pgvector/pgvector:pg16` — 기존 볼륨 호환용, 확장은 미사용)            |
 | Cache/Token | Redis 7                                                                               |
 | Gateway     | nginx 1.27                                                                            |
@@ -273,7 +275,7 @@ docker compose logs -f purger                                        # 다음 �
 
 ### 백업 / 복원
 
-PostgreSQL(pg_dump custom) + MinIO 버킷(mc mirror)을 `backups/{timestamp}/` 에 저장하고 최근
+PostgreSQL(pg_dump custom) + 오브젝트 버킷(rclone sync, `objects/`)을 `backups/{timestamp}/` 에 저장하고 최근
 N개(기본 7)만 보존합니다.
 
 ```bash
@@ -289,7 +291,7 @@ scripts/restore.sh backups/20260718-120000 [--yes]
 # backend
 cd backend && python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-uvicorn app.main:app --reload --port 8000     # DB/MinIO/Redis 는 compose 로 띄워두고 실행
+uvicorn app.main:app --reload --port 8000     # DB/SeaweedFS/Redis 는 compose 로 띄워두고 실행
 
 # frontend
 cd frontend && npm install && npm run dev     # http://localhost:5173 (/api → :8000 프록시)
