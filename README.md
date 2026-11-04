@@ -164,7 +164,7 @@ Solar-Open2-250B 가 다음 한 수를 고른다  ◀─────────
 | ----------- | ------------------------------------------------------------------------------------- |
 | Frontend    | React 19, TypeScript 5, Tailwind CSS 4, React Router 7, Zustand 5, Vite 6             |
 | Backend     | Python 3.12, FastAPI, Pydantic 2, SQLAlchemy 2(async/asyncpg), Alembic, PyJWT, argon2 |
-| Storage     | SeaweedFS 4.47 (S3 게이트웨이) — 클라이언트는 minio Python SDK                        |
+| Storage     | SeaweedFS 4.47 (S3 게이트웨이) — 클라이언트는 boto3                                   |
 | Database    | PostgreSQL 16 (`pgvector/pgvector:pg16` — 기존 볼륨 호환용, 확장은 미사용)            |
 | Cache/Token | Redis 7                                                                               |
 | Gateway     | nginx 1.27                                                                            |

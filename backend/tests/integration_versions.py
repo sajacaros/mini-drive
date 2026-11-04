@@ -19,7 +19,6 @@ import sys
 
 import httpx
 from httpx import ASGITransport
-from minio.error import S3Error
 from sqlalchemy import func, select
 
 import app.models  # noqa: F401 - 전체 모델을 metadata 에 등록
@@ -28,7 +27,7 @@ from app.core.database import Base, SessionFactory, engine
 from app.core.redis import redis_client
 from app.main import app
 from app.models import FileVersion, User
-from app.services.storage import storage_service
+from app.services.storage import ObjectNotFoundError, storage_service
 from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
@@ -49,14 +48,8 @@ async def _reset() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
-    if not storage_service._client.bucket_exists(storage_service.bucket):
-        storage_service._client.make_bucket(storage_service.bucket)
-    leftover = [
-        o.object_name
-        for o in storage_service._client.list_objects(
-            storage_service.bucket, recursive=True
-        )
-    ]
+    storage_service.ensure_bucket()
+    leftover = storage_service.list_keys()
     storage_service.delete_many(leftover)
 
 
@@ -248,16 +241,11 @@ async def scenario() -> None:
             try:
                 storage_service.stat(key)
                 raise AssertionError(f"오브젝트가 아직 존재함: {key}")
-            except S3Error as exc:
-                assert exc.code in ("NoSuchKey", "NoSuchObject"), f"{key}: {exc.code}"
+            except ObjectNotFoundError:
+                pass
         _ok("영구 삭제 → 원본+모든 스냅샷 오브젝트 제거")
         # 버킷에 잔여 오브젝트 없음
-        leftover = [
-            o.object_name
-            for o in storage_service._client.list_objects(
-                storage_service.bucket, recursive=True
-            )
-        ]
+        leftover = storage_service.list_keys()
         assert leftover == [], leftover
         assert await _storage_used(alice_id) == 0, await _storage_used(alice_id)
         _ok("영구 삭제 → storage_used == 0 (할당량 완전 회수)")

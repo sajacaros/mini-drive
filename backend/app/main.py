@@ -5,7 +5,6 @@ from typing import Literal
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
-from minio import Minio
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -16,6 +15,7 @@ from app.core.logging import configure_logging, get_logger
 from app.core.metrics import render_metrics
 from app.core.middleware import BatchBodyLimitMiddleware, RequestContextMiddleware
 from app.core.redis import redis_client
+from app.services.storage import storage_service
 
 # import 시점에 로깅을 구성해 uvicorn/테스트 어느 진입점에서도 일관 포맷을 보장한다.
 configure_logging()
@@ -97,15 +97,11 @@ async def _check_redis() -> ComponentStatus:
 
 
 async def _check_minio() -> ComponentStatus:
+    # 응답 키 이름 "minio" 는 /health 계약이라 유지한다(값은 SeaweedFS 를 본다).
     def _probe() -> bool:
-        client = Minio(
-            settings.minio_endpoint,
-            access_key=settings.minio_access_key,
-            secret_key=settings.minio_secret_key,
-            secure=settings.minio_secure,
-        )
-        # 버킷 존재 여부 확인만으로 연결/자격증명을 검증한다.
-        client.bucket_exists(settings.minio_bucket)
+        # 버킷 HEAD 한 번으로 연결/자격증명/버킷 존재를 함께 검증한다. 공유 클라이언트를 쓴다.
+        if not storage_service.bucket_exists():
+            raise RuntimeError("bucket missing")
         return True
 
     try:

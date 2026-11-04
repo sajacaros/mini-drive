@@ -28,7 +28,6 @@ import sys
 
 import httpx
 from httpx import ASGITransport
-from minio.error import S3Error
 from sqlalchemy import select
 
 import app.models  # noqa: F401 - 전체 모델을 metadata 에 등록
@@ -37,7 +36,7 @@ from app.core.database import Base, SessionFactory, engine
 from app.core.redis import redis_client
 from app.main import app
 from app.models import AuditLog, BoardAttachment, Group, User
-from app.services.storage import storage_service
+from app.services.storage import ObjectNotFoundError, storage_service
 from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
@@ -59,21 +58,15 @@ async def _reset() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
-    if not storage_service._client.bucket_exists(storage_service.bucket):
-        storage_service._client.make_bucket(storage_service.bucket)
-    leftover = [
-        o.object_name
-        for o in storage_service._client.list_objects(
-            storage_service.bucket, recursive=True
-        )
-    ]
+    storage_service.ensure_bucket()
+    leftover = storage_service.list_keys()
     storage_service.delete_many(leftover)
 
 
 def _object_exists(key: str) -> bool:
     try:
         storage_service.stat(key)
-    except S3Error:
+    except ObjectNotFoundError:
         return False
     return True
 

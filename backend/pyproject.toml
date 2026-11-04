@@ -13,7 +13,8 @@ dependencies = [
     "asyncpg>=0.30.0",
     "alembic>=1.14.0",
     "python-multipart>=0.0.12",
-    "minio>=7.2.10",
+    # S3 클라이언트(AWS 공식). 1.36+ 필요 — request_checksum_calculation 설정(services/storage.py).
+    "boto3>=1.36.0",
     "pillow>=11.0.0",
     "pyjwt>=2.10.0",
     "argon2-cffi>=23.1.0",
@@ -57,6 +58,12 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
 strict = true
+
+# boto3/botocore 는 타입 스텁을 내장하지 않는다(boto3-stubs 는 별도 패키지). StorageService 가
+# 경계에서 타입을 다시 세우므로(ObjectStat 등) 바깥으로 Any 가 새지 않는다.
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

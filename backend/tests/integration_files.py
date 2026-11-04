@@ -15,7 +15,6 @@ import sys
 
 import httpx
 from httpx import ASGITransport
-from minio.error import S3Error
 from sqlalchemy import select
 
 import app.models  # noqa: F401 - 전체 모델을 metadata 에 등록
@@ -24,7 +23,7 @@ from app.core.database import Base, SessionFactory, engine
 from app.core.redis import redis_client
 from app.main import app
 from app.models import User
-from app.services.storage import storage_service
+from app.services.storage import ObjectNotFoundError, storage_service
 from tests._bootstrap import register_active, setup_admin
 from tests._dbreset import stamp_alembic_head
 
@@ -43,15 +42,9 @@ async def _reset() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
-    if not storage_service._client.bucket_exists(storage_service.bucket):
-        storage_service._client.make_bucket(storage_service.bucket)
+    storage_service.ensure_bucket()
     # 이전 실행 잔여 오브젝트 정리.
-    leftover = [
-        o.object_name
-        for o in storage_service._client.list_objects(
-            storage_service.bucket, recursive=True
-        )
-    ]
+    leftover = storage_service.list_keys()
     storage_service.delete_many(leftover)
 
 
@@ -192,8 +185,8 @@ async def scenario() -> None:
         try:
             storage_service.stat(nested_key)
             raise AssertionError("nested 오브젝트가 아직 존재함")
-        except S3Error as exc:
-            assert exc.code in ("NoSuchKey", "NoSuchObject"), exc.code
+        except ObjectNotFoundError:
+            pass
         # storage_used 감소 (nested = 6 bytes)
         assert await _storage_used(alice_id) == used_before - len(b"nested")
         _ok("영구 삭제 (MinIO 오브젝트 제거 + storage_used 감소)")

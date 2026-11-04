@@ -46,11 +46,11 @@ class TestVersionedFilename:
 class TestInternalRedirect:
     def _svc(self) -> StorageService:
         # 생성자는 네트워크에 접속하지 않는다(지연 연결) — 오프라인 테스트 가능.
-        return StorageService(endpoint="minio:9000", bucket="minidrive")
+        return StorageService(endpoint="seaweedfs:9000", bucket="minidrive")
 
     def test_strips_scheme_host_keeps_path_and_query(self) -> None:
         svc = self._svc()
-        url = "http://minio:9000/minidrive/users/1/5?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
+        url = "http://seaweedfs:9000/minidrive/users/1/5?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
         out = svc.to_internal_redirect(url)
         assert out == (
             "/_minio/minidrive/users/1/5"
@@ -59,15 +59,15 @@ class TestInternalRedirect:
 
     def test_no_query(self) -> None:
         svc = self._svc()
-        assert svc.to_internal_redirect("http://minio:9000/minidrive/users/1/5") == (
+        assert svc.to_internal_redirect("http://seaweedfs:9000/minidrive/users/1/5") == (
             "/_minio/minidrive/users/1/5"
         )
 
     def test_internal_path_is_not_browser_facing_host(self) -> None:
         # 변환 결과에 MinIO 엔드포인트/스킴이 남지 않아야 한다.
         svc = self._svc()
-        out = svc.to_internal_redirect("http://minio:9000/minidrive/a?b=c")
-        assert "minio:9000" not in out
+        out = svc.to_internal_redirect("http://seaweedfs:9000/minidrive/a?b=c")
+        assert "seaweedfs:9000" not in out
         assert out.startswith("/_minio/")
 
 

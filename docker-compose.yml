@@ -6,7 +6,7 @@
 # 관리하기 위한 앵커다. 새 변수를 추가할 때 각 서비스에 따로 적지 않는다.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
-  # 설정 이름은 MINIO_* 를 유지한다(파이썬 SDK 가 minio 라서, 그리고 기존 .env 호환) — 값은 SeaweedFS 를 본다.
+  # 설정 이름은 MINIO_* 를 유지한다(기존 .env 호환) — 값은 SeaweedFS 를 본다. 클라이언트는 boto3.
   MINIO_ENDPOINT: seaweedfs:9000
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-in-production}
@@ -145,7 +145,7 @@ services:
 
   # ── SeaweedFS (S3 호환 오브젝트 스토리지) ──────────────
   # MinIO 커뮤니티판 지원 종료로 교체했다. 앱은 표준 S3 API 만 쓰므로(services/storage.py)
-  # minio 파이썬 SDK 를 그대로 둔 채 엔드포인트만 이쪽을 본다. 단일 프로세스로
+  # 클라이언트(boto3)는 엔드포인트만 이쪽을 본다. 단일 프로세스로
   # master·volume·filer·S3 게이트웨이를 함께 띄운다(데이터는 전부 /data 아래).
   # 이미지 태그는 고정한다 — latest 는 재빌드마다 S3 호환 동작이 바뀔 수 있다.
   seaweedfs:

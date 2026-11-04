@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:password@db:5432/minidrive"
 
     # S3 호환 오브젝트 스토리지 — 서버는 SeaweedFS(2026-11 MinIO 에서 전환). 이름 minio_* 는
-    # 클라이언트가 minio SDK 라서이고, 기존 .env(MINIO_*) 호환을 위해 유지한다.
+    # 기존 .env(MINIO_*) 호환을 위해 유지한다. 클라이언트는 boto3(services/storage.py).
     minio_endpoint: str = "seaweedfs:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "change-me-in-production"

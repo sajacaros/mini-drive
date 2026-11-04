@@ -52,8 +52,7 @@ async def _reset() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
-    if not storage_service._client.bucket_exists(storage_service.bucket):
-        storage_service._client.make_bucket(storage_service.bucket)
+    storage_service.ensure_bucket()
 
 
 async def _mkdir(

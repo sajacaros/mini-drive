@@ -47,14 +47,8 @@ async def _reset() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(stamp_alembic_head)
     await redis_client.flushdb()
-    if not storage_service._client.bucket_exists(storage_service.bucket):
-        storage_service._client.make_bucket(storage_service.bucket)
-    leftover = [
-        o.object_name
-        for o in storage_service._client.list_objects(
-            storage_service.bucket, recursive=True
-        )
-    ]
+    storage_service.ensure_bucket()
+    leftover = storage_service.list_keys()
     storage_service.delete_many(leftover)
 
 

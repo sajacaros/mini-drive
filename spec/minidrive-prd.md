@@ -366,7 +366,7 @@ interface ThemeContextType {
 | | SQLAlchemy | 2.x (async) |
 | | Alembic | 최신 |
 | | python-multipart | 최신 |
-| | MinIO Python SDK (S3 클라이언트 — 서버와 무관, SeaweedFS 에 그대로 붙음) | 7.2.x |
+| | boto3 (AWS 공식 S3 클라이언트, path-style·SigV4) | 1.36+ |
 | | PyJWT | 최신 |
 | **Object Storage** | SeaweedFS (S3 게이트웨이) | 4.47 고정 (2026-11 MinIO 에서 전환 — 문서 이력 참고) |
 | **Database** | PostgreSQL | 16+ |
@@ -1107,4 +1107,5 @@ Phase 7 설계 당시 Karpathy 의 LLM Wiki 패턴(2026-04 gist)을 권한 경�
 | 2026-07-18 | 검토 반영: 시스템 admin 설계 추가(3.6, 5.9, 6.7), MinIO 익명 접근 차단, backend 포트 비노출, `files.group_id` DDL 반영, 권한 상속 조회 시 판정으로 변경, 토큰 폐기 전략, 재개 가능 업로드, 할당량 원자적 갱신, 섹션 순서·스택 표 정리 |
 | 2026-07-19 | 구현 현행화: 델타 동기화 범위 제외(3.5), 가입 승인제→가입 코드제 전환(3.1, 5.11, 10장), 첫 admin 부트스트랩을 셋업 위저드로 대체(3.6.2, 5.12), setup·signup-codes API(6.1, 6.7), 마일스톤 상태 반영(Phase 1~5 완료, Phase 6 진행 중) |
 | 2026-11-04 | 오브젝트 스토리지 MinIO → **SeaweedFS 4.47** 전환(MinIO 커뮤니티판 지원 종료). 앱 코드는 표준 S3 API 만 써서 변경 없음 — compose 서비스·nginx upstream·버킷 초기화(`weed shell s3.bucket.create`)·백업 도구(`mc mirror` → `rclone sync`)만 교체. 설정 이름 `MINIO_*`·내부 경로 `/_minio/` 는 호환을 위해 유지. 본문의 compose/nginx 예시(7·8장)는 작성 당시 기록이다 |
+| 2026-11-04 | S3 클라이언트 minio-py → **boto3** 전환. 멀티파트가 SDK 비공개 메서드 의존에서 공개 API 로, 5 GiB 초과 서버측 복사(버전 스냅샷)도 관리형 multipart copy 로 가능해졌다. 호출부는 `ObjectNotFoundError`·`ObjectStat` 만 안다 |
 | 2026-07-21 | 문서 역할 전환(명세 → 설계 근거 기록). Phase 7 잔재를 스텁으로 축약(3.7, 5.13~5.16, 6.8~6.9, 13.3 및 4·10·12·14장 LLM 항목 삭제), Phase 6 완료·Phase 8 반영, PRD 이후 구현 기록 추가(3.8, 3.8.1, 5.17, 6.10, 9장). `spec/wiki-v2-redesign.md` 삭제 |

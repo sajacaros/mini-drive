@@ -228,7 +228,7 @@ def _zip_date_time(moment: datetime) -> tuple[int, int, int, int, int, int]:
 def stream_archive(storage: StorageService, entries: Sequence[ArchiveEntry]) -> Iterator[bytes]:
     """계획된 엔트리를 ZIP 바이트 스트림으로 만든다 (동기 제너레이터).
 
-    MinIO SDK 가 동기라 이 함수도 동기이며, Starlette 가 스레드풀에서 돌린다. 한 청크를
+    S3 SDK(boto3)가 동기라 이 함수도 동기이며, Starlette 가 스레드풀에서 돌린다. 한 청크를
     읽을 때마다 ZIP 프레임을 만들어 즉시 내보내므로 상주 메모리는 청크 크기 수준이다.
     스트리밍이 시작된 뒤의 실패(오브젝트 유실 등)는 상태 코드로 알릴 수 없어 연결이 끊긴다 —
     로그를 남기고 중단한다.
@@ -259,7 +259,6 @@ def stream_archive(storage: StorageService, entries: Sequence[ArchiveEntry]) -> 
                 raise
             finally:
                 response.close()
-                response.release_conn()
             yield sink.drain()
     # 중앙 디렉터리(닫을 때 기록됨)까지 내보낸다.
     tail = sink.drain()

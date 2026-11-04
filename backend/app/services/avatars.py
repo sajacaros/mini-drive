@@ -13,12 +13,11 @@ from __future__ import annotations
 import os
 import time
 
-from minio.error import S3Error
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
 from app.models import User
-from app.services.storage import StorageService
+from app.services.storage import ObjectNotFoundError, StorageService
 from app.services.users import get_user_by_id
 
 # 허용 이미지 타입 — 프론트 리사이즈 산출물(png/jpeg/webp)만 받는다.
@@ -110,7 +109,7 @@ async def prepare_avatar_download(
     """아바타 게이트웨이 스트리밍 준비. 반환: (internal_redirect, mime).
 
     대상 사용자가 없거나 아바타가 없으면(avatar_url NULL / 오브젝트 부재) 404. content-type 은
-    MinIO stat 으로 조회해 저장 시 타입을 보존한다.
+    스토리지 stat 으로 조회해 저장 시 타입을 보존한다.
     """
     target = await get_user_by_id(session, user_id)
     if target is None or target.avatar_url is None:
@@ -119,7 +118,7 @@ async def prepare_avatar_download(
     key = build_avatar_key(user_id)
     try:
         stat = await storage.stat_async(key)
-    except S3Error as exc:
+    except ObjectNotFoundError as exc:
         raise AvatarError(404, "아바타를 찾을 수 없습니다.") from exc
 
     mime = getattr(stat, "content_type", None) or "application/octet-stream"
