@@ -107,7 +107,10 @@ class Settings(BaseSettings):
     beemate_transfer_ttl_hours: int = Field(default=24, ge=1)
     beemate_max_file_bytes: int = Field(default=500 * 1024 * 1024, ge=1)
     beemate_max_pending_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)
-    beemate_max_devices: int = Field(default=20, ge=1)
+    # 기기는 접속만 해도 자동 등록되므로 상한을 넉넉히 두고, 즐겨찾기가 아닌 기기는 이 기간
+    # 접속이 없으면 purger 회차가 지운다.
+    beemate_max_devices: int = Field(default=50, ge=1)
+    beemate_device_stale_days: int = Field(default=30, ge=1)
 
     # --- 위키 인덱싱 (spec/wiki-index.md) ---
     wiki_enabled: bool = True

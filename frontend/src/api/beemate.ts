@@ -29,10 +29,13 @@ export interface BeemateTransfer {
   expires_at: string;
 }
 
-/** 즐겨찾기 → 켜진 기기 → 나머지 순(서버 정렬). 기본은 보낼 곳 목록이라 숨긴 기기를 뺀다. */
-export async function listDevices(includeHidden = false): Promise<BeemateDevice[]> {
+/**
+ * 기본은 보낼 곳 목록 — 즐겨찾기(꺼져 있어도) + 지금 켜진 기기, 숨김 제외.
+ * all=true 는 관리용 전체. 순서는 둘 다 즐겨찾기 → 켜진 기기 → 나머지(서버 정렬).
+ */
+export async function listDevices(all = false): Promise<BeemateDevice[]> {
   const { data } = await apiClient.get<BeemateDevice[]>("/beemate/devices", {
-    params: includeHidden ? { include_hidden: true } : undefined,
+    params: all ? { all: true } : undefined,
   });
   return data;
 }

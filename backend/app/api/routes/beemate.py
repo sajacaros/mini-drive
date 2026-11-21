@@ -46,12 +46,13 @@ async def list_devices(
     user: CurrentUser,
     session: DbSession,
     redis: RedisClient,
-    include_hidden: bool = Query(False),
+    all: bool = Query(False),
 ) -> list[DeviceResponse]:
-    """내 기기 — 즐겨찾기 → 켜진 기기 → 나머지 순. 기본은 보낼 곳 목록이라 숨긴 기기를 뺀다."""
-    return await beemate_service.list_devices(
-        session, redis, user, include_hidden=include_hidden
-    )
+    """보낼 곳 목록(기본) = 즐겨찾기 + 켜진 기기, 숨김 제외. `?all=true` 는 관리용 전체.
+
+    순서는 둘 다 즐겨찾기 → 켜진 기기 → 나머지.
+    """
+    return await beemate_service.list_devices(session, redis, user, all_devices=all)
 
 
 @router.post("/devices", response_model=DeviceResponse)

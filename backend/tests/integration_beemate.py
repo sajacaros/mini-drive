@@ -126,16 +126,19 @@ async def scenario() -> None:
         assert r.json()["is_favorite"] is True, r.text
         r = await c.patch(f"{dev}/{pc}", headers=alice_h, json={})
         assert r.status_code == 422, r.text
+        # 보낼 곳 목록 = 즐겨찾기(꺼져 있어도) + 켜진 기기. 지금은 아무것도 안 켜져 있다.
         r = await c.get(dev, headers=alice_h)
-        # 즐겨찾기(꺼져 있어도) → 나머지 등록 순
+        assert [d["id"] for d in r.json()] == [laptop], r.text
+        # 관리 목록은 전부 — 즐겨찾기 → 나머지 등록 순
+        r = await c.get(f"{dev}?all=true", headers=alice_h)
         assert [d["id"] for d in r.json()] == [laptop, phone, pc], r.text
-        await c.patch(f"{dev}/{phone}", headers=alice_h, json={"is_hidden": True})
-        r = await c.get(dev, headers=alice_h)
-        assert [d["id"] for d in r.json()] == [laptop, pc], r.text
-        r = await c.get(f"{dev}?include_hidden=true", headers=alice_h)
+        # 숨긴 기기는 즐겨찾기여도 보낼 곳에서 빠진다
+        await c.patch(f"{dev}/{laptop}", headers=alice_h, json={"is_hidden": True})
+        assert (await c.get(dev, headers=alice_h)).json() == []
+        r = await c.get(f"{dev}?all=true", headers=alice_h)
         assert [d["id"] for d in r.json()] == [laptop, phone, pc], r.text
-        await c.patch(f"{dev}/{phone}", headers=alice_h, json={"is_hidden": False})
-        _ok("자동 등록(upsert, 이름 보존) · 이름 · 즐겨찾기 · 숨김 · 정렬")
+        await c.patch(f"{dev}/{laptop}", headers=alice_h, json={"is_hidden": False})
+        _ok("자동 등록(upsert, 이름 보존) · 이름 · 즐겨찾기 · 숨김 · 보낼 곳 = ★ + 켜짐")
 
         # 2. 남의 기기는 404 (존재를 흘리지 않는다). 같은 client_id 도 사용자별로 따로다.
         assert (await c.get(dev, headers=bob_h)).json() == []
@@ -154,11 +157,8 @@ async def scenario() -> None:
         hello = json.loads((await anext(stream))[len("data: ") :])
         assert hello == {"type": "hello", "device_id": pc}, hello
         r = await c.get(dev, headers=alice_h)
-        assert [(d["id"], d["online"]) for d in r.json()] == [
-            (laptop, False),
-            (pc, True),
-            (phone, False),
-        ], r.text
+        # 켜진 pc 가 보낼 곳에 나타난다. 꺼진 phone(★ 아님)은 안 나온다.
+        assert [(d["id"], d["online"]) for d in r.json()] == [(laptop, False), (pc, True)], r.text
 
         r = await _send(c, alice_h, to=pc, frm=phone)
         assert r.status_code == 201, r.text
@@ -229,6 +229,26 @@ async def scenario() -> None:
         assert result.deleted == 1 and result.bytes_reclaimed == 4096, result
         assert await _row(ids[0]) is None
         _ok("purge_expired 가 만료분만 지운다")
+
+        # 7-1. 오래 안 쓴 기기 정리 — ★ 는 남기고, 아니면 30일 뒤 지운다
+        stale = {"client_id": "meeting-room-1", "name": "회의실", "platform": "web"}
+        meeting = (await c.post(dev, headers=alice_h, json=stale)).json()["id"]
+        async with SessionFactory() as s:
+            await s.execute(
+                text(
+                    "UPDATE beemate_devices SET last_seen_at = :ts, created_at = :ts "
+                    "WHERE id = ANY(:ids)"
+                ),
+                {"ts": datetime.now(UTC) - timedelta(days=31), "ids": [meeting, laptop]},
+            )
+            await s.commit()
+        async with SessionFactory() as s:
+            removed = await beemate_service.purge_stale_devices(s, storage_service)
+        assert removed == 1, removed
+        r = await c.get(f"{dev}?all=true", headers=alice_h)
+        device_ids = [d["id"] for d in r.json()]
+        assert meeting not in device_ids and laptop in device_ids, r.text
+        _ok("30일 넘게 안 쓴 기기는 지우고 ★ 기기는 남긴다")
 
         # 8. 기기 삭제 — 밀린 전송의 오브젝트까지
         keys = [beemate_service.build_object_key(alice_id, i) for i in ids[1:]]

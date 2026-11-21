@@ -137,7 +137,11 @@ async def _purge_beemate() -> beemate_service.PurgeResult:
     않는 사용자의 몫뿐이라 하루 1회면 충분하다. 만료분은 조회 조건으로 이미 안 보인다.
     """
     async with SessionFactory() as session:
-        return await beemate_service.purge_expired(session, get_storage())
+        result = await beemate_service.purge_expired(session, get_storage())
+        result.devices_removed = await beemate_service.purge_stale_devices(
+            session, get_storage()
+        )
+        return result
 
 
 async def _purge_wiki_trees() -> int:
@@ -221,7 +225,7 @@ async def _purge_trash(*, dry_run: bool, loop: bool) -> int:
         except Exception:  # noqa: BLE001 - BeeMate 정리 실패가 휴지통 회차 보고를 막지 않는다
             log.exception("beemate_purge_failed")
         else:
-            if beemate.deleted or beemate.failed:
+            if beemate.deleted or beemate.failed or beemate.devices_removed:
                 log.info("beemate_purge_done", **asdict(beemate))
         try:
             drift = await _reconcile_wiki()

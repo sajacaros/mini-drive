@@ -54,22 +54,19 @@
 
 ### 보낼 곳 목록
 
-모든 기기를 보여 준다(숨김 제외). 순서는 **즐겨찾기 → 켜진 기기 → 나머지**, 같은 무리 안은
-등록 순. 즐겨찾기는 꺼져 있어도 맨 위다 — 사용자가 고른 자리가 접속 상태로 흔들리면 안 된다.
-꺼진 기기에도 보낼 수 있고, 그 기기는 다음에 켜질 때 당겨 간다.
+**즐겨찾기한 기기(꺼져 있어도) + 지금 켜진 기기**만 보여 준다. 숨긴 기기는 즐겨찾기여도 뺀다.
+순서는 즐겨찾기 → 켜진 기기, 같은 무리 안은 등록 순.
 
-**전송** `beemate_transfers`
+모든 기기를 보여 주지 않는 이유 — 드라이브는 어디서든 접속한다. 한 번 열어 본 회의실 PC,
+남의 노트북 브라우저가 전부 기기로 남는데 그것을 다 늘어놓으면 고르기 어렵다. 사용자가 고른
+기기(★)와 지금 받을 수 있는 기기면 충분하다. ★ 기기는 꺼져 있어도 보낼 수 있고, 다음에 켜질
+때 당겨 간다. 관리 화면은 `?all=true` 로 전부 본다.
 
-| 컬럼 | |
-|---|---|
-| id, user_id(→users, CASCADE) | 보낸 사람 = 받는 사람. 1차는 **내 기기끼리만** |
-| to_device_id(→devices, CASCADE) | 받을 기기 |
-| from_device_id(→devices, SET NULL) | 보낸 기기(표시용). 지워져도 전송은 남는다 |
-| name, mime_type, size, object_key | |
-| created_at | 만료 판정 기준 |
+### 오래 안 쓴 기기 정리
 
-상태 컬럼은 없다. **받으면 행을 지운다.** "받았지만 남아 있는" 상태를 두면 그걸 다시 지우는
-경로가 하나 더 생긴다.
+★ 가 아니고 `BEEMATE_DEVICE_STALE_DAYS`(기본 30)일 동안 접속이 없는 기기는 purger 회차가
+지운다. 자동 등록이라 정리가 없으면 관리 목록이 끝없이 늘어난다. ★ 는 사용자가 고른 것이라
+오래 꺼져 있어도 남긴다. 기기 상한(`BEEMATE_MAX_DEVICES`)은 자동 등록에 맞춰 50 으로 올렸다.
 
 ## 남에게 보내기를 왜 빼는가
 
@@ -98,7 +95,7 @@
 - 파일 1개 `BEEMATE_MAX_FILE_BYTES` 기본 500 MiB. 사진·문서가 대상이고 대용량은 드라이브가 맡는다.
 - 사용자당 아직 안 받은 전송 합계 `BEEMATE_MAX_PENDING_BYTES` 기본 2 GiB. 꺼진 PC 로 계속
   보내 저장소를 채우는 것을 막는다.
-- 사용자당 기기 `BEEMATE_MAX_DEVICES` 기본 20.
+- 사용자당 기기 `BEEMATE_MAX_DEVICES` 기본 50 (자동 등록이라 넉넉히, 오래 안 쓴 것은 정리).
 - 업로드 rate limit 은 드라이브 업로드(분당 10)와 **따로** 둔다(`beemate`, 분당 60). 사진 열
   장을 한 번에 끌면 드라이브 한도에 바로 걸린다.
 
@@ -117,7 +114,7 @@
 |---|---|
 | `GET /events?client_id=&name=&platform=` | SSE. 붙는 순간 upsert. `hello` → `pending` 신호. Bearer 인증(fetch 스트리밍) |
 | `POST /devices` `{client_id, name, platform}` | upsert — 폰 앱이 로그인 직후 부른다 |
-| `GET /devices[?include_hidden=true]` | 내 기기 + `online`. 즐겨찾기 → 켜짐 → 나머지 |
+| `GET /devices[?all=true]` | 보낼 곳(★ + 켜짐, 숨김 제외) / 관리용 전체. 즐겨찾기 → 켜짐 → 나머지 |
 | `PATCH /devices/{id}` `{name?, is_favorite?, is_hidden?}` | 부분 수정 |
 | `DELETE /devices/{id}` | 기기 삭제(밀린 전송 포함) |
 | `POST /transfers` multipart `file, to_device_id, from_device_id?` | 보내기 |

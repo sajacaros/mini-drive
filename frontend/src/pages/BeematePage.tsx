@@ -496,7 +496,8 @@ export function BeematePage() {
             <div className="border-b border-token px-4 py-2">
               <h2 className="text-sm font-semibold">기기 관리</h2>
               <p className="text-xs text-muted">
-                ★ 는 보낼 곳 목록 맨 위에 고정됩니다. 끈 기기는 보낼 곳 목록에 나오지 않습니다.
+                폰의 보낼 곳 목록에는 ★ 기기(꺼져 있어도)와 지금 켜진 기기만 나옵니다. ★ 가 아닌
+                기기는 30일 동안 접속이 없으면 자동으로 지워집니다.
               </p>
             </div>
             <ul className="divide-token">

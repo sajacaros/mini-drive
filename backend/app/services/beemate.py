@@ -142,15 +142,22 @@ def sort_devices(devices: list[DeviceResponse]) -> list[DeviceResponse]:
 
 
 async def list_devices(
-    session: AsyncSession, redis: Redis, user: User, *, include_hidden: bool = False
+    session: AsyncSession, redis: Redis, user: User, *, all_devices: bool = False
 ) -> list[DeviceResponse]:
-    """내 기기. 기본은 보낼 곳 목록이라 숨긴 기기를 뺀다 — 관리 화면은 include_hidden."""
-    stmt = select(BeemateDevice).where(BeemateDevice.user_id == user.id)
-    if not include_hidden:
-        stmt = stmt.where(BeemateDevice.is_hidden.is_(False))
-    rows = (await session.execute(stmt)).scalars().all()
+    """내 기기. 기본은 **보낼 곳 목록** — 즐겨찾기(꺼져 있어도) + 지금 켜진 기기, 숨김 제외.
+
+    드라이브는 어디서든 접속하므로 한 번 열어 본 PC 가 전부 기기로 남는다. 그것을 다 보여 주면
+    고르기 어렵다. 그래서 사용자가 고른 기기(★)와 지금 받을 수 있는 기기만 내놓는다.
+    관리 화면은 all_devices 로 전부 본다.
+    """
+    rows = (
+        await session.execute(select(BeemateDevice).where(BeemateDevice.user_id == user.id))
+    ).scalars().all()
     flags = await _online_flags(redis, [d.id for d in rows])
-    return sort_devices([_device_response(d, f) for d, f in zip(rows, flags, strict=True)])
+    devices = [_device_response(d, f) for d, f in zip(rows, flags, strict=True)]
+    if not all_devices:
+        devices = [d for d in devices if not d.is_hidden and (d.is_favorite or d.online)]
+    return sort_devices(devices)
 
 
 async def register_device(
@@ -419,6 +426,8 @@ class PurgeResult:
     deleted: int = 0
     bytes_reclaimed: int = 0
     failed: int = 0
+    # 오래 안 쓴 기기 정리 몫(purger 회차에서만 채운다).
+    devices_removed: int = 0
 
 
 async def purge_expired(
@@ -464,6 +473,44 @@ async def purge_expired(
         if len(rows) < _PURGE_BATCH:
             break
     return result
+
+
+async def purge_stale_devices(
+    session: AsyncSession, storage: StorageService, *, now: datetime | None = None
+) -> int:
+    """오래 안 쓴 기기를 지운다 — 즐겨찾기가 아니고 BEEMATE_DEVICE_STALE_DAYS 동안 접속이 없는 것.
+
+    아무 PC 에서나 한 번 열어 본 브라우저가 관리 목록에 끝없이 쌓이지 않게 한다. 즐겨찾기는
+    사용자가 고른 것이라 오래 꺼져 있어도 남긴다. 그 기기로 가던 전송의 오브젝트를 먼저 지우고
+    (보통은 TTL 로 이미 없다) 행을 지운다. 오브젝트 삭제가 실패한 기기는 남겨 다음 회차에 맡긴다.
+    """
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=settings.beemate_device_stale_days)
+    seen = func.coalesce(BeemateDevice.last_seen_at, BeemateDevice.created_at)
+    stale = list(
+        (
+            await session.execute(
+                select(BeemateDevice.id).where(
+                    BeemateDevice.is_favorite.is_(False), seen < cutoff
+                )
+            )
+        ).scalars()
+    )
+    if not stale:
+        return 0
+    rows = (
+        await session.execute(
+            select(BeemateTransfer.to_device_id, BeemateTransfer.object_key).where(
+                BeemateTransfer.to_device_id.in_(stale)
+            )
+        )
+    ).all()
+    failed = set(await storage.delete_many_async([r.object_key for r in rows])) if rows else set()
+    blocked = {r.to_device_id for r in rows if r.object_key in failed}
+    doomed = [i for i in stale if i not in blocked]
+    if doomed:
+        await session.execute(delete(BeemateDevice).where(BeemateDevice.id.in_(doomed)))
+        await session.commit()
+    return len(doomed)
 
 
 # --- 실시간 ------------------------------------------------------------------
