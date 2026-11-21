@@ -48,6 +48,7 @@ import {
   TrashIcon,
   UsersIcon,
   XIcon,
+  InboxIcon,
 } from "./icons";
 
 const COLLAPSE_KEY = "minidrive.nav.collapsed";
@@ -206,6 +207,7 @@ export function Layout() {
             <NavItem to="/groups" icon={<UsersIcon />} label="그룹" collapsed={collapsed} />
             <NavItem to="/trash" icon={<TrashIcon />} label="휴지통" collapsed={collapsed} />
             <NavItem to="/shares" icon={<LinkIcon />} label="공유 링크" collapsed={collapsed} />
+            <NavItem to="/beemate" icon={<InboxIcon />} label="BeeMate" collapsed={collapsed} />
           </NavSection>
 
           {/*

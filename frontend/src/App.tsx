@@ -12,6 +12,7 @@ import { AdminGroupsPage } from "@/pages/AdminGroupsPage";
 import { AdminSharesPage } from "@/pages/AdminSharesPage";
 import { AdminSignupCodesPage } from "@/pages/AdminSignupCodesPage";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
+import { BeematePage } from "@/pages/BeematePage";
 import { BoardPage } from "@/pages/BoardPage";
 import { BoardPostPage } from "@/pages/BoardPostPage";
 import { BoardsPage } from "@/pages/BoardsPage";
@@ -89,6 +90,7 @@ function App() {
             <Route path="/recent" element={<RecentPage />} />
             <Route path="/trash" element={<TrashPage />} />
             <Route path="/shares" element={<SharesPage />} />
+            <Route path="/beemate" element={<BeematePage />} />
             <Route path="/wiki" element={<WikiPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/wiki/catalog" element={<WikiCatalogPage />} />
