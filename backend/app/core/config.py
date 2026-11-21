@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     rate_limit_refresh_per_min: int = 10    # 토큰 갱신: IP 당
     rate_limit_upload_per_min: int = 10     # 업로드: user 당
     rate_limit_lookup_per_min: int = 20     # 이메일 조회: user 당
+    # BeeMate 보내기: user 당. 드라이브 업로드와 따로 둔다 — 사진 열 장을 한 번에 끌면
+    # 드라이브 한도(10)에 바로 걸린다 (spec/beemate.md).
+    rate_limit_beemate_per_min: int = 60
 
     # 재개 가능 업로드 (PRD 3.2). 파트 크기는 S3 최소(5MiB) 이상이어야 한다(마지막 파트 제외).
     # 세션 TTL 초과분은 고아 multipart 로 간주해 abort + 세션 정리한다.
@@ -97,6 +100,14 @@ class Settings(BaseSettings):
     trash_purge_batch: int = Field(default=200, ge=1)
     # 회차당 개별 SSE 이벤트 상한. 초과하면 소유자별 요약 1건으로 접는다(이벤트 폭주 방지).
     trash_purge_event_cap: int = Field(default=200, ge=0)
+
+    # BeeMate — 내 기기끼리 파일 보내기 (spec/beemate.md).
+    # 받지 않은 전송은 TTL 뒤 목록에서 빠지고 purger 회차·다음 전송 때 지운다.
+    # pending 상한은 꺼진 기기로 계속 보내 저장소를 채우는 것을 막는다(사용자당 합계).
+    beemate_transfer_ttl_hours: int = Field(default=24, ge=1)
+    beemate_max_file_bytes: int = Field(default=500 * 1024 * 1024, ge=1)
+    beemate_max_pending_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1)
+    beemate_max_devices: int = Field(default=20, ge=1)
 
     # --- 위키 인덱싱 (spec/wiki-index.md) ---
     wiki_enabled: bool = True

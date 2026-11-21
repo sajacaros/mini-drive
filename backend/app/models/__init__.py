@@ -7,6 +7,7 @@
 from app.core.database import Base
 from app.models.app_setting import AppSetting
 from app.models.audit import AuditLog
+from app.models.beemate import BeemateDevice, BeemateTransfer
 from app.models.board import (
     Board,
     BoardAttachment,
@@ -58,6 +59,8 @@ __all__ = [
     "WikiDocument",
     "ChatSession",
     "ChatMessage",
+    "BeemateDevice",
+    "BeemateTransfer",
     "Board",
     "BoardGroup",
     "BoardPost",

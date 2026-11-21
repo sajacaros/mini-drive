@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.routes import (
     admin,
     auth,
+    beemate,
     boards,
     chat,
     files,
@@ -40,3 +41,5 @@ api_router.include_router(
 api_router.include_router(todos.router, prefix="/todos", tags=["todos"])
 api_router.include_router(wiki.router, prefix="/wiki", tags=["wiki"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+# 내 기기끼리 파일 보내기 (spec/beemate.md).
+api_router.include_router(beemate.router, prefix="/beemate", tags=["beemate"])

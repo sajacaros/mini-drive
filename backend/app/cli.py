@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.core.database import SessionFactory
 from app.core.logging import configure_logging, get_logger
 from app.core.security import PasswordPolicyError, validate_password_policy
+from app.services import beemate as beemate_service
 from app.services import trash as trash_service
 from app.services import wiki as wiki_service
 from app.services import wiki_indexer, wiki_llm
@@ -129,6 +130,16 @@ async def _reconcile_wiki_cli(*, dry_run: bool) -> int:
     return 0
 
 
+async def _purge_beemate() -> beemate_service.PurgeResult:
+    """만료된 BeeMate 전송을 지운다 (spec/beemate.md 「정리」).
+
+    휴지통 회차에 얹는다 — 보낼 때마다 그 사용자 몫은 지우므로, 여기 오는 것은 다시 보내지
+    않는 사용자의 몫뿐이라 하루 1회면 충분하다. 만료분은 조회 조건으로 이미 안 보인다.
+    """
+    async with SessionFactory() as session:
+        return await beemate_service.purge_expired(session, get_storage())
+
+
 async def _purge_wiki_trees() -> int:
     """위키를 끈 뒤 유예가 지난 트리를 지운다 (spec/wiki-index.md).
 
@@ -205,6 +216,13 @@ async def _purge_trash(*, dry_run: bool, loop: bool) -> int:
         except Exception:  # noqa: BLE001 - 위키 정리 실패가 휴지통 회차 보고를 막지 않는다
             log.exception("wiki_tree_purge_failed")
             wiki_trees = 0
+        try:
+            beemate = await _purge_beemate()
+        except Exception:  # noqa: BLE001 - BeeMate 정리 실패가 휴지통 회차 보고를 막지 않는다
+            log.exception("beemate_purge_failed")
+        else:
+            if beemate.deleted or beemate.failed:
+                log.info("beemate_purge_done", **asdict(beemate))
         try:
             drift = await _reconcile_wiki()
         except Exception:  # noqa: BLE001 - 스윕 실패가 휴지통 회차 보고를 막지 않는다
