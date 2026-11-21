@@ -20,7 +20,7 @@
 - 파일 이벤트(`file-events`) — 열린 드라이브 화면마다 "새 파일" 이 떴다 사라진다.
 
 그래서 테이블 둘(`beemate_devices`, `beemate_transfers`)과 오브젝트 접두어
-`beemate/{user_id}/{transfer_id}` 를 따로 둔다. 저장소(SeaweedFS)·게이트웨이 다운로드
+`beemate/{user_id}/{transfer_id}` 를 따로 둔다. 저장소(objectStorage = RustFS)·게이트웨이 다운로드
 (X-Accel-Redirect)·인증은 그대로 쓴다.
 
 ## 모델

@@ -78,7 +78,7 @@ services:
           cpus: "0.5"
           memory: 128M
 
-  seaweedfs:
+  objectStorage:
     restart: unless-stopped
     logging: *default-logging
     deploy:

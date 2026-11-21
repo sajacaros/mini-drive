@@ -1,4 +1,4 @@
-"""파일 그룹 권한 + 상속 판정 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""파일 그룹 권한 + 상속 판정 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오 (PRD 3.1.3, 5.7, 6.5/6.6):
   A 가 root/depth1/depth2/file + depth1/depth2b 트리 구성 → 그룹 G 생성, B 를 member 로

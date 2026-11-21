@@ -118,7 +118,7 @@ nginx (Reverse Proxy / Gateway)
 | **S3 추상화 계층** | `StorageService` 인터페이스(`put/get/presignGet/delete`)로 MinIO 접근을 감싸, 추후 AWS S3 전환 시 코드 변경 최소화 |
 | **게이트웨이 다운로드 모델** | 브라우저에 presigned URL 직접 발급 ❌ → FastAPI 매 요청 인가 후 `X-Accel-Redirect`로 nginx→MinIO 스트리밍 ✅. 공유 링크 비활성화 시 **즉시 차단** 보장 |
 | **앱 레벨 버전 관리** | MinIO 네이티브 버저닝 ❌, PostgreSQL `file_versions` 테이블이 진실 소스 ✅ |
-| **Internal presign (60s TTL)** | nginx↔MinIO 간 presign은 브라우저 비노출, 60초 TTL, nginx만 접근 가능. MinIO 버킷은 익명 접근 완전 차단(`mc anonymous set none`). SeaweedFS 전환 후에는 S3 identity 를 하나 이상 두는 것으로 같은 효과(익명 403) |
+| **Internal presign (60s TTL)** | nginx↔MinIO 간 presign은 브라우저 비노출, 60초 TTL, nginx만 접근 가능. MinIO 버킷은 익명 접근 완전 차단(`mc anonymous set none`). SeaweedFS·RustFS 전환 후에는 관리자 identity 만 두고 버킷을 비공개로 두는 것으로 같은 효과(익명 403) |
 | **권한 상속 = 조회 시 판정** | 상속 권한을 행으로 물질화하지 않음. 명시적 부여만 저장하고, 조회 시 조상 경로를 recursive CTE로 판정 + Redis 캐시. 권한 변경 시 쓰기 폭증 없이 "즉시 반영" 요구 충족 |
 | **시스템 admin / 그룹 admin 분리** | `users.role`(전역)과 `group_members.role`(그룹 내)은 별개 축. 시스템 admin은 운영 통제만, 파일 내용 접근 불가 |
 
@@ -368,7 +368,7 @@ interface ThemeContextType {
 | | python-multipart | 최신 |
 | | boto3 (AWS 공식 S3 클라이언트, path-style·SigV4) | 1.36+ |
 | | PyJWT | 최신 |
-| **Object Storage** | SeaweedFS (S3 게이트웨이) | 4.47 고정 (2026-11 MinIO 에서 전환 — 문서 이력 참고) |
+| **Object Storage** | RustFS (compose 서비스 `objectStorage`) | 1.0.6 고정 (2026-11 MinIO → SeaweedFS → RustFS — 문서 이력 참고) |
 | **Database** | PostgreSQL | 16+ |
 | **Cache / Token Store** | Redis | 7.x |
 | **Reverse Proxy** | nginx | 1.27+ |
@@ -1109,4 +1109,5 @@ Phase 7 설계 당시 Karpathy 의 LLM Wiki 패턴(2026-04 gist)을 권한 경�
 | 2026-11-04 | 오브젝트 스토리지 MinIO → **SeaweedFS 4.47** 전환(MinIO 커뮤니티판 지원 종료). 앱 코드는 표준 S3 API 만 써서 변경 없음 — compose 서비스·nginx upstream·버킷 초기화(`weed shell s3.bucket.create`)·백업 도구(`mc mirror` → `rclone sync`)만 교체. 설정 이름 `MINIO_*`·내부 경로 `/_minio/` 는 호환을 위해 유지. 본문의 compose/nginx 예시(7·8장)는 작성 당시 기록이다 |
 | 2026-11-04 | S3 클라이언트 minio-py → **boto3** 전환. 멀티파트가 SDK 비공개 메서드 의존에서 공개 API 로, 5 GiB 초과 서버측 복사(버전 스냅샷)도 관리형 multipart copy 로 가능해졌다. 호출부는 `ObjectNotFoundError`·`ObjectStat` 만 안다 |
 | 2026-11-04 | MinIO 잔재 이름 정리: 환경변수 `MINIO_*` → `S3_*`(`.env` 는 `S3_ACCESS_KEY`/`S3_SECRET_KEY`/`S3_BUCKET`), 내부 경로 `/_minio/` → `/_s3/`, `/health` 응답 키 `minio` → `storage`. 기존 서버는 `.env` 키 이름을 바꿔야 한다(deploy/DEPLOY.md) |
+| 2026-11-21 | 오브젝트 스토리지 SeaweedFS → **RustFS 1.0.6** 전환(실데이터가 없는 지금이 전환 비용 최소). S3 서버 단일 부품이라 master/volume/filer 구성과 `weed shell` 버킷 생성이 없어지고, 버킷은 표준 S3 `CreateBucket`(`rc bucket create --ignore-existing`)으로 만든다. compose 서비스 이름을 제품명 대신 `objectStorage` 로 바꿔 다음 교체 때 nginx Host·presigned URL·config 를 건드리지 않게 했다. **접속 호스트는 소문자 `objectstorage:9000`** — RustFS 는 SigV4 검증 때 Host 를 소문자로 정규화해, 대문자가 섞이면 presigned URL 이 403 이 난다(실측). SeaweedFS 의 ListParts marker 무시 버그는 RustFS 에서 재현되지 않지만 방어 코드는 유지. RustFS 는 `X-Real-IP`·`Forwarded` 헤더가 붙은 presigned 요청을 400 으로 거절해(실측), nginx `/_s3/` 에서 두 헤더를 비운다(운영 앞단이 붙이는 것까지) |
 | 2026-07-21 | 문서 역할 전환(명세 → 설계 근거 기록). Phase 7 잔재를 스텁으로 축약(3.7, 5.13~5.16, 6.8~6.9, 13.3 및 4·10·12·14장 LLM 항목 삭제), Phase 6 완료·Phase 8 반영, PRD 이후 구현 기록 추가(3.8, 3.8.1, 5.17, 6.10, 9장). `spec/wiki-v2-redesign.md` 삭제 |

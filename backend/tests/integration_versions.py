@@ -1,4 +1,4 @@
-"""버전 관리 + 다운로드 티켓 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""버전 관리 + 다운로드 티켓 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오 (PRD 3.3, 6.2):
   업로드(v1) → 재업로드(v2, base_version 일치) → 충돌 409(잘못된 base_version)

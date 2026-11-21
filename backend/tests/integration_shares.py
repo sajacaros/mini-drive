@@ -1,4 +1,4 @@
-"""공유 링크 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""공유 링크 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오: admin 부트스트랩 → alice 승인/로그인 → 업로드 → 공유 생성 → 무인증 메타 조회 →
 무인증 다운로드(X-Accel-Redirect + presigned URL 로 스토리지 직접 GET 바이트 일치) →

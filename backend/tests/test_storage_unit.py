@@ -1,6 +1,6 @@
 """StorageService(boto3) 유닛 테스트 — 네트워크 없이 botocore Stubber 로 응답을 대본으로 준다.
 
-실서버(SeaweedFS) 왕복은 integration_* 가 본다. 여기서는 SDK 위에 얹은 우리 로직만 고정한다:
+실서버(RustFS) 왕복은 integration_* 가 본다. 여기서는 SDK 위에 얹은 우리 로직만 고정한다:
 not-found 변환, ETag 따옴표 정리, ListParts 페이지 넘김의 중복 접기·멈춤 조건, 업로드 길이 상한,
 DeleteObjects 1000개 분할.
 """
@@ -23,7 +23,7 @@ from app.services.storage import (
 @pytest.fixture()
 def svc() -> StorageService:
     return StorageService(
-        endpoint="seaweedfs:9000", bucket="b", access_key="k", secret_key="s", secure=False
+        endpoint="objectstorage:9000", bucket="b", access_key="k", secret_key="s", secure=False
     )
 
 
@@ -97,7 +97,7 @@ class TestMultipart:
     def test_list_parts_ignored_marker_does_not_loop(
         self, svc: StorageService, stub: Stubber
     ) -> None:
-        # SeaweedFS 4.47 실측: marker 를 줘도 처음부터 다시 준다.
+        # 예전 SeaweedFS 4.47 실측: marker 를 줘도 처음부터 다시 준다(RustFS 는 정상, 방어 유지).
         # 중복을 접고, 새 파트가 없으면 멈춘다.
         page = {
             "Parts": [
@@ -158,6 +158,6 @@ class TestPresign:
     def test_path_style_url_on_endpoint_host(self, svc: StorageService) -> None:
         # 서명 Host 가 엔드포인트 그대로여야 nginx 가 같은 Host 로 넘겨 SigV4 가 맞는다(PRD 12).
         url = svc.presign_get("users/1/5", ttl=60)
-        assert url.startswith("http://seaweedfs:9000/b/users/1/5?")
+        assert url.startswith("http://objectstorage:9000/b/users/1/5?")
         assert "X-Amz-Signature=" in url
         assert svc.to_internal_redirect(url).startswith("/_s3/b/users/1/5?")

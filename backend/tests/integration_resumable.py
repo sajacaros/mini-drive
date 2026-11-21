@@ -1,4 +1,4 @@
-"""재개 가능 업로드(S3 Multipart) 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""재개 가능 업로드(S3 Multipart) 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 Phase 5-2 시나리오:
   - 새 파일 다청크 업로드 완료 → 내용 무결성(다운로드 바이트 일치), 목록 노출, 세션 소멸.

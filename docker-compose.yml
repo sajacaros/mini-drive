@@ -6,8 +6,11 @@
 # 관리하기 위한 앵커다. 새 변수를 추가할 때 각 서비스에 따로 적지 않는다.
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-minidrive}
-  # 오브젝트 스토리지(SeaweedFS S3). 클라이언트는 boto3(services/storage.py).
-  S3_ENDPOINT: seaweedfs:9000
+  # 오브젝트 스토리지(objectStorage = RustFS, S3 호환). 클라이언트는 boto3(services/storage.py).
+  # 호스트는 반드시 소문자로 쓴다(서비스 키는 objectStorage). RustFS 는 SigV4 검증 때 Host 를 소문자로
+  # 정규화하는데 boto3 는 presigned URL 을 적힌 대소문자 그대로 서명해, 대문자가 섞이면 403
+  # SignatureDoesNotMatch 가 난다(2026-11 실측). 도커 DNS 는 대소문자를 가리지 않아 이름은 풀린다.
+  S3_ENDPOINT: objectstorage:9000
   S3_ACCESS_KEY: ${S3_ACCESS_KEY:-s3admin}
   S3_SECRET_KEY: ${S3_SECRET_KEY:-change-me-in-production}
   S3_BUCKET: ${S3_BUCKET:-minidrive}
@@ -79,9 +82,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      seaweedfs:
+      objectStorage:
         condition: service_healthy
-      seaweedfs-init:
+      objectStorage-init:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -143,48 +146,56 @@ services:
     networks:
       - minidrive
 
-  # ── SeaweedFS (S3 호환 오브젝트 스토리지) ──────────────
-  # MinIO 커뮤니티판 지원 종료로 교체했다. 앱은 표준 S3 API 만 쓰므로(services/storage.py)
-  # 클라이언트(boto3)는 엔드포인트만 이쪽을 본다. 단일 프로세스로
-  # master·volume·filer·S3 게이트웨이를 함께 띄운다(데이터는 전부 /data 아래).
+  # ── objectStorage: RustFS (S3 호환 오브젝트 스토리지) ──────────────
+  # 2026-11: MinIO(커뮤니티판 지원 종료) → SeaweedFS → RustFS. 앱은 표준 S3 API 만 쓰므로
+  # (services/storage.py) 클라이언트(boto3)는 엔드포인트만 이쪽을 본다. 서비스 이름을 제품명이 아닌
+  # objectStorage 로 둔 건, 스토리지를 또 바꿔도 nginx Host·presigned URL·config 를 안 건드리기 위해서다.
+  # RustFS 는 S3 서버 단일 부품이라 SeaweedFS 의 master/volume/filer 같은 내부 구성이 없다.
   # 이미지 태그는 고정한다 — latest 는 재빌드마다 S3 호환 동작이 바뀔 수 있다.
-  seaweedfs:
-    image: chrislusf/seaweedfs:4.47
-    # -ip.bind=0.0.0.0: 기본값은 컨테이너의 첫 IP 에만 바인드해 다른 네트워크·localhost 에서 안 닿는다.
-    # -master.volumeSizeLimitMB: 기본 30GB 볼륨 대신 1GB 단위로 잘게 나눠 디스크 선점을 줄인다.
-    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=9000 -master.volumeSizeLimitMB=1024
+  objectStorage:
+    image: rustfs/rustfs:1.0.6
     # 9000(S3) 호스트 비노출 — 내부 네트워크에서만 접근 (PRD 10 보안)
     expose:
       - "9000"
     environment:
-      # 이 키쌍이 유일한 관리자 identity 가 된다. identity 가 하나라도 있으면 익명 요청은
-      # 403 이다 — 게이트웨이 모델(매 요청 인가)이 내부 네트워크에서 우회되지 않는다(PRD 7).
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-s3admin}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-change-me-in-production}
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      # 웹 콘솔(9001)은 쓰지 않는다 — 노출면을 S3 API 하나로 줄인다.
+      RUSTFS_CONSOLE_ENABLE: "false"
+      # 이 키쌍이 유일한 관리자 identity 다. 버킷은 기본 비공개라 익명 요청은 403 이다 —
+      # 게이트웨이 모델(매 요청 인가)이 내부 네트워크에서 우회되지 않는다(PRD 7).
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-s3admin}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-change-me-in-production}
     volumes:
-      - seaweedfs_data:/data
+      - object_storage_data:/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 10s
     networks:
       - minidrive
 
-  # ── SeaweedFS 초기화 (버킷 생성) ─────────────────────
-  # 이미 있으면 weed shell 이 오류를 내므로 "있음/생성됨" 둘 다 성공으로 본다. 마스터가 막 떠서
-  # 볼륨이 아직 등록되지 않았을 수 있어 성공할 때까지 재시도한다.
-  seaweedfs-init:
-    image: chrislusf/seaweedfs:4.47
+  # ── objectStorage 초기화 (버킷 생성, 이미 있으면 통과) ─────────────
+  objectStorage-init:
+    image: rustfs/rustfs:1.0.6
     depends_on:
-      seaweedfs:
+      objectStorage:
         condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-s3admin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-change-me-in-production}
+      S3_BUCKET: ${S3_BUCKET:-minidrive}
+    # rc 는 RustFS 공식 클라이언트(이미지에 포함). 별칭 "local" 을 환경변수 URL 로 정의한다 —
+    # 키에 특수문자가 있어도 깨지지 않게 jq 로 URL 인코딩한다. --ignore-existing 이라 재기동해도 통과.
     entrypoint: >
-      /bin/sh -c "
-      until echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw '${S3_BUCKET:-minidrive}' || echo 's3.bucket.create -name ${S3_BUCKET:-minidrive}' | weed shell -master=seaweedfs:9333 2>&1 | grep -q 'created bucket';
-      do sleep 2; done;
-      echo 'SeaweedFS 초기화 완료: 버킷 ${S3_BUCKET:-minidrive} 준비';
-      "
+      /bin/sh -ec '
+      enc() { printf %s "$$1" | jq -sRr @uri; };
+      export RC_CONFIG_DIR=$$(mktemp -d);
+      export RC_HOST_local="http://$$(enc "$$S3_ACCESS_KEY"):$$(enc "$$S3_SECRET_KEY")@objectstorage:9000";
+      rc bucket create "local/$$S3_BUCKET" --ignore-existing;
+      echo "objectStorage 초기화 완료: 버킷 $$S3_BUCKET 준비";
+      '
     networks:
       - minidrive
 
@@ -196,8 +207,8 @@ services:
     profiles: ["tools"]
     environment:
       RCLONE_CONFIG_S3_TYPE: s3
-      RCLONE_CONFIG_S3_PROVIDER: SeaweedFS
-      RCLONE_CONFIG_S3_ENDPOINT: http://seaweedfs:9000
+      RCLONE_CONFIG_S3_PROVIDER: Other
+      RCLONE_CONFIG_S3_ENDPOINT: http://objectstorage:9000
       RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-s3admin}
       RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-change-me-in-production}
       # 설정 파일이 없다는 NOTICE 를 끈다(위 환경변수가 전부다).
@@ -238,7 +249,7 @@ services:
       - minidrive
 
 volumes:
-  seaweedfs_data:
+  object_storage_data:
   pg_data:
   redis_data:
 

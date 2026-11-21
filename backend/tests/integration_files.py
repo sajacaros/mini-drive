@@ -1,4 +1,4 @@
-"""파일 서비스 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""파일 서비스 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오: admin 부트스트랩 → alice 승인/로그인 → 10MB 업로드 → 목록/메타 → 다운로드
 (X-Accel-Redirect 헤더 확인 + 해당 presigned URL 로 스토리지 직접 GET 바이트 일치) → 폴더 생성

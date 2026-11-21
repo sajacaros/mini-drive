@@ -1,7 +1,7 @@
 """StorageService — S3 호환 오브젝트 스토리지 접근 추상화 계층 (PRD 2.2).
 
-서버는 SeaweedFS 의 S3 게이트웨이이고, 클라이언트는 AWS 공식 SDK(boto3)다(2026-11 MinIO 서버와
-minio SDK 에서 전환). 표준 S3 API 만 쓰므로 AWS S3 등 다른 S3 호환 서버로 바꿀 때는 엔드포인트만
+서버는 RustFS(compose 서비스 objectStorage)이고, 클라이언트는 AWS 공식 SDK(boto3)다(2026-11 MinIO →
+SeaweedFS → RustFS, SDK 는 minio → boto3). 표준 S3 API 만 쓰므로 AWS S3 등 다른 S3 호환 서버로 바꿀 때는 엔드포인트만
 바꾸면 된다. 호출부는 boto3 를 직접 만지지 않는다 — 이 모듈의 인터페이스와 `ObjectNotFoundError`
 만 안다.
 
@@ -129,11 +129,12 @@ def make_s3_client(
     """설정값으로 boto3 S3 클라이언트를 만든다. 생성은 네트워크에 접속하지 않는다.
 
     - addressing_style=path: 가상 호스트(`bucket.host`) 방식은 도커 내부 이름에서 풀리지 않는다.
-      경로 방식이어야 presigned URL 의 Host 가 엔드포인트 그대로(`seaweedfs:9000`)가 되고, nginx 가
-      같은 Host 를 실어 SigV4 서명이 맞는다(PRD 12).
+      경로 방식이어야 presigned URL 의 Host 가 엔드포인트 그대로(`objectstorage:9000`)가 되고, nginx 가
+      같은 Host 를 실어 SigV4 서명이 맞는다(PRD 12). 호스트는 소문자여야 한다 — RustFS 는 Host 를
+      소문자로 정규화해 검증하므로 대문자가 섞인 엔드포인트로 만든 presigned URL 은 403 이 난다.
     - checksum=when_required: botocore 1.36+ 는 기본으로 업로드마다 CRC 체크섬 헤더를 붙인다.
       S3 호환 서버마다 지원이 들쭉날쭉해, 규격상 필수인 경우에만 보내게 해 호환 폭을 넓힌다.
-    - region 은 SigV4 서명에만 쓰인다. SeaweedFS 는 값을 가리지 않는다.
+    - region 은 SigV4 서명에만 쓰인다. RustFS 는 값을 가리지 않는다.
     """
     use_tls = settings.s3_secure if secure is None else secure
     host = endpoint or settings.s3_endpoint
@@ -188,7 +189,7 @@ class StorageService:
         return True
 
     def ensure_bucket(self) -> None:
-        """버킷이 없으면 만든다. 운영은 compose 의 seaweedfs-init 이 맡고, 이건 테스트 편의용."""
+        """버킷이 없으면 만든다. 운영은 compose 의 objectStorage-init 이 맡고, 이건 테스트 편의용."""
         if not self.bucket_exists():
             self._client.create_bucket(Bucket=self.bucket)
 
@@ -346,9 +347,10 @@ class StorageService:
     def list_parts(self, key: str, upload_id: str) -> list[tuple[int, int, str]]:
         """스테이징된 파트 목록을 (part_number, size, etag) 로 반환한다(part_number 오름차순).
 
-        한 응답은 최대 1000개라 truncation 을 따라간다. SeaweedFS 4.47 은 PartNumberMarker 를
-        무시하고 처음부터 다시 주는 것을 실측했다 — 그래서 파트 번호로 중복을 접고, marker 가
-        앞으로 가지 않거나 새 파트가 없으면 멈춘다(무한 루프 방지).
+        한 응답은 최대 1000개라 truncation 을 따라간다. 예전 SeaweedFS 4.47 은 PartNumberMarker 를
+        무시하고 처음부터 다시 줬다(RustFS 1.0.6 은 정상 — 2026-11 실측). 서버를 또 바꿀 수 있으니
+        방어는 남겨 둔다: 파트 번호로 중복을 접고, marker 가 앞으로 가지 않거나 새 파트가 없으면
+        멈춘다(무한 루프 방지).
         """
         by_number: dict[int, tuple[int, int, str]] = {}
         marker = 0
@@ -464,11 +466,11 @@ class StorageService:
     def to_internal_redirect(self, presigned_url: str) -> str:
         """presigned URL 을 nginx `/_s3/` internal 경로로 변환한다 (PRD 2.2, 8.1).
 
-        `http://seaweedfs:9000/minidrive/users/1/5?X-Amz-...`
+        `http://objectstorage:9000/minidrive/users/1/5?X-Amz-...`
           → `/_s3/minidrive/users/1/5?X-Amz-...`
 
-        서명은 Host=seaweedfs:9000 기준으로 계산되고, nginx 가
-        `proxy_set_header Host seaweedfs:9000` 으로 동일 Host 를 강제하므로 SigV4 서명이
+        서명은 Host=objectstorage:9000 기준으로 계산되고, nginx 가
+        `proxy_set_header Host objectstorage:9000` 으로 동일 Host 를 강제하므로 SigV4 서명이
         일치한다 (PRD 12 리스크 대응).
         """
         parts = urlsplit(presigned_url)

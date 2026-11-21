@@ -1,4 +1,4 @@
-"""배치 업로드(폴더 업로드) 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""배치 업로드(폴더 업로드) 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오: 중첩 폴더 업로드 → 트리 확인 → folders 맵 확인 → 기존 폴더 병합 → 동명 충돌 시
 부분 성공 → 경로 규칙 위반 항목만 실패 → dirs 만 보내는 트리 확정 요청(빈 폴더 포함) →

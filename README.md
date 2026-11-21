@@ -91,8 +91,8 @@
 ```
 브라우저 ─▶ nginx(게이트웨이, :80) ─┬─▶ /        → frontend (React SPA)
                                     ├─▶ /api/    → backend (FastAPI)
-                                    └─▶ /_s3/ → SeaweedFS S3 (X-Accel-Redirect 내부 전용)
-                                                    backend ─▶ PostgreSQL / Redis / SeaweedFS
+                                    └─▶ /_s3/ → RustFS S3 (X-Accel-Redirect 내부 전용)
+                                                    backend ─▶ PostgreSQL / Redis / RustFS
 
 사이드카(같은 이미지, entrypoint 만 다름)
   purger        하루 1회  휴지통 영구 삭제 + 위키 트리 유예 삭제
@@ -105,8 +105,8 @@
   - 예외는 ZIP 하나입니다 — `X-Accel-Redirect` 는 오브젝트 하나만 흘려보낼 수 있어, 묶는 동안에는
     backend 가 스트리밍 주체가 됩니다. 인가는 티켓 발급·소비 두 번 판정하고, 개수·용량 상한은 첫
     바이트 전에 확정합니다.
-- **스토리지 익명 접근 완전 차단**이 이 모델의 전제입니다. SeaweedFS 는 S3 identity 가 하나라도 있으면
-  익명 요청을 403 으로 막습니다 — compose 가 `S3_ACCESS_KEY/S3_SECRET_KEY` 로 그 identity 를 만듭니다.
+- **스토리지 익명 접근 완전 차단**이 이 모델의 전제입니다. RustFS 버킷은 기본 비공개라
+  익명 요청은 403 입니다 — compose 가 `S3_ACCESS_KEY/S3_SECRET_KEY` 로 유일한 관리자 identity 를 만듭니다.
 - **backend 는 호스트 포트를 열지 않습니다.** 모든 트래픽이 nginx 를 지납니다.
 - **경로를 이미지에 굽지 않습니다**: 프론트는 `base=/__BASE__/` 로 빌드하고 기동 시 `BASE_PATH` 로
   치환합니다. 같은 이미지가 로컬(`/`)과 서버(`/drive/`)에서 재빌드 없이 돕니다.
@@ -163,7 +163,7 @@ Solar-Open2-250B 가 다음 한 수를 고른다  ◀─────────
 | ----------- | ------------------------------------------------------------------------------------- |
 | Frontend    | React 19, TypeScript 5, Tailwind CSS 4, React Router 7, Zustand 5, Vite 6             |
 | Backend     | Python 3.12, FastAPI, Pydantic 2, SQLAlchemy 2(async/asyncpg), Alembic, PyJWT, argon2 |
-| Storage     | SeaweedFS 4.47 (S3 게이트웨이) — 클라이언트는 boto3                                   |
+| Storage     | RustFS 1.0.6 (compose 서비스 objectStorage) — 클라이언트는 boto3                      |
 | Database    | PostgreSQL 16 (`pgvector/pgvector:pg16` — 기존 볼륨 호환용, 확장은 미사용)            |
 | Cache/Token | Redis 7                                                                               |
 | Gateway     | nginx 1.27                                                                            |
@@ -290,7 +290,7 @@ scripts/restore.sh backups/20260718-120000 [--yes]
 # backend
 cd backend && python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-uvicorn app.main:app --reload --port 8000     # DB/SeaweedFS/Redis 는 compose 로 띄워두고 실행
+uvicorn app.main:app --reload --port 8000     # DB/RustFS/Redis 는 compose 로 띄워두고 실행
 
 # frontend
 cd frontend && npm install && npm run dev     # http://localhost:5173 (/api → :8000 프록시)

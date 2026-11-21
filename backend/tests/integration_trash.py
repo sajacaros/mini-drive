@@ -1,4 +1,4 @@
-"""휴지통 보존 기간 자동 정리 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""휴지통 보존 기간 자동 정리 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오: alice/bob 준비 → alice 파일 A + 폴더 F(안에 alice 파일 + bob 파일) → 소프트 삭제
 → A 만 기한 초과로 조작 → 정리(A 만 사라지고 F 는 남는다) → dry-run(아무것도 지우지 않음)

@@ -1,4 +1,4 @@
-"""썸네일/미리보기/공유 접근 통계 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""썸네일/미리보기/공유 접근 통계 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 Phase 5-1 시나리오:
   - 이미지 업로드 → 썸네일 자동 생성(thumbnails/{fileId}.png), /thumbnail 게이트웨이 인라인

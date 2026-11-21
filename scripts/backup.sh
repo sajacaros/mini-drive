@@ -4,7 +4,7 @@
 #
 # 대상: 실행 중인 docker compose 스택.
 #   1) PostgreSQL  → pg_dump custom format (postgres.dump)
-#   2) 오브젝트 버킷(SeaweedFS S3) → rclone sync (objects/ 디렉터리)
+#   2) 오브젝트 버킷(objectStorage = RustFS S3) → rclone sync (objects/ 디렉터리)
 # 산출물: backups/{timestamp}/  (+ manifest.txt)
 # 보존:   최근 N개(기본 7)만 유지, 나머지 삭제.
 #

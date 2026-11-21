@@ -40,7 +40,7 @@ pnpm-debug.log*
 # 볼륨을 bind mount로 쓸 경우의 로컬 데이터 디렉터리
 data/
 minio_data/
-seaweedfs_data/
+object_storage_data/
 pg_data/
 redis_data/
 *.log

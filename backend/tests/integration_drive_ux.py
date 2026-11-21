@@ -1,4 +1,4 @@
-"""드라이브 UX(Phase 8) 통합 검증 — 즐겨찾기·최근 항목·SSE 이벤트 (실 postgres+redis+seaweedfs).
+"""드라이브 UX(Phase 8) 통합 검증 — 즐겨찾기·최근 항목·SSE 이벤트 (실 postgres+redis+objectStorage).
 
 시나리오:
   A/B 가입 → A 파일 업로드

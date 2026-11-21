@@ -1,4 +1,4 @@
-"""파일/폴더 이동 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""파일/폴더 이동 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오 (PRD 6.2 POST /api/files/{id}/move):
   A 가 src/dst 폴더 + 파일 구성 → 파일 이동(목록 이동 확인) → 루트로 이동(parent_id=null)

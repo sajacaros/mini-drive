@@ -1,4 +1,4 @@
-"""BeeMate 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집). spec/beemate.md.
+"""BeeMate 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집). spec/beemate.md.
 
 시나리오: alice/bob 준비 → alice 기기 2대(폰·PC) 등록 → 목록·이름 변경 → bob 은 alice 기기가
 404 → 기기 이벤트 스트림을 열고(온라인 표시) 폰→PC 전송 → 스트림에 전송이 오는지 → 밀린 목록

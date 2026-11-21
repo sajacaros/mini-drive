@@ -40,9 +40,10 @@ class Settings(BaseSettings):
     # PostgreSQL (asyncpg)
     database_url: str = "postgresql+asyncpg://postgres:password@db:5432/minidrive"
 
-    # S3 호환 오브젝트 스토리지 — 서버는 SeaweedFS(2026-11 MinIO 에서 전환), 클라이언트는 boto3
-    # (services/storage.py). 2026-11 전 환경변수 이름은 MINIO_* 였다.
-    s3_endpoint: str = "seaweedfs:9000"
+    # S3 호환 오브젝트 스토리지 — 서버는 RustFS(compose 서비스 objectStorage, 2026-11 MinIO →
+    # SeaweedFS → RustFS), 클라이언트는 boto3(services/storage.py). 2026-11 전 환경변수 이름은 MINIO_*.
+    # 호스트는 소문자로 쓴다 — RustFS 는 Host 를 소문자로 정규화해 SigV4 를 검증한다.
+    s3_endpoint: str = "objectstorage:9000"
     s3_access_key: str = "s3admin"
     s3_secret_key: str = "change-me-in-production"
     s3_bucket: str = "minidrive"

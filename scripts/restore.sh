@@ -33,7 +33,7 @@ BACKUP_DIR="$BACKUP_ARG"
 BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
 
 [ -f "$BACKUP_DIR/postgres.dump" ] || fail "postgres.dump 가 없습니다: $BACKUP_DIR"
-# objects/ 가 현행 이름이다. SeaweedFS 전환 전(MinIO mc mirror) 백업은 minio/ 에 들어 있다.
+# objects/ 가 현행 이름이다. MinIO 시절(mc mirror) 백업은 minio/ 에 들어 있다.
 OBJ_DIR="$BACKUP_DIR/objects"
 [ -d "$OBJ_DIR" ] || OBJ_DIR="$BACKUP_DIR/minio"
 [ -d "$OBJ_DIR" ] || fail "objects/ (또는 구 minio/) 디렉터리가 없습니다: $BACKUP_DIR"
@@ -74,7 +74,7 @@ $DC exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exi
 log "PostgreSQL 복원 완료."
 
 # ── 2) 오브젝트 버킷 복원 ─────────────────────────────
-# 버킷은 seaweedfs-init 이 스택 기동 때 만들어 둔다.
+# 버킷은 objectStorage-init 이 스택 기동 때 만들어 둔다.
 log "오브젝트 버킷 복원(rclone sync → s3:$S3_BUCKET) ..."
 $DC --profile tools run --rm --no-deps -T \
     -v "$OBJ_DIR:/backup:ro" \

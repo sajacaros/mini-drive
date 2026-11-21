@@ -1,4 +1,4 @@
-"""그룹 게시판 통합 검증 (실제 postgres+redis+seaweedfs 필요, pytest 미수집).
+"""그룹 게시판 통합 검증 (실제 postgres+redis+objectStorage 필요, pytest 미수집).
 
 시나리오 (spec/group-board.md):
   admin 게시판 생성 → 비관리자 생성 403 / 이름 중복 409
