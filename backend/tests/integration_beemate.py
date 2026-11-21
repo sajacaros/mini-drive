@@ -102,43 +102,63 @@ async def scenario() -> None:
         bob_h, _bob_id = await register_active(c, code, BOB)
         _ok("셋업 + alice/bob 가입")
 
-        # 1. 기기 등록·목록·이름 변경
-        galaxy = {"name": " 갤럭시 ", "platform": "android"}
-        r = await c.post("/api/beemate/devices", headers=alice_h, json=galaxy)
-        assert r.status_code == 201, r.text
+        # 1. 자동 등록(upsert) · 이름 · 즐겨찾기 · 숨김 · 정렬
+        dev = "/api/beemate/devices"
+        galaxy = {"client_id": "phone-0001", "name": " 갤럭시 ", "platform": "android"}
+        r = await c.post(dev, headers=alice_h, json=galaxy)
+        assert r.status_code == 200, r.text
         phone = r.json()["id"]
         assert r.json()["name"] == "갤럭시", r.json()
-        r = await c.post(
-            "/api/beemate/devices", headers=alice_h, json={"name": "PC", "platform": "web"}
-        )
-        pc = r.json()["id"]
-        r = await c.post(
-            "/api/beemate/devices", headers=alice_h, json={"name": "x", "platform": "symbian"}
-        )
+        r = await c.post(dev, headers=alice_h, json={**galaxy, "name": "다른 이름"})
+        assert r.json()["id"] == phone and r.json()["name"] == "갤럭시", r.text  # 덮어쓰지 않음
+        pc_req = {"client_id": "pc-browser-1", "name": "Windows · Chrome", "platform": "web"}
+        pc = (await c.post(dev, headers=alice_h, json=pc_req)).json()["id"]
+        old = {"client_id": "old-laptop-1", "name": "옛 노트북", "platform": "web"}
+        laptop = (await c.post(dev, headers=alice_h, json=old)).json()["id"]
+        r = await c.post(dev, headers=alice_h, json={**pc_req, "client_id": "bad id"})
         assert r.status_code == 422, r.text
-        r = await c.patch(f"/api/beemate/devices/{pc}", headers=alice_h, json={"name": "내 PC"})
-        assert r.status_code == 200 and r.json()["name"] == "내 PC", r.text
-        r = await c.get("/api/beemate/devices", headers=alice_h)
-        assert [d["id"] for d in r.json()] == [phone, pc], r.text
-        assert not any(d["online"] for d in r.json())
-        _ok("기기 등록·검증·이름 변경·목록")
+        r = await c.post(dev, headers=alice_h, json={**pc_req, "platform": "symbian"})
+        assert r.status_code == 422, r.text
 
-        # 2. 남의 기기는 404 (존재를 흘리지 않는다)
-        assert (await c.get("/api/beemate/devices", headers=bob_h)).json() == []
-        r = await c.patch(f"/api/beemate/devices/{pc}", headers=bob_h, json={"name": "탈취"})
+        r = await c.patch(f"{dev}/{pc}", headers=alice_h, json={"name": "내 PC"})
+        assert r.status_code == 200 and r.json()["name"] == "내 PC", r.text
+        r = await c.patch(f"{dev}/{laptop}", headers=alice_h, json={"is_favorite": True})
+        assert r.json()["is_favorite"] is True, r.text
+        r = await c.patch(f"{dev}/{pc}", headers=alice_h, json={})
+        assert r.status_code == 422, r.text
+        r = await c.get(dev, headers=alice_h)
+        # 즐겨찾기(꺼져 있어도) → 나머지 등록 순
+        assert [d["id"] for d in r.json()] == [laptop, phone, pc], r.text
+        await c.patch(f"{dev}/{phone}", headers=alice_h, json={"is_hidden": True})
+        r = await c.get(dev, headers=alice_h)
+        assert [d["id"] for d in r.json()] == [laptop, pc], r.text
+        r = await c.get(f"{dev}?include_hidden=true", headers=alice_h)
+        assert [d["id"] for d in r.json()] == [laptop, phone, pc], r.text
+        await c.patch(f"{dev}/{phone}", headers=alice_h, json={"is_hidden": False})
+        _ok("자동 등록(upsert, 이름 보존) · 이름 · 즐겨찾기 · 숨김 · 정렬")
+
+        # 2. 남의 기기는 404 (존재를 흘리지 않는다). 같은 client_id 도 사용자별로 따로다.
+        assert (await c.get(dev, headers=bob_h)).json() == []
+        r = await c.patch(f"{dev}/{pc}", headers=bob_h, json={"name": "탈취"})
         assert r.status_code == 404, r.text
         assert (await _send(c, bob_h, to=pc)).status_code == 404
         r = await c.get(f"/api/beemate/transfers?device_id={pc}", headers=bob_h)
         assert r.status_code == 404, r.text
-        _ok("bob 은 alice 기기를 볼 수도 보낼 수도 없다(404)")
+        r = await c.post(dev, headers=bob_h, json=pc_req)
+        assert r.status_code == 200 and r.json()["id"] != pc, r.text
+        _ok("bob 은 alice 기기를 볼 수도 보낼 수도 없다(404), client_id 는 사용자별")
 
-        # 3. PC 가 스트림을 연다 → 온라인 → 폰이 보낸다 → 스트림에 전송이 온다
+        # 3. PC 스트림 → hello · 온라인(켜진 기기가 위로) → 보내면 내용 없는 pending 신호
         stream = beemate_service.subscribe_device_events(pc)
-        first = await anext(stream)
-        assert first == ": connected\n\n", first
-        r = await c.get("/api/beemate/devices", headers=alice_h)
-        online = {d["id"]: d["online"] for d in r.json()}
-        assert online == {phone: False, pc: True}, online
+        assert await anext(stream) == ": connected\n\n"
+        hello = json.loads((await anext(stream))[len("data: ") :])
+        assert hello == {"type": "hello", "device_id": pc}, hello
+        r = await c.get(dev, headers=alice_h)
+        assert [(d["id"], d["online"]) for d in r.json()] == [
+            (laptop, False),
+            (pc, True),
+            (phone, False),
+        ], r.text
 
         r = await _send(c, alice_h, to=pc, frm=phone)
         assert r.status_code == 201, r.text
@@ -149,12 +169,10 @@ async def scenario() -> None:
         frame = await asyncio.wait_for(anext(stream), timeout=10)
         while frame.startswith(":"):
             frame = await asyncio.wait_for(anext(stream), timeout=40)
-        assert frame.startswith("data: "), frame
-        event = json.loads(frame[len("data: ") :])
-        assert event["id"] == sent["id"] and event["mime_type"] == "image/png", event
+        assert json.loads(frame[len("data: ") :]) == {"type": "pending"}, frame
         await stream.aclose()
         assert await redis_client.get(beemate_service.online_key(pc)) is None
-        _ok("스트림 연결 → 온라인, 보낸 전송이 실시간으로 도착, 닫으면 오프라인")
+        _ok("스트림: hello → 온라인 정렬, 보내면 내용 없는 pending 신호, 닫으면 오프라인")
 
         # 4. 밀린 목록 · 내려받기 · 받음 확인
         r = await c.get(f"/api/beemate/transfers?device_id={pc}", headers=alice_h)

@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import UploadFile
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -120,50 +121,110 @@ def _device_response(device: BeemateDevice, online: bool) -> DeviceResponse:
         id=device.id,
         name=device.name,
         platform=device.platform,
+        is_favorite=device.is_favorite,
+        is_hidden=device.is_hidden,
         created_at=device.created_at,
         last_seen_at=device.last_seen_at,
         online=online,
     )
 
 
+def sort_devices(devices: list[DeviceResponse]) -> list[DeviceResponse]:
+    """즐겨찾기 → 켜진 기기 → 나머지. 같은 무리 안에서는 등록 순.
+
+    즐겨찾기는 꺼져 있어도 맨 위다 — 사용자가 고른 자리라 접속 상태로 흔들리면 안 된다.
+    즐겨찾기끼리는 켜진 것을 앞에 둔다.
+    """
+    return sorted(
+        devices,
+        key=lambda d: (not d.is_favorite, not d.online, d.created_at, d.id),
+    )
+
+
 async def list_devices(
-    session: AsyncSession, redis: Redis, user: User
+    session: AsyncSession, redis: Redis, user: User, *, include_hidden: bool = False
 ) -> list[DeviceResponse]:
-    rows = (
-        await session.execute(
-            select(BeemateDevice)
-            .where(BeemateDevice.user_id == user.id)
-            .order_by(BeemateDevice.created_at, BeemateDevice.id)
-        )
-    ).scalars().all()
+    """내 기기. 기본은 보낼 곳 목록이라 숨긴 기기를 뺀다 — 관리 화면은 include_hidden."""
+    stmt = select(BeemateDevice).where(BeemateDevice.user_id == user.id)
+    if not include_hidden:
+        stmt = stmt.where(BeemateDevice.is_hidden.is_(False))
+    rows = (await session.execute(stmt)).scalars().all()
     flags = await _online_flags(redis, [d.id for d in rows])
-    return [_device_response(d, f) for d, f in zip(rows, flags, strict=True)]
+    return sort_devices([_device_response(d, f) for d, f in zip(rows, flags, strict=True)])
 
 
-async def create_device(
-    session: AsyncSession, user: User, name: str, platform: str
-) -> DeviceResponse:
+async def register_device(
+    session: AsyncSession, user: User, client_id: str, name: str, platform: str
+) -> BeemateDevice:
+    """client_id 로 기기를 찾고, 없으면 만든다(upsert). 있으면 이름을 덮어쓰지 않는다.
+
+    사용자가 바꾼 이름을 다음 접속이 브라우저 기본 이름으로 되돌리면 안 되기 때문이다.
+    같은 client_id 로 동시에 두 번 붙으면(탭 두 개가 거의 동시에 열림) 한쪽이 유일 인덱스에
+    걸리고, 그쪽은 먼저 만들어진 행을 다시 읽어 쓴다.
+    """
+    found = await _find_by_client(session, user.id, client_id)
+    if found is not None:
+        return found
     count = await session.scalar(
         select(func.count()).select_from(BeemateDevice).where(BeemateDevice.user_id == user.id)
     )
     if (count or 0) >= settings.beemate_max_devices:
         raise BeemateError(
             409,
-            f"기기는 {settings.beemate_max_devices}대까지 등록할 수 있습니다. "
-            "쓰지 않는 기기를 지워 주세요.",
+            f"기기는 {settings.beemate_max_devices}대까지 등록됩니다. "
+            "BeeMate 기기 관리에서 쓰지 않는 기기를 지워 주세요.",
         )
-    device = BeemateDevice(user_id=user.id, name=name, platform=platform)
+    device = BeemateDevice(user_id=user.id, client_id=client_id, name=name, platform=platform)
     session.add(device)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        found = await _find_by_client(session, user.id, client_id)
+        if found is None:
+            raise
+        return found
     await session.refresh(device)
-    return _device_response(device, False)
+    return device
 
 
-async def rename_device(
-    session: AsyncSession, redis: Redis, user: User, device_id: int, name: str
+async def _find_by_client(
+    session: AsyncSession, user_id: int, client_id: str
+) -> BeemateDevice | None:
+    return (
+        await session.execute(
+            select(BeemateDevice).where(
+                BeemateDevice.user_id == user_id, BeemateDevice.client_id == client_id
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def register_device_response(
+    session: AsyncSession, redis: Redis, user: User, client_id: str, name: str, platform: str
+) -> DeviceResponse:
+    device = await register_device(session, user, client_id, name, platform)
+    [online] = await _online_flags(redis, [device.id])
+    return _device_response(device, online)
+
+
+async def update_device(
+    session: AsyncSession,
+    redis: Redis,
+    user: User,
+    device_id: int,
+    *,
+    name: str | None = None,
+    is_favorite: bool | None = None,
+    is_hidden: bool | None = None,
 ) -> DeviceResponse:
     device = await get_own_device(session, user, device_id)
-    device.name = name
+    if name is not None:
+        device.name = name
+    if is_favorite is not None:
+        device.is_favorite = is_favorite
+    if is_hidden is not None:
+        device.is_hidden = is_hidden
     await session.commit()
     await session.refresh(device)
     [online] = await _online_flags(redis, [device.id])
@@ -408,12 +469,16 @@ async def purge_expired(
 # --- 실시간 ------------------------------------------------------------------
 
 
+# 스트림에 싣는 것은 "가져갈 것이 생겼다"는 신호뿐이다. 내용(파일명·크기)은 싣지 않는다 —
+# 받는 쪽은 신호를 받으면 목록을 당겨 간다(pull). 그래야 실시간 경로와 다시 켜졌을 때의 경로가
+# 하나로 같고, 신호를 놓쳐도 다음 신호나 재접속 때 빠짐없이 받는다.
+PENDING_SIGNAL = json.dumps({"type": "pending"})
+
+
 async def publish_transfer(transfer: TransferResponse) -> None:
-    """받을 기기의 채널로 새 전송을 알린다 (fail-open)."""
+    """받을 기기의 채널로 "새 전송 있음" 신호를 보낸다 (fail-open)."""
     try:
-        await redis_client.publish(
-            events_channel(transfer.to_device_id), transfer.model_dump_json()
-        )
+        await redis_client.publish(events_channel(transfer.to_device_id), PENDING_SIGNAL)
     except Exception:  # noqa: BLE001 - 발행 실패가 전송 저장을 되돌리면 안 된다
         _log.warning("beemate_publish_failed", transfer_id=transfer.id)
 
@@ -428,14 +493,16 @@ async def _touch_online(device_id: int) -> None:
 async def subscribe_device_events(device_id: int) -> AsyncGenerator[str, None]:
     """기기 하나의 SSE 스트림. 소유 확인은 라우트가 끝냈다.
 
-    `: connected` 를 먼저 보낸다 — 클라이언트는 이것을 받은 **뒤에** 밀린 목록을 조회해야
-    그 사이 전송을 놓치지 않는다(spec/beemate.md 「접속 순서」).
+    구독을 마친 뒤 `: connected` 와 `hello`(이 연결의 기기 id)를 보낸다. 클라이언트는 hello 를
+    받은 **뒤에** 밀린 목록을 당겨야 그 사이 전송을 놓치지 않는다(spec/beemate.md 「접속 순서」).
+    이후 프레임은 전부 `{"type":"pending"}` 신호다.
     """
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(events_channel(device_id))
     await _touch_online(device_id)
     try:
         yield ": connected\n\n"
+        yield f"data: {json.dumps({'type': 'hello', 'device_id': device_id})}\n\n"
         while True:
             message = await pubsub.get_message(
                 ignore_subscribe_messages=True, timeout=KEEPALIVE_SECONDS

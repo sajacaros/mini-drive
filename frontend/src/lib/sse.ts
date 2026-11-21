@@ -24,15 +24,18 @@ export interface SseHandlers<T> {
   onOpen?: () => void;
   /** 재연결 성공 시 1회 — 끊긴 동안의 변경을 보정하도록 전체 재조회에 쓴다. */
   onReconnect?: () => void;
-  /** 404 처럼 다시 시도해도 소용없는 응답. 주면 재연결하지 않고 이것을 부른다. */
-  onFatal?: (status: number) => void;
+  /** 403·404·409·422 처럼 다시 시도해도 소용없는 응답. 주면 재연결하지 않고 이것을 부른다. */
+  onFatal?: (status: number, detail: string) => void;
 }
 
 // 지수 백오프 지연(ms): 1s → 2s → … → 최대 30s.
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
 class FatalStatus extends Error {
-  constructor(readonly status: number) {
+  constructor(
+    readonly status: number,
+    readonly detail: string,
+  ) {
     super(`SSE 응답 오류 ${status}`);
   }
 }
@@ -83,8 +86,14 @@ export function subscribeSse<T>(path: string, handlers: SseHandlers<T>): () => v
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       });
-      if ((res.status === 403 || res.status === 404) && handlers.onFatal) {
-        throw new FatalStatus(res.status);
+      if ([403, 404, 409, 422].includes(res.status) && handlers.onFatal) {
+        let detail = "";
+        try {
+          detail = ((await res.json()) as { detail?: string }).detail ?? "";
+        } catch {
+          /* 본문 없음 */
+        }
+        throw new FatalStatus(res.status, detail);
       }
       if (!res.ok || !res.body) throw new Error(`SSE 응답 오류 ${res.status}`);
 
@@ -116,7 +125,7 @@ export function subscribeSse<T>(path: string, handlers: SseHandlers<T>): () => v
       if (closed || controller?.signal.aborted) return;
       if (err instanceof FatalStatus) {
         closed = true;
-        handlers.onFatal?.(err.status);
+        handlers.onFatal?.(err.status, err.detail);
         return;
       }
       scheduleReconnect();

@@ -9,14 +9,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
 
 class BeemateDevice(Base):
-    """사용자의 기기 하나(폰 앱 설치 1건, 또는 PC 브라우저 1개)."""
+    """사용자의 기기 하나(폰 앱 설치 1건, 또는 PC 브라우저 1개).
+
+    등록 화면이 없다 — 클라이언트가 처음 붙을 때 스스로 만든 client_id 로 서버가 찾아 쓰거나
+    만든다(upsert). 새로고침·재연결에도 같은 기기로 남게 하는 이름표가 client_id 다.
+    """
 
     __tablename__ = "beemate_devices"
 
@@ -24,9 +28,19 @@ class BeemateDevice(Base):
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    # 클라이언트가 만든 고유 id(브라우저 localStorage, 앱 설치별). 사용자 안에서 유일하다.
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # 'android' | 'ios' | 'web' (schemas.beemate.Platform). native enum 미사용(VARCHAR).
     platform: Mapped[str] = mapped_column(String(20), nullable=False)
+    # 즐겨찾기 — 켜져 있든 꺼져 있든 목록 맨 위.
+    is_favorite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # 숨김 — 보낼 곳 목록에서 뺀다(관리 목록에는 남는다).
+    is_hidden: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -35,7 +49,9 @@ class BeemateDevice(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    __table_args__ = (Index("idx_beemate_devices_user", "user_id"),)
+    __table_args__ = (
+        Index("uq_beemate_devices_client", "user_id", "client_id", unique=True),
+    )
 
 
 class BeemateTransfer(Base):

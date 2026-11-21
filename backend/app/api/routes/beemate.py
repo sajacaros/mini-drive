@@ -20,9 +20,11 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import CurrentUser, DbSession, RedisClient, rate_limit_user
 from app.api.download import gateway_download_response
 from app.schemas.beemate import (
-    DeviceCreateRequest,
+    CLIENT_ID_PATTERN,
+    DeviceRegisterRequest,
     DeviceResponse,
     DeviceUpdateRequest,
+    Platform,
     TransferResponse,
 )
 from app.services import beemate as beemate_service
@@ -41,36 +43,48 @@ def _http_error(exc: BeemateError) -> HTTPException:
 
 @router.get("/devices", response_model=list[DeviceResponse])
 async def list_devices(
-    user: CurrentUser, session: DbSession, redis: RedisClient
+    user: CurrentUser,
+    session: DbSession,
+    redis: RedisClient,
+    include_hidden: bool = Query(False),
 ) -> list[DeviceResponse]:
-    return await beemate_service.list_devices(session, redis, user)
+    """내 기기 — 즐겨찾기 → 켜진 기기 → 나머지 순. 기본은 보낼 곳 목록이라 숨긴 기기를 뺀다."""
+    return await beemate_service.list_devices(
+        session, redis, user, include_hidden=include_hidden
+    )
 
 
-@router.post(
-    "/devices", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED
-)
-async def create_device(
-    payload: DeviceCreateRequest, user: CurrentUser, session: DbSession
+@router.post("/devices", response_model=DeviceResponse)
+async def register_device(
+    payload: DeviceRegisterRequest, user: CurrentUser, session: DbSession, redis: RedisClient
 ) -> DeviceResponse:
+    """자동 등록(upsert) — 폰 앱이 로그인 직후 부른다. 이미 있으면 그대로 돌려준다."""
     try:
-        return await beemate_service.create_device(
-            session, user, payload.name, payload.platform
+        return await beemate_service.register_device_response(
+            session, redis, user, payload.client_id, payload.name, payload.platform
         )
     except BeemateError as exc:
         raise _http_error(exc) from exc
 
 
 @router.patch("/devices/{device_id}", response_model=DeviceResponse)
-async def rename_device(
+async def update_device(
     device_id: int,
     payload: DeviceUpdateRequest,
     user: CurrentUser,
     session: DbSession,
     redis: RedisClient,
 ) -> DeviceResponse:
+    """이름·즐겨찾기·숨김 부분 수정."""
     try:
-        return await beemate_service.rename_device(
-            session, redis, user, device_id, payload.name
+        return await beemate_service.update_device(
+            session,
+            redis,
+            user,
+            device_id,
+            name=payload.name,
+            is_favorite=payload.is_favorite,
+            is_hidden=payload.is_hidden,
         )
     except BeemateError as exc:
         raise _http_error(exc) from exc
@@ -85,23 +99,31 @@ async def delete_device(device_id: int, user: CurrentUser, session: DbSession) -
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/devices/{device_id}/events")
-async def device_events(
-    device_id: int, user: CurrentUser, session: DbSession
+@router.get("/events")
+async def events(
+    user: CurrentUser,
+    session: DbSession,
+    client_id: Annotated[str, Query(pattern=CLIENT_ID_PATTERN)],
+    name: Annotated[str, Query(min_length=1, max_length=200)],
+    platform: Annotated[Platform, Query()],
 ) -> StreamingResponse:
-    """이 기기로 오는 전송의 SSE 스트림.
+    """이 클라이언트의 SSE 스트림. 붙는 순간 기기를 찾거나 만든다(등록 화면이 없다).
 
-    `/api/files/events` 와 같은 처리다 — Bearer 인증(fetch 스트리밍), rate limit 없음, 요청
-    세션은 소유 확인 뒤 스트림 전에 놓아준다(스트림 수명 내내 커넥션을 붙들지 않게).
+    프레임: `hello`(기기 id) 한 번, 이후 `pending` 신호만. 내용은 싣지 않는다 — 신호를 받으면
+    `GET /transfers` 로 당겨 간다. `/api/files/events` 와 같은 처리로 Bearer 인증(fetch 스트리밍),
+    rate limit 없음, 요청 세션은 스트림 전에 놓아준다.
     """
     try:
-        device = await beemate_service.get_own_device(session, user, device_id)
+        device = await beemate_service.register_device(
+            session, user, client_id, name.strip()[:100] or "기기", platform
+        )
     except BeemateError as exc:
         raise _http_error(exc) from exc
+    device_id = device.id
     await session.close()
-    await beemate_service.mark_seen(device.id)
+    await beemate_service.mark_seen(device_id)
     return StreamingResponse(
-        beemate_service.subscribe_device_events(device.id),
+        beemate_service.subscribe_device_events(device_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

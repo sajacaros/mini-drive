@@ -7,30 +7,64 @@
  *    그리고 **문서에 포커스가 있을 때만** 쓸 수 있다 → 호출부가 포커스를 기다렸다 쓴다.
  *  - 폴더 저장: showDirectoryPicker 는 Chrome·Edge 만 있다. 핸들은 IndexedDB 에 둘 수 있지만
  *    권한은 브라우저를 다시 켜면 "prompt" 로 돌아갈 수 있고, 다시 허용은 사용자 제스처가 필요하다.
- *    폴더가 없거나 지원하지 않으면 일반 다운로드(브라우저 다운로드 폴더)로 떨어진다.
+ *    폴더가 없거나 지원하지 않으면 일반 다운로드(브라우저 다운로드 폴더)로 떨어진다 — 이것이
+ *    기본값이라 아무 설정 없이도 받는다.
  */
 
-// --- 기기 id (이 브라우저 = 기기 하나) ----------------------------------------
+// --- 이 브라우저의 기기 이름표 -------------------------------------------------
+//
+// 등록 화면이 없다. 처음 붙을 때 만든 client_id 를 매 연결에 실어 보내면 서버가 같은 기기로
+// 찾아 쓰거나 새로 만든다(spec/beemate.md 「기기 — 자동 등록」). 계정마다 따로 둘 필요는 없다
+// — 서버의 유일성이 (사용자, client_id) 라 같은 값이 계정별로 다른 기기가 된다.
 
-const DEVICE_KEY = "beemate.deviceId";
+const CLIENT_KEY = "beemate.clientId";
+let memoryClientId: string | null = null;
 
-export function loadDeviceId(userId: number): number | null {
+function newClientId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+export function getClientId(): string {
   try {
-    const raw = localStorage.getItem(`${DEVICE_KEY}.${userId}`);
-    const id = raw ? Number(raw) : NaN;
-    return Number.isFinite(id) ? id : null;
+    const saved = localStorage.getItem(CLIENT_KEY);
+    if (saved) return saved;
+    const id = newClientId();
+    localStorage.setItem(CLIENT_KEY, id);
+    return id;
   } catch {
-    return null;
+    // 저장 불가(사생활 보호 모드 등) — 이 탭이 살아 있는 동안만 같은 기기로 남는다.
+    memoryClientId ??= newClientId();
+    return memoryClientId;
   }
 }
 
-export function saveDeviceId(userId: number, id: number | null): void {
-  try {
-    if (id == null) localStorage.removeItem(`${DEVICE_KEY}.${userId}`);
-    else localStorage.setItem(`${DEVICE_KEY}.${userId}`, String(id));
-  } catch {
-    /* 저장 불가 환경이면 다음 방문 때 기기를 다시 등록한다 */
-  }
+/** 처음 등록될 때 쓸 이름 — "Windows · Chrome". 나중에 기기 관리에서 바꾼다. */
+export function defaultDeviceName(): string {
+  const ua = navigator.userAgent;
+  const os = /Windows/.test(ua)
+    ? "Windows"
+    : /Mac OS X/.test(ua)
+      ? "Mac"
+      : /Android/.test(ua)
+        ? "Android"
+        : /iPhone|iPad/.test(ua)
+          ? "iOS"
+          : /Linux/.test(ua)
+            ? "Linux"
+            : "PC";
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /Whale\//.test(ua)
+      ? "Whale"
+      : /Chrome\//.test(ua)
+        ? "Chrome"
+        : /Firefox\//.test(ua)
+          ? "Firefox"
+          : /Safari\//.test(ua)
+            ? "Safari"
+            : "브라우저";
+  return `${os} · ${browser}`;
 }
 
 // --- 클립보드 -----------------------------------------------------------------

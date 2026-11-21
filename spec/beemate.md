@@ -30,9 +30,33 @@
 | 컬럼 | |
 |---|---|
 | id, user_id(→users, CASCADE) | 기기는 계정에 속한다. 남의 기기는 보이지도 않는다 |
-| name | "내 PC", "갤럭시 S24" — 사용자가 바꾼다 |
+| client_id | 클라이언트가 만든 고유 id. (user_id, client_id) 유일 |
+| name | 처음엔 "Windows · Chrome" 처럼 자동, 사용자가 바꾼다 |
 | platform | `android` \| `ios` \| `web` |
+| is_favorite | 켜져 있든 꺼져 있든 목록 맨 위 |
+| is_hidden | 보낼 곳 목록에서 뺀다(관리 목록에는 남는다) |
 | created_at, last_seen_at | last_seen_at 은 이벤트 스트림 연결 시 갱신 |
+
+### 기기 — 자동 등록 (2026-11-21 변경)
+
+등록 화면을 없앴다. 사용자가 할 일은 PC 에서 탭을 열어 두는 것뿐이다.
+
+- **연결 자체를 기기로 쓰지 않는다.** SSE 연결은 새로고침·와이파이 끊김·절전 복귀마다 새로
+  맺어진다. 연결 = 기기면 폰에서 고른 대상이 그 사이 사라지고, 끊긴 동안 온 파일을 받을 곳이
+  없어진다. 그래서 클라이언트가 처음 붙을 때 만든 `client_id`(브라우저 localStorage, 앱
+  설치별)를 매 연결에 싣고, 서버가 그것으로 기기를 찾거나 만든다(upsert).
+- upsert 는 **이름을 덮어쓰지 않는다** — 사용자가 바꾼 이름을 다음 접속이 기본 이름으로
+  되돌리면 안 된다.
+- 같은 브라우저의 탭 여러 개는 같은 기기다. 그대로면 사진이 두 번 복사되므로 Web Locks 로
+  **한 탭만** 받고, 그 탭을 닫으면 남은 탭이 이어받는다.
+- 0023 시절에 만든 기기는 `legacy-{id}` client_id 로 채운다. 그 브라우저는 새 기기로 다시
+  붙으므로 옛 행은 사용자가 지운다.
+
+### 보낼 곳 목록
+
+모든 기기를 보여 준다(숨김 제외). 순서는 **즐겨찾기 → 켜진 기기 → 나머지**, 같은 무리 안은
+등록 순. 즐겨찾기는 꺼져 있어도 맨 위다 — 사용자가 고른 자리가 접속 상태로 흔들리면 안 된다.
+꺼진 기기에도 보낼 수 있고, 그 기기는 다음에 켜질 때 당겨 간다.
 
 **전송** `beemate_transfers`
 
@@ -59,9 +83,12 @@
 정해져 있으므로 **채널 자체를 기기별로 나눈다** (`beemate:events:{device_id}`). 구독 라우트가
 기기 소유를 확인하는 것이 곧 권한 판정이라 이벤트마다 DB 를 볼 필요가 없다.
 
-- 접속 순서: 스트림을 먼저 연다 → `: connected` 를 받으면 `GET /transfers?device_id=` 로 밀린
-  전송을 가져온다. 순서를 반대로 하면 그 사이에 온 전송을 놓친다. 둘 다에 같은 전송이 올 수
-  있으므로 클라이언트가 id 로 중복을 거른다.
+- **스트림에는 내용을 싣지 않는다.** 프레임은 `hello`(이 연결의 기기 id) 한 번, 이후
+  `{"type":"pending"}` 신호뿐이다. 받는 쪽은 신호를 받으면 `GET /transfers?device_id=` 로
+  당겨 간다(pull). 실시간 경로와 "꺼져 있다 켜졌을 때" 경로가 하나로 같아지고, 신호를 놓쳐도
+  다음 신호나 재접속 때 빠짐없이 받는다.
+- 접속 순서: 서버는 구독을 마친 **뒤에** hello 를 보내고, 클라이언트는 hello 를 받은 뒤 당긴다.
+  반대 순서면 그 사이에 온 전송을 놓친다. 같은 전송이 두 번 당겨질 수 있어 id 로 거른다.
 - 온라인 표시: 스트림이 살아 있는 동안 Redis `beemate:online:{device_id}` 를 keepalive 마다
   TTL 갱신한다. 끊기면 TTL(75초) 뒤 오프라인. 오프라인 기기에도 보낼 수 있다(탭을 열면 받는다).
 - 발행은 fail-open — Redis 가 죽어도 업로드는 성공하고, 받는 쪽은 다음 접속 때 목록으로 받는다.
@@ -88,11 +115,11 @@
 
 | | |
 |---|---|
-| `POST /devices` `{name, platform}` | 기기 등록. 앱 첫 실행·탭 첫 접속 때 한 번, id 를 기기에 저장 |
-| `GET /devices` | 내 기기 + `online` |
-| `PATCH /devices/{id}` `{name}` | 이름 변경 |
+| `GET /events?client_id=&name=&platform=` | SSE. 붙는 순간 upsert. `hello` → `pending` 신호. Bearer 인증(fetch 스트리밍) |
+| `POST /devices` `{client_id, name, platform}` | upsert — 폰 앱이 로그인 직후 부른다 |
+| `GET /devices[?include_hidden=true]` | 내 기기 + `online`. 즐겨찾기 → 켜짐 → 나머지 |
+| `PATCH /devices/{id}` `{name?, is_favorite?, is_hidden?}` | 부분 수정 |
 | `DELETE /devices/{id}` | 기기 삭제(밀린 전송 포함) |
-| `GET /devices/{id}/events` | SSE. `data:` = 전송 1건. Bearer 인증(fetch 스트리밍) |
 | `POST /transfers` multipart `file, to_device_id, from_device_id?` | 보내기 |
 | `GET /transfers?device_id=` | 그 기기로 온, 안 받은 전송 |
 | `GET /transfers/{id}/content` | 내려받기(게이트웨이 스트리밍) |
@@ -102,7 +129,10 @@
 
 ## PC 수신 화면 (`/beemate`) — 2단계
 
-- 처음 한 번: 기기 이름, 알림 허용, 저장 폴더 고르기(File System Access API, Chrome·Edge).
+- 설정 없이 바로 받는다. 저장 위치 기본값은 브라우저 다운로드 폴더다. 전용 폴더(File System
+  Access API, Chrome·Edge)와 알림은 원할 때만 켠다 — 둘 다 사용자 클릭 없이는 브라우저가
+  허용하지 않아 미리 설정해 줄 수 없다.
+- 같은 화면에 **기기 관리**: 이름(눌러서 바로 바꾸기), ★ 즐겨찾기, "보낼 곳에 표시", 삭제.
 - 이미지: PNG 로 바꿔 클립보드에 쓴다(Chrome 클립보드는 `image/png` 만 받는다) + 폴더에 사본.
   탭이 뒤에 있으면 브라우저가 쓰기를 막는다 → 알림을 띄우고, 누르면 탭이 앞으로 오며 복사한다.
 - 그 외: 폴더에 저장. 폴더 핸들은 IndexedDB 에 두고, 브라우저 재시작 뒤 권한 확인이 한 번 뜰 수 있다.
