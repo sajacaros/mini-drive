@@ -219,6 +219,10 @@ body {
     color: var(--text-primary);
     border: 1px solid var(--border-color);
   }
+  /* Edge 기본 비밀번호 보기 버튼 — PasswordInput 의 눈 아이콘과 겹치므로 숨긴다. */
+  .input::-ms-reveal {
+    display: none;
+  }
   .input:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);

@@ -204,6 +204,16 @@ export const EyeIcon = (p: IconProps) => (
   </svg>
 );
 
+/** 비밀번호 숨기기 — 빗금 친 눈. */
+export const EyeOffIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <path d="M10.73 5.08A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a13.2 13.2 0 0 1-1.67 2.68" />
+    <path d="M6.61 6.61A13.5 13.5 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.39-1.61" />
+    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+    <path d="M2 2l20 20" />
+  </svg>
+);
+
 /** 그리드 보기 — 4칸. */
 export const GridIcon = (p: IconProps) => (
   <svg {...base(p)}>

@@ -14,6 +14,7 @@ import { Avatar } from "./Avatar";
 import { Modal } from "./Modal";
 import { useToast } from "./Toast";
 import { Badge, Spinner } from "./ui";
+import { PasswordInput } from "./PasswordInput";
 
 export function ProfileModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
@@ -228,10 +229,9 @@ function PasswordSection() {
           <label className="label" htmlFor="currentPassword">
             현재 비밀번호
           </label>
-          <input
+          <PasswordInput
             id="currentPassword"
-            className="input"
-            type="password"
+            
             autoComplete="current-password"
             placeholder="현재 비밀번호"
             value={current}
@@ -243,10 +243,9 @@ function PasswordSection() {
           <label className="label" htmlFor="newPassword">
             새 비밀번호
           </label>
-          <input
+          <PasswordInput
             id="newPassword"
-            className="input"
-            type="password"
+            
             autoComplete="new-password"
             placeholder="새 비밀번호"
             value={next}
@@ -258,10 +257,9 @@ function PasswordSection() {
           <label className="label" htmlFor="confirmPassword">
             새 비밀번호 확인
           </label>
-          <input
+          <PasswordInput
             id="confirmPassword"
-            className="input"
-            type="password"
+            
             autoComplete="new-password"
             placeholder="새 비밀번호 확인"
             value={confirm}

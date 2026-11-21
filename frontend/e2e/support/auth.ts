@@ -14,7 +14,7 @@ export const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "E2eTest!pass9";
 export async function loginViaForm(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByLabel("이메일").fill(ADMIN_EMAIL);
-  await page.getByLabel("비밀번호").fill(ADMIN_PASSWORD);
+  await page.getByLabel("비밀번호", { exact: true }).fill(ADMIN_PASSWORD);
   await page.getByRole("button", { name: "로그인" }).click();
   await expect(page.getByRole("link", { name: "내 드라이브" })).toBeVisible({
     timeout: 15_000,

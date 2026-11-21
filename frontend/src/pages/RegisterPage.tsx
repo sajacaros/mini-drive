@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { register } from "@/api/auth";
 import { extractErrorMessage } from "@/api/client";
+import { PasswordInput } from "@/components/PasswordInput";
 import { Spinner } from "@/components/ui";
 import { AuthShell } from "./LoginPage";
 
@@ -88,10 +89,8 @@ export function RegisterPage() {
           <label className="label" htmlFor="password">
             비밀번호
           </label>
-          <input
+          <PasswordInput
             id="password"
-            type="password"
-            className="input"
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

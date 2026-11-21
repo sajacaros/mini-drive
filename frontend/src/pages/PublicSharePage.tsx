@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 
 import { fetchPublicShareListing, fetchPublicShareMeta, ShareMetaError } from "@/api/shares";
 import type { ShareFolderListing, SharePublicEntry, SharePublicMeta } from "@/api/types";
+import { PasswordInput } from "@/components/PasswordInput";
 import { PreviewModal } from "@/components/PreviewModal";
 import {
   DownloadIcon,
@@ -453,9 +454,7 @@ function PasswordField({
         <LockIcon width={14} height={14} />
         비밀번호
       </label>
-      <input
-        type="password"
-        className="input"
+      <PasswordInput
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && onEnter()}

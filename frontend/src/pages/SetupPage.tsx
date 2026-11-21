@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { errorStatus, extractErrorMessage } from "@/api/client";
 import { performSetup } from "@/api/setup";
 import type { SetupResponse } from "@/api/types";
+import { PasswordInput } from "@/components/PasswordInput";
 import { Spinner } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 import { formatBytes } from "@/lib/format";
@@ -32,6 +33,7 @@ export function SetupPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SetupResponse | null>(null);
+  const mismatch = passwordConfirm.length > 0 && password !== passwordConfirm;
 
   const goToLogin = () => {
     // 재진입 차단: 셋업 완료 플래그를 내린 뒤 로그인으로 이동한다.
@@ -173,13 +175,14 @@ export function SetupPage() {
           <label className="label" htmlFor="admin-password">
             비밀번호
           </label>
-          <input
+          <PasswordInput
             id="admin-password"
-            type="password"
-            className="input"
             autoComplete="new-password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setError(null);
+            }}
             required
           />
           <p className="mt-1.5 text-xs text-muted">최소 8자, 영문·숫자·특수문자를 포함해야 합니다.</p>
@@ -188,15 +191,24 @@ export function SetupPage() {
           <label className="label" htmlFor="admin-password-confirm">
             비밀번호 확인
           </label>
-          <input
+          <PasswordInput
             id="admin-password-confirm"
-            type="password"
-            className="input"
             autoComplete="new-password"
             value={passwordConfirm}
-            onChange={(e) => setPasswordConfirm(e.target.value)}
+            onChange={(e) => {
+              setPasswordConfirm(e.target.value);
+              setError(null);
+            }}
+            aria-invalid={mismatch}
             required
           />
+          {/* 제출 전에 바로 보여 준다 — 가려진 두 칸 중 어느 쪽이 틀렸는지 모른 채 반복하지 않게. */}
+          {mismatch && (
+            <p className="mt-1.5 text-xs text-[color:var(--danger)]">비밀번호가 일치하지 않습니다.</p>
+          )}
+          {passwordConfirm.length > 0 && !mismatch && (
+            <p className="mt-1.5 text-xs text-[color:var(--success)]">비밀번호가 일치합니다.</p>
+          )}
         </div>
         <div>
           <label className="label" htmlFor="signup-code">

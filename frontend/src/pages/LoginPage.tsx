@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { extractErrorMessage } from "@/api/client";
+import { PasswordInput } from "@/components/PasswordInput";
 import { DriveIcon } from "@/components/icons";
 import { Spinner } from "@/components/ui";
 import { useAuthStore } from "@/store/auth";
@@ -54,10 +55,8 @@ export function LoginPage() {
           <label className="label" htmlFor="password">
             비밀번호
           </label>
-          <input
+          <PasswordInput
             id="password"
-            type="password"
-            className="input"
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

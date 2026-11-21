@@ -10,6 +10,7 @@ import { Modal } from "./Modal";
 import { Spinner } from "./ui";
 import { CopyIcon } from "./icons";
 import { useToast } from "./Toast";
+import { PasswordInput } from "./PasswordInput";
 
 /** share_url 로 사용자에게 보여줄 공개 링크를 만든다 (PRD: {origin}<base>/s/{share_url}). */
 export function buildShareLink(shareUrl: string): string {
@@ -161,10 +162,8 @@ export function ShareModal({
             <label className="label" htmlFor="sharePw">
               비밀번호 (선택)
             </label>
-            <input
+            <PasswordInput
               id="sharePw"
-              type="password"
-              className="input"
               placeholder="설정하지 않으면 비워 두세요"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
